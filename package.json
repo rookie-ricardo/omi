@@ -1,0 +1,21 @@
+{
+  "name": "omi-agent-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "pnpm --filter @omi/desktop dev",
+    "format": "biome check . --write",
+    "lint": "biome check .",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.14.1",
+    "tsx": "^4.19.3",
+    "turbo": "^2.8.17",
+    "typescript": "5.8.3"
+  }
+}

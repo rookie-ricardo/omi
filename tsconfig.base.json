@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023", "DOM"],
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "paths": {
+      "@craft-design/tokens": ["packages/design-tokens/src/index.ts"],
+      "@craft-design/tokens/*": ["packages/design-tokens/src/*"],
+      "@craft-design/react": ["packages/design-react/src/index.ts"],
+      "@craft-design/react/theme": ["packages/design-react/src/theme/index.ts"],
+      "@craft-design/react/primitives": [
+        "packages/design-react/src/components/primitives/index.ts"
+      ],
+      "@craft-design/react/*": ["packages/design-react/src/*"],
+      "@omi/agent": ["packages/agent/src/index.ts"],
+      "@omi/core": ["packages/core/src/index.ts"],
+      "@omi/protocol": ["packages/protocol/src/index.ts"],
+      "@omi/provider": ["packages/provider/src/index.ts"],
+      "@omi/tools": ["packages/tools/src/index.ts"],
+      "@omi/store": ["packages/store/src/index.ts"],
+      "@omi/memory": ["packages/memory/src/index.ts"],
+      "@omi/extensions": ["packages/extensions/src/index.ts"],
+      "@omi/settings": ["packages/settings/src/index.ts"],
+      "@omi/prompt": ["packages/prompt/src/index.ts"]
+    }
+  }
+}

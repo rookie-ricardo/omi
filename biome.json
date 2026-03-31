@@ -1,0 +1,42 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "files": {
+    "ignore": [
+      "node_modules",
+      ".turbo",
+      ".vite",
+      "coverage",
+      "dist",
+      "out",
+      "workspace-data",
+      "pnpm-lock.yaml",
+      "apps/desktop/electron.vite.config.*.mjs",
+      "packages/craft-agent-core",
+      "packages/craft-agent-shared",
+      "packages/design-react",
+      "packages/design-tokens"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "organizeImports": {
+    "enabled": true
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  }
+}
