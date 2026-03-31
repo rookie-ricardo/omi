@@ -1,0 +1,39 @@
+{
+  "name": "@omi/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.58.4",
+    "@mariozechner/pi-ai": "^0.58.4",
+    "@omi/core": "workspace:*",
+    "@omi/extensions": "workspace:*",
+    "@omi/memory": "workspace:*",
+    "@omi/prompt": "workspace:*",
+    "@omi/provider": "workspace:*",
+    "@omi/settings": "workspace:*",
+    "@omi/store": "workspace:*",
+    "@omi/tools": "workspace:*",
+    "diff": "^8.0.2",
+    "yaml": "^2.8.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "vitest": "^3.1.1"
+  }
+}
