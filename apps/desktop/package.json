@@ -1,0 +1,66 @@
+{
+  "name": "@omi/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "build": "electron-vite build",
+    "dev": "electron-vite dev",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@omi/protocol": "workspace:*",
+    "@omi/core": "workspace:*",
+    "@omi/runner": "workspace:*",
+    "@paper-design/shaders-react": "^0.0.72",
+    "@radix-ui/react-dialog": "^1.1.14",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-label": "^2.1.7",
+    "@radix-ui/react-popover": "^1.1.14",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "@tailwindcss/typography": "^0.5.19",
+    "@tanstack/react-query": "^5.74.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.561.0",
+    "motion": "^12.23.24",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.5.0",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.18",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "electron": "^39.8.3",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "typescript": "5.8.3",
+    "vite": "^6.2.2",
+    "vitest": "^3.1.1"
+  },
+  "build": {
+    "extraResources": [
+      {
+        "from": "../runner/dist",
+        "to": "runner/dist",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../runner/package.json",
+        "to": "runner/package.json"
+      }
+    ]
+  }
+}

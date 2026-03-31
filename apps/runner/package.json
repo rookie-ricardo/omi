@@ -1,0 +1,24 @@
+{
+  "name": "@omi/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@omi/agent": "workspace:*",
+    "@omi/memory": "workspace:*",
+    "@omi/store": "workspace:*",
+    "@omi/protocol": "workspace:*",
+    "@omi/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "tsx": "^4.19.3",
+    "vitest": "^3.1.1"
+  }
+}
