@@ -16,3 +16,11 @@ export * from "./tools-manager";
 export * from "./read";
 export * from "./mcp-resource-tools";
 export * from "./subagent";
+
+// Plan Mode Tools
+export { createEnterPlanTool, enterPlanTool, type EnterPlanInput } from "./enter-plan/index.js";
+export { createExitPlanTool, exitPlanTool, type ExitPlanInput } from "./exit-plan/index.js";
+
+// Worktree Mode Tools
+export { createEnterWorktreeTool, enterWorktreeTool, type EnterWorktreeInput } from "./enter-worktree/index.js";
+export { createExitWorktreeTool, exitWorktreeTool, type ExitWorktreeInput } from "./exit-worktree/index.js";

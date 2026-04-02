@@ -1,411 +1,313 @@
 /**
- * Plan Mode
+ * Plan Mode - 只读计划阶段的安全机制
  *
- * Provides a read-only planning mode where:
- * - Write tools are denied (edit, write, bash)
- * - Users can review proposed changes before execution
- * - Mode switching is explicit (EnterPlan / ExitPlan)
+ * 通过 EnterPlan/ExitPlan 实现：
+ * 1. 进入时：切换到只读模式，只允许使用 isReadOnly() 为 true 的工具
+ * 2. 退出时：提交计划文件供用户审批，支持 allowedPrompts 机制
  */
 
-import { createId, nowIso } from "@omi/core";
+import { randomUUID } from "node:crypto";
+import { nowIso } from "@omi/core";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type PlanModeStatus = "inactive" | "planning" | "reviewing" | "approved" | "rejected";
-
-export interface PlanStep {
-  id: string;
-  description: string;
-  tool?: string;
-  params?: Record<string, unknown>;
-  status: "pending" | "approved" | "rejected" | "executed";
-  reason?: string;
-}
-
-export interface PlanModeState {
-  status: PlanModeStatus;
-  startedAt?: string;
-  reviewStartedAt?: string;
-  approvedAt?: string;
-  rejectedAt?: string;
-  steps: PlanStep[];
-  totalSteps: number;
-  summary?: string;
-}
-
-export interface PlanModeConfig {
-  /** Whether to auto-approve safe operations */
-  allowSafeAutoApprove?: boolean;
-  /** Custom approval rules */
-  approvalRules?: ApprovalRule[];
-}
-
-export interface ApprovalRule {
-  /** Tool name pattern (supports * wildcard) */
-  toolPattern: string;
-  /** Whether to auto-approve */
-  autoApprove: boolean;
-  /** Reason for the rule */
-  reason?: string;
-}
-
-// ============================================================================
-// Plan Mode Manager
-// ============================================================================
-
-export class PlanMode {
-  private state: PlanModeState = {
-    status: "inactive",
-    steps: [],
-    totalSteps: 0,
-  };
-  private config: Required<PlanModeConfig>;
-
-  constructor(config: PlanModeConfig = {}) {
-    this.config = {
-      allowSafeAutoApprove: config.allowSafeAutoApprove ?? false,
-      approvalRules: config.approvalRules ?? [],
-    };
-  }
-
-  // ==========================================================================
-  // Mode Lifecycle
-  // ==========================================================================
-
-  /**
-   * Enter plan mode.
-   */
-  enter(): PlanModeState {
-    if (this.state.status !== "inactive") {
-      throw new Error(`Cannot enter plan mode: already in ${this.state.status} status`);
-    }
-
-    this.state = {
-      status: "planning",
-      startedAt: nowIso(),
-      steps: [],
-      totalSteps: 0,
-    };
-
-    return this.state;
-  }
-
-  /**
-   * Exit plan mode without approval.
-   */
-  exit(): PlanModeState {
-    if (this.state.status === "inactive") {
-      return this.state;
-    }
-
-    this.state.status = "rejected";
-    this.state.rejectedAt = nowIso();
-
-    const result = { ...this.state };
-    this.reset();
-    return result;
-  }
-
-  /**
-   * Start review phase.
-   */
-  startReview(): PlanModeState {
-    if (this.state.status !== "planning") {
-      throw new Error(`Cannot start review: not in planning status`);
-    }
-
-    this.state.status = "reviewing";
-    this.state.reviewStartedAt = nowIso();
-
-    return this.state;
-  }
-
-  /**
-   * Approve the plan.
-   */
-  approve(): PlanModeState {
-    if (this.state.status !== "reviewing") {
-      throw new Error(`Cannot approve: not in reviewing status`);
-    }
-
-    this.state.status = "approved";
-    this.state.approvedAt = nowIso();
-
-    return this.state;
-  }
-
-  /**
-   * Reject the plan.
-   */
-  reject(): PlanModeState {
-    if (this.state.status !== "reviewing") {
-      throw new Error(`Cannot reject: not in reviewing status`);
-    }
-
-    this.state.status = "rejected";
-    this.state.rejectedAt = nowIso();
-
-    return this.state;
-  }
-
-  // ==========================================================================
-  // Step Management
-  // ==========================================================================
-
-  /**
-   * Add a step to the plan.
-   */
-  addStep(description: string, tool?: string, params?: Record<string, unknown>): PlanStep {
-    if (this.state.status !== "planning") {
-      throw new Error(`Cannot add step: not in planning status`);
-    }
-
-    const step: PlanStep = {
-      id: createId("step"),
-      description,
-      tool,
-      params,
-      status: "pending",
-    };
-
-    this.state.steps.push(step);
-    this.state.totalSteps++;
-
-    return step;
-  }
-
-  /**
-   * Approve a specific step.
-   */
-  approveStep(stepId: string, reason?: string): PlanStep {
-    const step = this.state.steps.find((s) => s.id === stepId);
-    if (!step) {
-      throw new Error(`Step not found: ${stepId}`);
-    }
-
-    step.status = "approved";
-    step.reason = reason;
-
-    return step;
-  }
-
-  /**
-   * Reject a specific step.
-   */
-  rejectStep(stepId: string, reason?: string): PlanStep {
-    const step = this.state.steps.find((s) => s.id === stepId);
-    if (!step) {
-      throw new Error(`Step not found: ${stepId}`);
-    }
-
-    step.status = "rejected";
-    step.reason = reason;
-
-    return step;
-  }
-
-  /**
-   * Mark a step as executed.
-   */
-  markExecuted(stepId: string): PlanStep {
-    const step = this.state.steps.find((s) => s.id === stepId);
-    if (!step) {
-      throw new Error(`Step not found: ${stepId}`);
-    }
-
-    if (step.status !== "approved") {
-      throw new Error(`Cannot execute step that is not approved`);
-    }
-
-    step.status = "executed";
-    return step;
-  }
-
-  /**
-   * Set plan summary.
-   */
-  setSummary(summary: string): void {
-    this.state.summary = summary;
-  }
-
-  // ==========================================================================
-  // Tool Permission Checks
-  // ==========================================================================
-
-  /**
-   * Check if a tool is allowed in plan mode.
-   */
-  isToolAllowed(toolName: string): { allowed: boolean; reason?: string } {
-    // Read-only tools are always allowed
-    const readOnlyTools = ["read", "ls", "grep", "find", "glob", "list_dir"];
-    if (readOnlyTools.includes(toolName)) {
-      return { allowed: true };
-    }
-
-    // Write tools are denied in plan mode
-    const writeTools = ["edit", "write", "bash", "execute", "delete", "move"];
-    if (writeTools.includes(toolName)) {
-      return { allowed: false, reason: "Write tools are denied in plan mode" };
-    }
-
-    // Check custom approval rules
-    for (const rule of this.config.approvalRules) {
-      if (this.matchesPattern(toolName, rule.toolPattern)) {
-        return {
-          allowed: rule.autoApprove,
-          reason: rule.reason,
-        };
-      }
-    }
-
-    // Default: deny
-    return { allowed: false, reason: `Tool ${toolName} is not allowed in plan mode` };
-  }
-
-  /**
-   * Check if a tool should auto-approve.
-   */
-  shouldAutoApprove(toolName: string): boolean {
-    if (!this.config.allowSafeAutoApprove) {
-      return false;
-    }
-
-    const safeTools = ["read", "ls", "grep", "find", "glob", "list_dir"];
-    return safeTools.includes(toolName);
-  }
-
-  private matchesPattern(toolName: string, pattern: string): boolean {
-    if (pattern === "*") return true;
-    if (pattern.endsWith("*")) {
-      const prefix = pattern.slice(0, -1);
-      return toolName.startsWith(prefix);
-    }
-    if (pattern.startsWith("*")) {
-      const suffix = pattern.slice(1);
-      return toolName.endsWith(suffix);
-    }
-    return toolName === pattern;
-  }
-
-  // ==========================================================================
-  // State Queries
-  // ==========================================================================
-
-  /**
-   * Get current state.
-   */
-  getState(): PlanModeState {
-    return { ...this.state };
-  }
-
-  /**
-   * Get current status.
-   */
-  getStatus(): PlanModeStatus {
-    return this.state.status;
-  }
-
-  /**
-   * Check if plan mode is active.
-   */
-  isActive(): boolean {
-    return this.state.status !== "inactive";
-  }
-
-  /**
-   * Check if plan is approved.
-   */
-  isApproved(): boolean {
-    return this.state.status === "approved";
-  }
-
-  /**
-   * Get pending steps.
-   */
-  getPendingSteps(): PlanStep[] {
-    return this.state.steps.filter((s) => s.status === "pending");
-  }
-
-  /**
-   * Get approved steps.
-   */
-  getApprovedSteps(): PlanStep[] {
-    return this.state.steps.filter((s) => s.status === "approved" || s.status === "executed");
-  }
-
-  /**
-   * Get rejected steps.
-   */
-  getRejectedSteps(): PlanStep[] {
-    return this.state.steps.filter((s) => s.status === "rejected");
-  }
-
-  /**
-   * Get executed steps.
-   */
-  getExecutedSteps(): PlanStep[] {
-    return this.state.steps.filter((s) => s.status === "executed");
-  }
-
-  // ==========================================================================
-  // Reset
-  // ==========================================================================
-
-  private reset(): void {
-    this.state = {
-      status: "inactive",
-      steps: [],
-      totalSteps: 0,
-    };
-  }
-
-  /**
-   * Reset plan mode.
-   */
-  resetMode(): void {
-    this.reset();
-  }
-}
-
-// ============================================================================
-// Tool Denials in Plan Mode
-// ============================================================================
-
-export const PLAN_MODE_DENIAL_CODES = {
-  WRITE_TOOL_DENIED: "WRITE_TOOL_DENIED",
-  TOOL_NOT_ALLOWED: "TOOL_NOT_ALLOWED",
-  PLAN_NOT_APPROVED: "PLAN_NOT_APPROVED",
-} as const;
-
-export interface ToolDenial {
-  toolName: string;
-  code: string;
-  message: string;
-  planStepId?: string;
+/**
+ * Plan mode permission context
+ */
+export interface PlanPermissionContext {
+	mode: "plan";
+	allowedPrompts?: AllowedPrompt[];
+	previousMode?: AgentMode;
 }
 
 /**
- * Create a tool denial for plan mode.
+ * Agent 运行模式
  */
-export function createPlanModeDenial(
-  toolName: string,
-  reason: string,
-  planStepId?: string
-): ToolDenial {
-  return {
-    toolName,
-    code: PLAN_MODE_DENIAL_CODES.WRITE_TOOL_DENIED,
-    message: reason,
-    planStepId,
-  };
+export type AgentMode = "default" | "plan" | "auto" | "manual";
+
+/**
+ * allowedPrompts 中声明的命令类别
+ */
+export interface AllowedPrompt {
+	tool: "Bash" | "Edit" | "Write" | string;
+	prompt: string;
 }
 
 /**
- * Check if a denial is from plan mode.
+ * Plan 状态
  */
-export function isPlanModeDenial(denial: ToolDenial): boolean {
-  return denial.code === PLAN_MODE_DENIAL_CODES.WRITE_TOOL_DENIED ||
-    denial.code === PLAN_MODE_DENIAL_CODES.TOOL_NOT_ALLOWED;
+export interface PlanState {
+	isInPlanMode: boolean;
+	planFilePath?: string;
+	planContent?: string;
+	allowedPrompts: AllowedPrompt[];
+	planWasEdited: boolean;
+	enteredAt?: string;
+	previousMode?: AgentMode;
 }
+
+/**
+ * Plan Mode 事件类型
+ */
+export type PlanModeEventType = "enter_plan" | "exit_plan" | "submit_plan" | "approve_plan";
+
+/**
+ * Plan Mode 事件
+ */
+export interface PlanModeEvent {
+	type: PlanModeEventType;
+	sessionId: string;
+	timestamp: string;
+	planFilePath?: string;
+	allowedPrompts?: AllowedPrompt[];
+	approved?: boolean;
+	planWasEdited?: boolean;
+}
+
+/**
+ * Plan Mode 事件处理器
+ */
+export type PlanModeEventHandler = (event: PlanModeEvent) => void;
+
+// ============================================================================
+// Plan State Manager
+// ============================================================================
+
+/**
+ * Plan Mode 状态管理器
+ * 管理 plan mode 的进入/退出状态和权限上下文
+ */
+export class PlanStateManager {
+	private state: PlanState = {
+		isInPlanMode: false,
+		allowedPrompts: [],
+		planWasEdited: false,
+	};
+
+	private eventHandlers: PlanModeEventHandler[] = [];
+
+	/**
+	 * 检查当前是否处于 Plan Mode
+	 */
+	isInPlanMode(): boolean {
+		return this.state.isInPlanMode;
+	}
+
+	/**
+	 * 获取当前 Plan 状态
+	 */
+	getState(): Readonly<PlanState> {
+		return this.state;
+	}
+
+	/**
+	 * 进入 Plan Mode
+	 */
+	enterPlanMode(previousMode: AgentMode = "default"): PlanPermissionContext {
+		if (this.state.isInPlanMode) {
+			throw new Error("Already in plan mode");
+		}
+
+		const timestamp = nowIso();
+		this.state = {
+			...this.state,
+			isInPlanMode: true,
+			enteredAt: timestamp,
+			previousMode,
+			allowedPrompts: [],
+			planWasEdited: false,
+		};
+
+		const context: PlanPermissionContext = {
+			mode: "plan",
+			previousMode,
+		};
+
+		this.emitEvent({
+			type: "enter_plan",
+			sessionId: "",
+			timestamp,
+		});
+
+		return context;
+	}
+
+	/**
+	 * 退出 Plan Mode
+	 */
+	exitPlanMode(): {
+		previousMode: AgentMode;
+		allowedPrompts: AllowedPrompt[];
+	} {
+		if (!this.state.isInPlanMode) {
+			throw new Error("Not in plan mode");
+		}
+
+		const previousMode = this.state.previousMode ?? "default";
+		const allowedPrompts = [...this.state.allowedPrompts];
+
+		this.state = {
+			isInPlanMode: false,
+			planFilePath: undefined,
+			planContent: undefined,
+			allowedPrompts: [],
+			planWasEdited: false,
+			previousMode: undefined,
+		};
+
+		this.emitEvent({
+			type: "exit_plan",
+			sessionId: "",
+			timestamp: nowIso(),
+		});
+
+		return { previousMode, allowedPrompts };
+	}
+
+	/**
+	 * 设置计划内容
+	 */
+	setPlanContent(content: string, filePath?: string): void {
+		this.state.planContent = content;
+		this.state.planFilePath = filePath;
+	}
+
+	/**
+	 * 设置允许的 prompts
+	 */
+	setAllowedPrompts(prompts: AllowedPrompt[]): void {
+		this.state.allowedPrompts = prompts;
+	}
+
+	/**
+	 * 获取允许的 prompts
+	 */
+	getAllowedPrompts(): AllowedPrompt[] {
+		return this.state.allowedPrompts;
+	}
+
+	/**
+	 * 标记计划已被编辑
+	 */
+	markPlanEdited(): void {
+		this.state.planWasEdited = true;
+	}
+
+	/**
+	 * 检查计划是否被编辑过
+	 */
+	wasPlanEdited(): boolean {
+		return this.state.planWasEdited;
+	}
+
+	/**
+	 * 获取 Plan Mode 权限上下文
+	 */
+	getPermissionContext(): PlanPermissionContext {
+		return {
+			mode: "plan",
+			allowedPrompts: this.state.allowedPrompts,
+			previousMode: this.state.previousMode,
+		};
+	}
+
+	/**
+	 * 订阅事件
+	 */
+	onEvent(handler: PlanModeEventHandler): () => void {
+		this.eventHandlers.push(handler);
+		return () => {
+			const index = this.eventHandlers.indexOf(handler);
+			if (index !== -1) {
+				this.eventHandlers.splice(index, 1);
+			}
+		};
+	}
+
+	private emitEvent(event: PlanModeEvent): void {
+		for (const handler of this.eventHandlers) {
+			try {
+				handler(event);
+			} catch {
+				// Ignore handler errors
+			}
+		}
+	}
+}
+
+// ============================================================================
+// Plan Mode 工具辅助函数
+// ============================================================================
+
+/**
+ * 判断工具是否是只读的（可以在 Plan Mode 下使用）
+ */
+export function isReadOnlyTool(toolName: string): boolean {
+	const readOnlyTools = new Set([
+		"read",
+		"grep",
+		"glob",
+		"find",
+		"ls",
+		"agent",
+		"TodoRead",
+		"WebSearch",
+		"WebFetch",
+	]);
+
+	return readOnlyTools.has(toolName);
+}
+
+/**
+ * 检查工具是否可以在当前模式下执行
+ */
+export function canExecuteTool(toolName: string, mode: AgentMode | PlanPermissionContext): boolean {
+	if (mode === "plan" || (typeof mode === "object" && mode.mode === "plan")) {
+		return isReadOnlyTool(toolName);
+	}
+	return true;
+}
+
+/**
+ * 验证 allowed prompt 格式
+ */
+export function validateAllowedPrompt(prompt: AllowedPrompt): boolean {
+	if (!prompt.tool || typeof prompt.tool !== "string") {
+		return false;
+	}
+	if (!prompt.prompt || typeof prompt.prompt !== "string") {
+		return false;
+	}
+	if (prompt.prompt.length < 3 || prompt.prompt.length > 200) {
+		return false;
+	}
+	return true;
+}
+
+// ============================================================================
+// Singleton instance
+// ============================================================================
+
+let planStateManagerInstance: PlanStateManager | null = null;
+
+export function getPlanStateManager(): PlanStateManager {
+	if (!planStateManagerInstance) {
+		planStateManagerInstance = new PlanStateManager();
+	}
+	return planStateManagerInstance;
+}
+
+export function createPlanStateManager(): PlanStateManager {
+	planStateManagerInstance = new PlanStateManager();
+	return planStateManagerInstance;
+}
+
+// ============================================================================
+// Exports
+// ============================================================================
+
+export {
+	PlanStateManager as default,
+};

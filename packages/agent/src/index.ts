@@ -12,3 +12,7 @@ export * from "./modes";
 export * from "./subagent-manager";
 export * from "./task-mailbox";
 export * from "./multi-agent";
+
+// Re-export plan-mode and worktree-mode from modes
+export * from "./modes/plan-mode";
+export * from "./modes/worktree-mode";

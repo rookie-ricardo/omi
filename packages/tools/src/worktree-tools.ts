@@ -2,12 +2,12 @@
  * Worktree Tools
  *
  * Tools for managing worktrees for agent isolation.
+ * Note: These tools depend on external WorktreeMode implementation.
  */
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@mariozechner/pi-ai";
 import type { TextContent } from "@mariozechner/pi-ai";
-import { WorktreeMode, type WorktreeConfig, type WorktreeInfo } from "@omi/agent";
 
 // ============================================================================
 // Tool Names
@@ -65,11 +65,12 @@ export const checkWorktreeChangesSchema = Type.Object({
 // Tool Implementations
 // ============================================================================
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface WorktreeToolsConfig {
   /** Worktree mode instance */
-  worktreeMode: WorktreeMode;
+  worktreeMode: any;
   /** Default config for worktree creation */
-  defaultConfig: WorktreeConfig;
+  defaultConfig: any;
 }
 
 /**
@@ -195,7 +196,7 @@ export function createListWorktreesTool(config: WorktreeToolsConfig): AgentTool<
 
         switch (filter) {
           case "active":
-            worktrees = worktrees.filter((w) => w.status === "active");
+            worktrees = worktrees.filter((w: any) => w.status === "active");
             break;
           case "dirty":
             worktrees = config.worktreeMode.getDirtyWorktrees();
@@ -342,11 +343,12 @@ export function createCheckWorktreeChangesTool(
 /**
  * Create all worktree tools.
  */
-export function createWorktreeTools(config: WorktreeToolsConfig): AgentTool[] {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createWorktreeTools(config: WorktreeToolsConfig): AgentTool<any>[] {
   return [
-    createEnterWorktreeTool(config),
-    createExitWorktreeTool(config),
-    createListWorktreesTool(config),
-    createCheckWorktreeChangesTool(config),
+    createEnterWorktreeTool(config) as AgentTool<any>,
+    createExitWorktreeTool(config) as AgentTool<any>,
+    createListWorktreesTool(config) as AgentTool<any>,
+    createCheckWorktreeChangesTool(config) as AgentTool<any>,
   ];
 }

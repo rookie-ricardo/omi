@@ -2,12 +2,12 @@
  * Plan Mode Tools
  *
  * Tools for entering/exiting plan mode and managing plan approval.
+ * Note: These tools depend on external PlanMode implementation.
  */
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@mariozechner/pi-ai";
 import type { TextContent } from "@mariozechner/pi-ai";
-import { PlanMode, type PlanModeConfig, type PlanStep } from "@omi/agent";
 
 // ============================================================================
 // Tool Names
@@ -74,11 +74,12 @@ export const listPlanStepsSchema = Type.Object({
 // Tool Implementations
 // ============================================================================
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface PlanToolsConfig {
   /** Plan mode instance */
-  planMode: PlanMode;
+  planMode: any;
   /** Default config for new plan mode */
-  defaultConfig?: PlanModeConfig;
+  defaultConfig?: any;
 }
 
 /**
@@ -328,19 +329,20 @@ export function createListPlanStepsTool(config: PlanToolsConfig): AgentTool<type
           };
         }
 
-        let steps: PlanStep[];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let steps: any[];
         switch (filter) {
           case "pending":
-            steps = config.planMode.getPendingSteps();
+            steps = config.planMode.getPendingSteps?.() ?? [];
             break;
           case "approved":
-            steps = config.planMode.getApprovedSteps();
+            steps = config.planMode.getApprovedSteps?.() ?? [];
             break;
           case "rejected":
-            steps = config.planMode.getRejectedSteps();
+            steps = config.planMode.getRejectedSteps?.() ?? [];
             break;
           default:
-            steps = state.steps;
+            steps = state.steps ?? [];
         }
 
         const lines: string[] = [`Plan Status: ${state.status}`];
@@ -382,12 +384,13 @@ export function createListPlanStepsTool(config: PlanToolsConfig): AgentTool<type
 /**
  * Create all plan mode tools.
  */
-export function createPlanTools(config: PlanToolsConfig): AgentTool[] {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createPlanTools(config: PlanToolsConfig): AgentTool<any>[] {
   return [
-    createEnterPlanTool(config),
-    createExitPlanTool(config),
-    createApprovePlanTool(config),
-    createRejectPlanTool(config),
-    createListPlanStepsTool(config),
+    createEnterPlanTool(config) as AgentTool<any>,
+    createExitPlanTool(config) as AgentTool<any>,
+    createApprovePlanTool(config) as AgentTool<any>,
+    createRejectPlanTool(config) as AgentTool<any>,
+    createListPlanStepsTool(config) as AgentTool<any>,
   ];
 }

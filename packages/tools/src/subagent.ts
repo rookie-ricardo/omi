@@ -226,17 +226,19 @@ export function createSubagentSpawnTool(
 
       try {
         const typedParams = params as SubagentSpawnInput;
-        const result = await client.spawn(typedParams);
+        const input = typedParams as unknown as { task: string; name?: string; workspaceRoot?: string; isolated?: boolean; allowedTools?: string[]; blockedTools?: string[] };
+        const result = await client.spawn(input);
+        const taskDesc = String(input.task ?? "");
         return {
           content: [makeTextContent(
-            `SubAgent spawned successfully:\n- ID: ${result.subAgentId}\n- Name: ${result.name}\n- Task: ${typedParams.task}`
+            "SubAgent spawned successfully:\n- ID: " + result.subAgentId + "\n- Name: " + result.name + "\n- Task: " + taskDesc
           )],
           details: { subAgentId: result.subAgentId },
         };
       } catch (error) {
         return {
           content: [makeTextContent(
-            `Failed to spawn SubAgent: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to spawn SubAgent: " + (error instanceof Error ? error.message : String(error))
           )],
           details: {},
         };
@@ -266,27 +268,30 @@ export function createSubagentSendTool(
       }
 
       try {
-        const typedParams = params as SubagentSendInput;
+        const typedParams: SubagentSendInput = params as unknown as SubagentSendInput;
         const result = await client.send(typedParams);
+        const agentId: string = String(typedParams.subAgentId ?? "");
+        const subAgentIdVal: string = String(typedParams.subAgentId ?? "");
         if (!result.success) {
           return {
             content: [makeTextContent(
-              `Failed to send message: SubAgent ${typedParams.subAgentId} not found or not running`
+              "Failed to send message: SubAgent " + agentId + " not found or not running"
             )],
             details: {},
           };
         }
 
+        const msgId = result.messageId ? " (ID: " + result.messageId + ")" : "";
         return {
           content: [makeTextContent(
-            `Message sent to SubAgent ${typedParams.subAgentId}${result.messageId ? ` (ID: ${result.messageId})` : ""}`
+            "Message sent to SubAgent " + agentId + msgId
           )],
-          details: { subAgentId: typedParams.subAgentId },
+          details: { subAgentId: subAgentIdVal },
         };
       } catch (error) {
         return {
           content: [makeTextContent(
-            `Failed to send message: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to send message: " + (error instanceof Error ? error.message : String(error))
           )],
           details: {},
         };
@@ -316,20 +321,21 @@ export function createSubagentWaitTool(
       }
 
       try {
-        const typedParams = params as SubagentWaitInput;
+        const typedParams = params as unknown as SubagentWaitInput;
         const result = await client.wait(typedParams);
-        let message = `SubAgent ${typedParams.subAgentId} finished with status: ${result.status}`;
+        const agentId = String(typedParams.subAgentId ?? "");
+        let message = "SubAgent " + agentId + " finished with status: " + result.status;
 
         if (result.timedOut) {
           message += "\n\nNote: Wait timed out before subagent completion.";
         }
 
         if (result.result) {
-          message += `\n\nResult:\n${result.result}`;
+          message += "\n\nResult:\n" + result.result;
         }
 
         if (result.error) {
-          message += `\n\nError:\n${result.error}`;
+          message += "\n\nError:\n" + result.error;
         }
 
         return {
@@ -339,7 +345,7 @@ export function createSubagentWaitTool(
       } catch (error) {
         return {
           content: [makeTextContent(
-            `Failed to wait for SubAgent: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to wait for SubAgent: " + (error instanceof Error ? error.message : String(error))
           )],
           details: {},
         };
@@ -369,20 +375,20 @@ export function createSubagentCloseTool(
       }
 
       try {
-        const typedParams = params as SubagentCloseInput;
+        const typedParams = params as unknown as SubagentCloseInput;
         const result = await client.close(typedParams);
+        const agentId = String(typedParams.subAgentId ?? "");
+        const forced = typedParams.force ? " (forced)" : "";
+        const successMsg = "SubAgent " + agentId + " closed" + forced;
+        const failMsg = "Failed to close SubAgent " + agentId + ": not found";
         return {
-          content: [makeTextContent(
-            result.success
-              ? `SubAgent ${typedParams.subAgentId} closed${typedParams.force ? " (forced)" : ""}`
-              : `Failed to close SubAgent ${typedParams.subAgentId}: not found`
-          )],
+          content: [makeTextContent(result.success ? successMsg : failMsg)],
           details: { subAgentId: typedParams.subAgentId },
         };
       } catch (error) {
         return {
           content: [makeTextContent(
-            `Failed to close SubAgent: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to close SubAgent: " + (error instanceof Error ? error.message : String(error))
           )],
           details: {},
         };
@@ -423,20 +429,20 @@ export function createSubagentListTool(
         }
 
         const lines = result.subAgents.map((agent) => {
-          const parts = [
-            `## ${agent.name} (${agent.id})`,
-            `- Status: ${agent.status}`,
-            `- Task: ${agent.task.slice(0, 80)}${agent.task.length > 80 ? "..." : ""}`,
-            `- Created: ${agent.createdAt}`,
+          const parts: string[] = [
+            "## " + agent.name + " (" + agent.id + ")",
+            "- Status: " + agent.status,
+            "- Task: " + String(agent.task ?? "").slice(0, 80) + (String(agent.task ?? "").length > 80 ? "..." : ""),
+            "- Created: " + agent.createdAt,
           ];
 
-          if (agent.startedAt) parts.push(`- Started: ${agent.startedAt}`);
-          if (agent.completedAt) parts.push(`- Completed: ${agent.completedAt}`);
-          if (agent.progress !== undefined) parts.push(`- Progress: ${agent.progress}%`);
-          if (agent.error) parts.push(`- Error: ${agent.error}`);
-          if (agent.result) parts.push(`- Result: ${agent.result.slice(0, 100)}${agent.result.length > 100 ? "..." : ""}`);
+          if (agent.startedAt) parts.push("- Started: " + agent.startedAt);
+          if (agent.completedAt) parts.push("- Completed: " + agent.completedAt);
+          if (agent.progress !== undefined) parts.push("- Progress: " + agent.progress + "%");
+          if (agent.error) parts.push("- Error: " + agent.error);
+          if (agent.result) parts.push("- Result: " + String(agent.result ?? "").slice(0, 100) + (String(agent.result ?? "").length > 100 ? "..." : ""));
 
-          parts.push(`- Messages: ${agent.messages}, Tool Calls: ${agent.toolCalls}`);
+          parts.push("- Messages: " + agent.messages + ", Tool Calls: " + agent.toolCalls);
 
           return parts.join("\n");
         });
@@ -448,7 +454,7 @@ export function createSubagentListTool(
       } catch (error) {
         return {
           content: [makeTextContent(
-            `Failed to list SubAgents: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to list SubAgents: " + (error instanceof Error ? error.message : String(error))
           )],
           details: { subAgents: [] },
         };
@@ -478,34 +484,34 @@ export function createSubagentGetTool(
       }
 
       try {
-        const typedParams = params as SubagentGetInput;
+        const typedParams = params as unknown as SubagentGetInput;
         const result = await client.get(typedParams);
 
         if (!result.subAgent) {
           return {
-            content: [makeTextContent(`SubAgent ${typedParams.subAgentId} not found.`)],
+            content: [makeTextContent("SubAgent " + String(typedParams.subAgentId ?? "") + " not found.")],
             details: {},
           };
         }
 
         const agent = result.subAgent;
-        const lines = [
-          `## ${agent.name} (${agent.id})`,
-          `- Status: ${agent.status}`,
-          `- Task: ${agent.task}`,
-          `- Workspace: ${agent.workspaceRoot}`,
-          `- Parent ID: ${agent.parentId}`,
-          `- Created: ${agent.createdAt}`,
+        const lines: string[] = [
+          "## " + agent.name + " (" + agent.id + ")",
+          "- Status: " + agent.status,
+          "- Task: " + String(agent.task ?? ""),
+          "- Workspace: " + agent.workspaceRoot,
+          "- Parent ID: " + agent.parentId,
+          "- Created: " + agent.createdAt,
         ];
 
-        if (agent.startedAt) lines.push(`- Started: ${agent.startedAt}`);
-        if (agent.completedAt) lines.push(`- Completed: ${agent.completedAt}`);
-        if (agent.progress !== undefined) lines.push(`- Progress: ${agent.progress}%`);
-        if (agent.error) lines.push(`- Error: ${agent.error}`);
-        if (agent.result) lines.push(`\n## Result\n${agent.result}`);
-        lines.push(`\n## Statistics`);
-        lines.push(`- Messages: ${agent.messages}`);
-        lines.push(`- Tool Calls: ${agent.toolCalls}`);
+        if (agent.startedAt) lines.push("- Started: " + agent.startedAt);
+        if (agent.completedAt) lines.push("- Completed: " + agent.completedAt);
+        if (agent.progress !== undefined) lines.push("- Progress: " + agent.progress + "%");
+        if (agent.error) lines.push("- Error: " + agent.error);
+        if (agent.result) lines.push("\n## Result\n" + agent.result);
+        lines.push("\n## Statistics");
+        lines.push("- Messages: " + agent.messages);
+        lines.push("- Tool Calls: " + agent.toolCalls);
 
         return {
           content: [makeTextContent(lines.join("\n"))],
@@ -514,7 +520,7 @@ export function createSubagentGetTool(
       } catch (error) {
         return {
           content: [makeTextContent(
-            `Failed to get SubAgent: ${error instanceof Error ? error.message : String(error)}`
+            "Failed to get SubAgent: " + (error instanceof Error ? error.message : String(error))
           )],
           details: {},
         };
@@ -544,7 +550,7 @@ export function createSubagentDelegateTool(
       }
 
       try {
-        const typedParams = params as SubagentDelegateInput;
+        const typedParams = params as unknown as SubagentDelegateInput;
 
         // Spawn the subagent
         const spawnResult = await client.spawn({
@@ -563,19 +569,19 @@ export function createSubagentDelegateTool(
             timeout: typedParams.timeout,
           });
 
-          let message = `Task delegated to SubAgent ${spawnResult.name} (${spawnResult.subAgentId})\n`;
-          message += `Status: ${waitResult.status}`;
+          let message = "Task delegated to SubAgent " + spawnResult.name + " (" + spawnResult.subAgentId + ")\n";
+          message += "Status: " + waitResult.status;
 
           if (waitResult.timedOut) {
             message += "\n\nNote: Wait timed out before completion.";
           }
 
           if (waitResult.result) {
-            message += `\n\nResult:\n${waitResult.result}`;
+            message += "\n\nResult:\n" + waitResult.result;
           }
 
           if (waitResult.error) {
-            message += `\n\nError:\n${waitResult.error}`;
+            message += "\n\nError:\n" + waitResult.error;
           }
 
           return {
@@ -586,7 +592,7 @@ export function createSubagentDelegateTool(
 
         return {
           content: [makeTextContent(
-            `Task delegated to SubAgent ${spawnResult.name} (${spawnResult.subAgentId}). Use subagent_wait to wait for completion or subagent_list to monitor progress.`
+            "Task delegated to SubAgent " + spawnResult.name + " (" + spawnResult.subAgentId + "). Use subagent_wait to wait for completion or subagent_list to monitor progress."
           )],
           details: { subAgentId: spawnResult.subAgentId, completed: false },
         };

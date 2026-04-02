@@ -1,427 +1,505 @@
 /**
- * Worktree Mode
+ * Worktree Mode - Git Worktree 隔离机制
  *
- * Provides worktree isolation for agent execution:
- * - Create isolated worktrees for tasks
- * - Safe cleanup with change detection
- * - Parent-child relationship tracking
+ * 实现：
+ * 1. EnterWorktree 生命周期：创建独立工作目录
+ * 2. ExitWorktree 生命周期：安全清理或保留 worktree
+ * 3. 变更检测 fail-closed：拒绝删除有未提交变更的 worktree
  */
 
-import { createId, nowIso } from "@omi/core";
+import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
-
-export type WorktreeStatus = "inactive" | "active" | "dirty" | "cleaning" | "cleaned" | "failed";
-
-export interface WorktreeInfo {
-  /** Worktree root path */
-  path: string;
-  /** Worktree name (git worktree list name) */
-  name: string;
-  /** Branch name */
-  branch: string;
-  /** Parent worktree path */
-  parentPath?: string;
-  /** When the worktree was created */
-  createdAt: string;
-  /** Whether there are uncommitted changes */
-  isDirty: boolean;
-  /** Status of the worktree */
-  status: WorktreeStatus;
-}
-
-export interface WorktreeConfig {
-  /** Base path for worktrees */
-  basePath: string;
-  /** Git executable path */
-  gitPath?: string;
-  /** Whether to fail if worktree has uncommitted changes */
-  failOnDirty?: boolean;
-  /** Custom branch prefix */
-  branchPrefix?: string;
-}
-
-export interface WorktreeChangeDetection {
-  /** Files that have been modified */
-  modified: string[];
-  /** Files that have been added */
-  added: string[];
-  /** Files that have been deleted */
-  deleted: string[];
-  /** Total number of changes */
-  totalChanges: number;
-  /** Whether it's safe to delete */
-  safeToDelete: boolean;
-}
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { chdir } from "node:process";
+import { nowIso } from "@omi/core";
 
 // ============================================================================
-// Worktree Manager
+// Types
 // ============================================================================
 
-export class WorktreeMode {
-  private config: Required<WorktreeConfig>;
-  private worktrees: Map<string, WorktreeInfo> = new Map();
-  private currentWorktree?: string;
-
-  constructor(config: WorktreeConfig) {
-    this.config = {
-      basePath: config.basePath,
-      gitPath: config.gitPath ?? "git",
-      failOnDirty: config.failOnDirty ?? true,
-      branchPrefix: config.branchPrefix ?? "agent/",
-    };
-  }
-
-  // ==========================================================================
-  // Lifecycle
-  // ==========================================================================
-
-  /**
-   * Create a new worktree.
-   */
-  createWorktree(options: {
-    branch?: string;
-    fromCommit?: string;
-    parentPath?: string;
-  } = {}): WorktreeInfo {
-    const worktreeId = createId("wt");
-    const branch = options.branch ?? `${this.config.branchPrefix}${worktreeId}`;
-    const worktreePath = path.join(this.config.basePath, worktreeId);
-
-    // Create the worktree
-    const args = ["worktree", "add"];
-
-    if (options.fromCommit) {
-      args.push("-b", branch);
-      args.push(worktreePath);
-      args.push(options.fromCommit);
-    } else {
-      args.push(worktreePath);
-      args.push(`-b`, branch);
-    }
-
-    try {
-      this.execGit(args);
-    } catch (error) {
-      throw new Error(`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    const worktree: WorktreeInfo = {
-      path: worktreePath,
-      name: worktreeId,
-      branch,
-      parentPath: options.parentPath,
-      createdAt: nowIso(),
-      isDirty: false,
-      status: "active",
-    };
-
-    this.worktrees.set(worktreeId, worktree);
-    this.currentWorktree = worktreeId;
-
-    return worktree;
-  }
-
-  /**
-   * Switch to a worktree.
-   */
-  switchTo(worktreeId: string): WorktreeInfo {
-    const worktree = this.worktrees.get(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
-    }
-
-    this.currentWorktree = worktreeId;
-    return worktree;
-  }
-
-  /**
-   * Get current worktree.
-   */
-  getCurrentWorktree(): WorktreeInfo | undefined {
-    if (!this.currentWorktree) return undefined;
-    return this.worktrees.get(this.currentWorktree);
-  }
-
-  /**
-   * Get worktree by ID.
-   */
-  getWorktree(worktreeId: string): WorktreeInfo | undefined {
-    return this.worktrees.get(worktreeId);
-  }
-
-  /**
-   * List all worktrees.
-   */
-  listWorktrees(): WorktreeInfo[] {
-    return Array.from(this.worktrees.values());
-  }
-
-  // ==========================================================================
-  // Change Detection
-  // ==========================================================================
-
-  /**
-   * Check if worktree has uncommitted changes.
-   */
-  checkDirty(worktreeId: string): boolean {
-    const worktree = this.worktrees.get(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
-    }
-
-    try {
-      const result = this.execGit(["status", "--porcelain"], worktree.path);
-      worktree.isDirty = result.trim().length > 0;
-      return worktree.isDirty;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Detect changes in a worktree.
-   */
-  detectChanges(worktreeId: string): WorktreeChangeDetection {
-    const worktree = this.worktrees.get(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
-    }
-
-    try {
-      const result = this.execGit(["status", "--porcelain", "-uall"], worktree.path);
-      const lines = result.trim().split("\n").filter(Boolean);
-
-      const modified: string[] = [];
-      const added: string[] = [];
-      const deleted: string[] = [];
-
-      for (const line of lines) {
-        const status = line.slice(0, 2);
-        const file = line.slice(3);
-
-        if (status.includes("M") || status === " M") {
-          modified.push(file);
-        } else if (status.includes("A") || status === "A ") {
-          added.push(file);
-        } else if (status.includes("D") || status === " D") {
-          deleted.push(file);
-        }
-      }
-
-      const totalChanges = modified.length + added.length + deleted.length;
-
-      return {
-        modified,
-        added,
-        deleted,
-        totalChanges,
-        safeToDelete: totalChanges === 0,
-      };
-    } catch {
-      return {
-        modified: [],
-        added: [],
-        deleted: [],
-        totalChanges: 0,
-        safeToDelete: true,
-      };
-    }
-  }
-
-  /**
-   * Check if it's safe to delete a worktree.
-   */
-  canDelete(worktreeId: string): { safe: boolean; reason?: string } {
-    const worktree = this.worktrees.get(worktreeId);
-    if (!worktree) {
-      return { safe: false, reason: "Worktree not found" };
-    }
-
-    if (worktree.status === "cleaning") {
-      return { safe: false, reason: "Worktree is being cleaned" };
-    }
-
-    if (worktree.status === "cleaned") {
-      return { safe: false, reason: "Worktree already cleaned" };
-    }
-
-    // Check for uncommitted changes
-    if (this.checkDirty(worktreeId)) {
-      if (this.config.failOnDirty) {
-        return {
-          safe: false,
-          reason: "Worktree has uncommitted changes and failOnDirty is enabled",
-        };
-      }
-
-      const changes = this.detectChanges(worktreeId);
-      if (changes.totalChanges > 0) {
-        return {
-          safe: false,
-          reason: `Worktree has ${changes.totalChanges} uncommitted changes`,
-        };
-      }
-    }
-
-    return { safe: true };
-  }
-
-  // ==========================================================================
-  // Cleanup
-  // ==========================================================================
-
-  /**
-   * Clean up a worktree (fail-closed: reject if has changes).
-   */
-  async cleanup(worktreeId: string, force = false): Promise<WorktreeInfo> {
-    const worktree = this.worktrees.get(worktreeId);
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
-    }
-
-    // Check if safe to delete
-    if (!force) {
-      const canDelete = this.canDelete(worktreeId);
-      if (!canDelete.safe) {
-        throw new Error(`Cannot delete worktree: ${canDelete.reason}`);
-      }
-    }
-
-    worktree.status = "cleaning";
-
-    try {
-      // Remove from git
-      this.execGit(["worktree", "remove", worktree.path, "--force"]);
-
-      // Remove directory
-      if (fs.existsSync(worktree.path)) {
-        fs.rmSync(worktree.path, { recursive: true, force: true });
-      }
-
-      worktree.status = "cleaned";
-
-      if (this.currentWorktree === worktreeId) {
-        this.currentWorktree = undefined;
-      }
-    } catch (error) {
-      worktree.status = "failed";
-      throw new Error(`Failed to cleanup worktree: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    return worktree;
-  }
-
-  /**
-   * Clean up all worktrees.
-   */
-  async cleanupAll(force = false): Promise<string[]> {
-    const cleaned: string[] = [];
-
-    for (const [id, worktree] of this.worktrees.entries()) {
-      try {
-        await this.cleanup(id, force);
-        cleaned.push(id);
-      } catch {
-        // Continue with other worktrees
-      }
-    }
-
-    return cleaned;
-  }
-
-  // ==========================================================================
-  // Git Operations
-  // ==========================================================================
-
-  /**
-   * Execute a git command in a worktree.
-   */
-  execGit(args: string[], worktreePath?: string): string {
-    const cwd = worktreePath ?? this.config.basePath;
-    try {
-      return execSync([this.config.gitPath, ...args].join(" "), {
-        cwd,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-      });
-    } catch (error) {
-      if (error instanceof Error && "stdout" in error) {
-        return (error as any).stdout ?? "";
-      }
-      throw error;
-    }
-  }
-
-  // ==========================================================================
-  // State
-  // ==========================================================================
-
-  /**
-   * Get active worktrees count.
-   */
-  getActiveCount(): number {
-    return Array.from(this.worktrees.values()).filter((w) => w.status === "active").length;
-  }
-
-  /**
-   * Get worktrees with changes.
-   */
-  getDirtyWorktrees(): WorktreeInfo[] {
-    return Array.from(this.worktrees.values()).filter((w) => w.isDirty);
-  }
-
-  /**
-   * Update all worktree statuses.
-   */
-  refresh(): void {
-    for (const [id, worktree] of this.worktrees.entries()) {
-      if (worktree.status === "active") {
-        this.checkDirty(id);
-      }
-    }
-  }
-}
-
-// ============================================================================
-// Worktree Lifecycle Integration
-// ============================================================================
-
-export interface WorktreeLifecycleEvents {
-  "worktree.created": WorktreeInfo;
-  "worktree.entered": WorktreeInfo;
-  "worktree.exited": WorktreeInfo;
-  "worktree.cleaning": WorktreeInfo;
-  "worktree.cleaned": WorktreeInfo;
-  "worktree.failed": { worktree: WorktreeInfo; error: string };
+/**
+ * Worktree 状态
+ */
+export interface WorktreeState {
+	isInWorktree: boolean;
+	worktreePath?: string;
+	worktreeName?: string;
+	worktreeBranch?: string;
+	originalCwd?: string;
+	originalBranch?: string;
+	originalHeadCommit?: string;
+	sessionId?: string;
+	createdAt?: string;
+	hookBased?: boolean;
 }
 
 /**
- * Create worktree lifecycle hooks.
+ * Worktree 创建选项
  */
-export function createWorktreeLifecycleHooks(
-  worktreeMode: WorktreeMode
-): {
-  onCreate: (callback: (info: WorktreeInfo) => void) => void;
-  onEnter: (callback: (info: WorktreeInfo) => void) => void;
-  onExit: (callback: (info: WorktreeInfo) => void) => void;
-  onClean: (callback: (info: WorktreeInfo) => void) => void;
-} {
-  const listeners: Partial<WorktreeLifecycleEvents> = {};
-
-  return {
-    onCreate: (callback) => {
-      // Hook into createWorktree
-    },
-    onEnter: (callback) => {
-      // Hook into switchTo
-    },
-    onExit: (callback) => {
-      // Hook into cleanup
-    },
-    onClean: (callback) => {
-      // Hook into cleanup completion
-    },
-  };
+export interface WorktreeCreateOptions {
+	name?: string;
+	branch?: string;
+	hookBased?: boolean;
+	sessionId?: string;
 }
+
+/**
+ * Worktree 创建结果
+ */
+export interface WorktreeCreateResult {
+	worktreePath: string;
+	worktreeBranch: string;
+	originalBranch: string;
+	originalHeadCommit: string;
+	creationDurationMs?: number;
+}
+
+/**
+ * Worktree 变更统计
+ */
+export interface WorktreeChanges {
+	hasUncommittedChanges: boolean;
+	hasNewCommits: boolean;
+	uncommittedFilesCount: number;
+	newCommitsCount: number;
+}
+
+/**
+ * ExitWorktree 选项
+ */
+export interface ExitWorktreeOptions {
+	action: "keep" | "remove";
+	discardChanges?: boolean;
+}
+
+/**
+ * Worktree 事件类型
+ */
+export type WorktreeEventType = "enter_worktree" | "exit_worktree" | "remove_worktree" | "keep_worktree";
+
+/**
+ * Worktree 事件
+ */
+export interface WorktreeEvent {
+	type: WorktreeEventType;
+	sessionId: string;
+	timestamp: string;
+	worktreePath?: string;
+	worktreeName?: string;
+	success?: boolean;
+	error?: string;
+}
+
+/**
+ * Worktree 事件处理器
+ */
+export type WorktreeEventHandler = (event: WorktreeEvent) => void;
+
+// ============================================================================
+// Worktree State Manager
+// ============================================================================
+
+/**
+ * Worktree 状态管理器
+ * 管理 worktree 的创建/销毁和状态
+ */
+export class WorktreeStateManager {
+	private state: WorktreeState = {
+		isInWorktree: false,
+	};
+
+	private eventHandlers: WorktreeEventHandler[] = [];
+
+	/**
+	 * 检查当前是否处于 Worktree 中
+	 */
+	isInWorktree(): boolean {
+		return this.state.isInWorktree;
+	}
+
+	/**
+	 * 获取当前 Worktree 状态
+	 */
+	getState(): Readonly<WorktreeState> {
+		return this.state;
+	}
+
+	/**
+	 * 进入 Worktree
+	 */
+	async enterWorktree(
+		repoRoot: string,
+		options: WorktreeCreateOptions = {},
+	): Promise<WorktreeCreateResult> {
+		if (this.state.isInWorktree) {
+			throw new Error("Already in a worktree");
+		}
+
+		const startTime = Date.now();
+		const sessionId = options.sessionId ?? randomUUID();
+		const slug = options.name ?? `worktree-${sessionId.slice(0, 8)}`;
+
+		// 获取原始分支和 commit
+		const originalBranch = this.getCurrentBranch(repoRoot);
+		const originalHeadCommit = this.getCurrentHead(repoRoot);
+
+		// 创建 worktree
+		const worktreeBranch = options.branch ?? `worktree/${slug}`;
+		const worktreePath = await this.createWorktree(repoRoot, slug, worktreeBranch);
+
+		// 更新状态
+		this.state = {
+			isInWorktree: true,
+			worktreePath,
+			worktreeName: slug,
+			worktreeBranch,
+			originalCwd: process.cwd(),
+			originalBranch,
+			originalHeadCommit,
+			sessionId,
+			createdAt: nowIso(),
+			hookBased: options.hookBased,
+		};
+
+		// 切换到 worktree 目录
+		chdir(worktreePath);
+
+		const durationMs = Date.now() - startTime;
+
+		this.emitEvent({
+			type: "enter_worktree",
+			sessionId,
+			timestamp: nowIso(),
+			worktreePath,
+			worktreeName: slug,
+			success: true,
+		});
+
+		return {
+			worktreePath,
+			worktreeBranch,
+			originalBranch,
+			originalHeadCommit,
+			creationDurationMs: durationMs,
+		};
+	}
+
+	/**
+	 * 退出 Worktree
+	 */
+	async exitWorktree(options: ExitWorktreeOptions = { action: "keep" }): Promise<void> {
+		if (!this.state.isInWorktree || !this.state.worktreePath) {
+			throw new Error("Not in a worktree");
+		}
+
+		const { worktreePath, worktreeName, worktreeBranch } = this.state;
+		const sessionId = this.state.sessionId ?? "";
+
+		if (options.action === "keep") {
+			// 保留 worktree，只切换回原目录
+			this.keepWorktree();
+			return;
+		}
+
+		// action === "remove"：删除 worktree
+		const changes = this.countWorktreeChanges(worktreePath, this.state.originalHeadCommit);
+
+		if (changes === null) {
+			// fail-closed: 无法确定变更，拒绝删除
+			throw new Error(
+				"Cannot determine worktree changes. Manual cleanup required.",
+			);
+		}
+
+		if (changes.hasUncommittedChanges && !options.discardChanges) {
+			throw new Error(
+				`Worktree has ${changes.uncommittedFilesCount} uncommitted file(s). Use discardChanges: true to force removal.`,
+			);
+		}
+
+		if (changes.hasNewCommits && !options.discardChanges) {
+			throw new Error(
+				`Worktree has ${changes.newCommitsCount} new commit(s). Use discardChanges: true to force removal.`,
+			);
+		}
+
+		// 执行删除
+		await this.removeWorktree(worktreePath, worktreeBranch);
+
+		// 清理状态
+		this.state = {
+			isInWorktree: false,
+		};
+
+		this.emitEvent({
+			type: "exit_worktree",
+			sessionId,
+			timestamp: nowIso(),
+			worktreePath,
+			worktreeName,
+			success: true,
+		});
+	}
+
+	/**
+	 * 保留 worktree，切换回原目录
+	 */
+	private keepWorktree(): void {
+		if (this.state.originalCwd) {
+			chdir(this.state.originalCwd);
+		}
+
+		this.emitEvent({
+			type: "keep_worktree",
+			sessionId: this.state.sessionId ?? "",
+			timestamp: nowIso(),
+			worktreePath: this.state.worktreePath,
+			worktreeName: this.state.worktreeName,
+			success: true,
+		});
+
+		// 只清空 worktree 状态，保留目录
+		this.state = {
+			isInWorktree: false,
+		};
+	}
+
+	/**
+	 * 删除 worktree
+	 */
+	private async removeWorktree(worktreePath: string, worktreeBranch?: string): Promise<void> {
+		try {
+			// git worktree remove --force
+			execSync(`git worktree remove "${worktreePath}" --force`, {
+				stdio: "pipe",
+			});
+
+			// 删除分支
+			if (worktreeBranch) {
+				try {
+					execSync(`git branch -D "${worktreeBranch}"`, {
+						stdio: "pipe",
+					});
+				} catch {
+					// 忽略分支删除失败
+				}
+			}
+		} catch (error) {
+			throw new Error(`Failed to remove worktree: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * 创建 worktree
+	 */
+	private async createWorktree(
+		repoRoot: string,
+		slug: string,
+		branch: string,
+	): Promise<string> {
+		// 验证 slug
+		if (!this.validateWorktreeSlug(slug)) {
+			throw new Error(`Invalid worktree slug: ${slug}`);
+		}
+
+		// worktrees 目录
+		const worktreesDir = join(repoRoot, ".claude", "worktrees");
+		if (!existsSync(worktreesDir)) {
+			mkdirSync(worktreesDir, { recursive: true });
+		}
+
+		const worktreePath = join(worktreesDir, slug);
+
+		// 检查是否已存在
+		if (existsSync(worktreePath)) {
+			// 快速恢复：检查 .git 指针文件
+			const gitPointer = join(worktreePath, ".git");
+			if (existsSync(gitPointer)) {
+				return worktreePath;
+			}
+			throw new Error(`Worktree path already exists: ${worktreePath}`);
+		}
+
+		// 获取默认分支
+		const defaultBranch = this.getDefaultBranch(repoRoot);
+
+		// 创建 worktree
+		try {
+			execSync(
+				`git worktree add -b "${branch}" "${worktreePath}" "${defaultBranch}"`,
+				{
+					cwd: repoRoot,
+					stdio: "pipe",
+				},
+			);
+		} catch (error) {
+			throw new Error(
+				`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+
+		return worktreePath;
+	}
+
+	/**
+	 * 验证 worktree slug 格式
+	 */
+	private validateWorktreeSlug(slug: string): boolean {
+		if (slug.length > 64) {
+			return false;
+		}
+		// 每个段只允许字母、数字、.、_、-
+		const segmentPattern = /^[a-zA-Z0-9._-]+$/;
+		const segments = slug.split("/");
+		return segments.every((segment) => segmentPattern.test(segment));
+	}
+
+	/**
+	 * 获取当前分支
+	 */
+	private getCurrentBranch(repoRoot: string): string {
+		try {
+			const branch = execSync("git branch --show-current", {
+				cwd: repoRoot,
+				stdio: "pipe",
+				encoding: "utf-8",
+			}).trim();
+			return branch || "HEAD";
+		} catch {
+			return "HEAD";
+		}
+	}
+
+	/**
+	 * 获取默认分支
+	 */
+	private getDefaultBranch(repoRoot: string): string {
+		try {
+			const branch = execSync("git rev-parse --abbrev-ref origin/HEAD", {
+				cwd: repoRoot,
+				stdio: "pipe",
+				encoding: "utf-8",
+			})
+				.trim()
+				.replace("origin/", "");
+			return branch || "main";
+		} catch {
+			return "main";
+		}
+	}
+
+	/**
+	 * 获取当前 HEAD commit
+	 */
+	private getCurrentHead(repoRoot: string): string {
+		try {
+			return execSync("git rev-parse HEAD", {
+				cwd: repoRoot,
+				stdio: "pipe",
+				encoding: "utf-8",
+			}).trim();
+		} catch {
+			return "";
+		}
+	}
+
+	/**
+	 * 统计 worktree 变更
+	 * 返回 null 表示无法确定（fail-closed）
+	 */
+	countWorktreeChanges(worktreePath: string, originalHeadCommit?: string): WorktreeChanges | null {
+		if (!existsSync(worktreePath)) {
+			return null;
+		}
+
+		try {
+			// 统计未提交文件
+			const statusOutput = execSync("git status --porcelain", {
+				cwd: worktreePath,
+				stdio: "pipe",
+				encoding: "utf-8",
+			});
+			const uncommittedFilesCount = statusOutput
+				.trim()
+				.split("\n")
+				.filter((line) => line.length > 0).length;
+
+			// 统计新提交
+			let newCommitsCount = 0;
+			if (originalHeadCommit) {
+				try {
+					const logOutput = execSync(
+						`git rev-list --count "${originalHeadCommit}"..HEAD`,
+						{
+							cwd: worktreePath,
+							stdio: "pipe",
+							encoding: "utf-8",
+						},
+					);
+					newCommitsCount = parseInt(logOutput.trim(), 10) || 0;
+				} catch {
+					// git rev-list 失败，返回 null（fail-closed）
+					return null;
+				}
+			}
+
+			return {
+				hasUncommittedChanges: uncommittedFilesCount > 0,
+				hasNewCommits: newCommitsCount > 0,
+				uncommittedFilesCount,
+				newCommitsCount,
+			};
+		} catch {
+			// git 命令失败，返回 null（fail-closed）
+			return null;
+		}
+	}
+
+	/**
+	 * 订阅事件
+	 */
+	onEvent(handler: WorktreeEventHandler): () => void {
+		this.eventHandlers.push(handler);
+		return () => {
+			const index = this.eventHandlers.indexOf(handler);
+			if (index !== -1) {
+				this.eventHandlers.splice(index, 1);
+			}
+		};
+	}
+
+	private emitEvent(event: WorktreeEvent): void {
+		for (const handler of this.eventHandlers) {
+			try {
+				handler(event);
+			} catch {
+				// Ignore handler errors
+			}
+		}
+	}
+}
+
+// ============================================================================
+// Singleton instance
+// ============================================================================
+
+let worktreeStateManagerInstance: WorktreeStateManager | null = null;
+
+export function getWorktreeStateManager(): WorktreeStateManager {
+	if (!worktreeStateManagerInstance) {
+		worktreeStateManagerInstance = new WorktreeStateManager();
+	}
+	return worktreeStateManagerInstance;
+}
+
+export function createWorktreeStateManager(): WorktreeStateManager {
+	worktreeStateManagerInstance = new WorktreeStateManager();
+	return worktreeStateManagerInstance;
+}
+
+// ============================================================================
+// Exports
+// ============================================================================
+
+export { WorktreeStateManager as default };
