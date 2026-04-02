@@ -5,6 +5,7 @@ import ReactDOM from "react-dom/client";
 import { RouterProvider, createBrowserRouter } from "react-router-dom";
 
 import { App } from "./routes";
+import "./omiui/styles.css";
 import "./styles.css";
 
 const router = createBrowserRouter([

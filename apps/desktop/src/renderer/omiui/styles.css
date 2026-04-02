@@ -1,0 +1,525 @@
+@reference "tailwindcss";
+
+.desktop-layout {
+  @apply grid bg-slate-100 text-slate-900 overflow-hidden;
+  height: 100vh;
+  height: 100dvh;
+  grid-template-columns: var(--layout-columns);
+  --omi-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", sans-serif;
+  --font-sans: var(--omi-font-sans);
+  --font-default: var(--omi-font-sans);
+  font-family: var(--omi-font-sans) !important;
+  font-style: normal;
+  font-weight: 400;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.desktop-layout :where(button, input, select, textarea) {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.desktop-layout :where(h1, h2, h3, h4, h5, h6, p, span, div, label, a, li, ul, ol) {
+  font-family: inherit;
+}
+
+.desktop-sidebar {
+  @apply bg-slate-100 min-h-0 overflow-hidden;
+}
+
+.desktop-resize-handle {
+  @apply relative w-px cursor-col-resize bg-slate-300 hover:bg-slate-400 transition;
+}
+
+.desktop-resize-handle::before {
+  content: "";
+  @apply absolute -left-2 -right-2 top-0 bottom-0;
+}
+
+.desktop-main {
+  @apply bg-white min-h-0 min-w-0 overflow-y-hidden overflow-x-hidden;
+}
+
+.desktop-layout button {
+  @apply border-0 bg-transparent outline-none;
+  color: inherit;
+}
+
+.desktop-layout button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.sidebar-root {
+  @apply h-full flex flex-col select-none;
+}
+
+.sidebar-root input,
+.sidebar-root textarea {
+  @apply select-text;
+}
+
+.sidebar-scrollable {
+  @apply flex-1 min-h-0 overflow-y-auto pt-10 pb-4 px-2 flex flex-col gap-2;
+}
+
+.sidebar-thread-controls {
+  @apply flex flex-row flex-nowrap items-center gap-2;
+}
+
+.sidebar-thread-controls-host {
+  @apply mt-1 -translate-y-px px-2 pb-1;
+}
+
+.sidebar-thread-controls-button {
+  @apply h-6.75 w-6.75 rounded-md border border-transparent bg-transparent text-zinc-600 flex items-center justify-center transition hover:border-zinc-200 hover:bg-zinc-50;
+}
+
+.sidebar-thread-controls-icon {
+  @apply w-4 h-4;
+}
+
+.sidebar-search-toggle {
+  @apply h-6.75 w-6.75 rounded-md border border-transparent bg-transparent text-zinc-600 flex items-center justify-center transition hover:border-zinc-200 hover:bg-zinc-50;
+}
+
+.sidebar-search-toggle-icon {
+  @apply w-4 h-4;
+}
+
+.sidebar-primary-nav {
+  @apply flex flex-col gap-1;
+}
+
+.sidebar-nav-item {
+  @apply text-sm font-normal text-slate-700 hover:bg-slate-200;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.sidebar-nav-item.is-active {
+  @apply bg-slate-200 text-zinc-900;
+}
+
+.sidebar-menu-row {
+  @apply w-full min-w-0 rounded-lg px-3 py-1 text-left transition flex items-center gap-2;
+}
+
+.sidebar-menu-row-left {
+  @apply shrink-0 flex items-center justify-center text-zinc-500;
+  width: 18px;
+  height: 18px;
+}
+
+.sidebar-menu-row-main {
+  @apply min-w-0 flex-1;
+}
+
+.sidebar-menu-row-right {
+  @apply relative ml-2 shrink-0 flex items-center justify-end;
+}
+
+.sidebar-menu-row-right-default,
+.sidebar-menu-row-right-hover {
+  @apply transition;
+}
+
+.thread-tree-root {
+  @apply flex flex-col;
+}
+
+.thread-tree-header-row {
+  @apply cursor-default;
+}
+
+.thread-tree-header {
+  @apply text-sm font-normal text-zinc-500 select-none;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.thread-tree-actions {
+  @apply inline-flex items-center gap-0.5;
+}
+
+.thread-tree-action-btn {
+  @apply rounded text-zinc-500 flex items-center justify-center transition hover:bg-zinc-200 hover:text-zinc-700;
+  width: 22px;
+  height: 22px;
+}
+
+.project-header-row {
+  @apply hover:bg-zinc-200 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400;
+}
+
+.project-main-button {
+  @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center min-h-5 cursor-grab;
+}
+
+.project-icon-stack {
+  @apply relative flex items-center justify-center text-zinc-500;
+  width: 18px;
+  height: 18px;
+}
+
+.project-icon-folder {
+  @apply absolute inset-0 flex items-center justify-center opacity-100;
+}
+
+.project-icon-chevron {
+  @apply absolute inset-0 items-center justify-center opacity-0 hidden;
+}
+
+.project-title {
+  @apply text-sm font-normal text-zinc-700 truncate select-none;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.project-header-row:hover .project-icon-folder {
+  @apply opacity-0;
+}
+
+.project-header-row:hover .project-icon-chevron {
+  @apply flex opacity-100;
+}
+
+.project-empty-row {
+  @apply cursor-default;
+}
+
+.project-empty-spacer {
+  @apply block w-4 h-4;
+}
+
+.project-empty {
+  @apply text-sm text-zinc-400;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.thread-list {
+  @apply list-none m-0 p-0 flex flex-col gap-0.5;
+}
+
+.thread-row-item {
+  @apply m-0;
+}
+
+.thread-row {
+  @apply hover:bg-zinc-200;
+}
+
+.thread-row[data-active="true"] {
+  @apply bg-zinc-200;
+}
+
+.thread-left-stack {
+  @apply relative flex items-center justify-center;
+  width: 18px;
+  height: 18px;
+}
+
+.thread-status-indicator {
+  @apply w-2.5 h-2.5 rounded-full bg-zinc-400;
+}
+
+.thread-main-button {
+  @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center min-h-5;
+}
+
+.thread-row-title-wrap {
+  @apply min-w-0 inline-flex items-center gap-1;
+}
+
+.thread-row-title {
+  @apply block text-sm leading-5 font-normal text-zinc-800 truncate whitespace-nowrap;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.thread-row-time {
+  @apply block text-sm font-normal text-zinc-500;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.thread-row-extra {
+  @apply sr-only;
+}
+
+.thread-icon {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2px;
+}
+
+.sidebar-settings-area {
+  @apply shrink-0 bg-slate-100 pt-2 px-2 pb-2 border-t border-zinc-200;
+}
+
+.sidebar-settings-button {
+  @apply flex items-center gap-2 w-full rounded-lg border-0 bg-transparent px-2 py-2 text-sm text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900 cursor-pointer;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.sidebar-settings-icon {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2px;
+}
+
+.content-root {
+  @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-hidden bg-white;
+}
+
+.content-header {
+  @apply relative z-10 w-full min-h-12 sm:min-h-14 flex items-center gap-2 sm:gap-3 px-2 sm:px-3 pt-3 sm:pt-4 pb-2 bg-white;
+}
+
+.content-title {
+  @apply m-0 min-w-0 flex-1 truncate text-sm font-medium leading-6 text-slate-900 max-sm:text-xs;
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.content-actions {
+  @apply flex items-center justify-end gap-1;
+}
+
+.content-leading {
+  @apply flex items-center gap-1;
+}
+
+.content-body {
+  @apply flex-1 min-h-0 min-w-0 w-full flex flex-col gap-2 sm:gap-3 pt-1 pb-2 sm:pb-4 overflow-y-hidden overflow-x-hidden;
+}
+
+.content-grid-shell {
+  @apply flex-1 min-h-0;
+}
+
+.content-grid {
+  @apply flex-1 min-h-0 flex flex-col gap-3;
+}
+
+.new-thread-empty {
+  @apply flex-1 min-h-0 flex flex-col items-center justify-center gap-0.5 px-3 sm:px-6;
+}
+
+.new-thread-hero {
+  @apply m-0 text-2xl sm:text-[2.5rem] font-normal leading-[1.05] text-zinc-900;
+  font-size: 40px;
+  line-height: 1.05;
+}
+
+.new-thread-folder-dropdown {
+  @apply border-0 bg-transparent text-2xl sm:text-[2.5rem] text-zinc-500 inline-flex items-center gap-1 cursor-pointer;
+  font-size: 40px;
+  line-height: 1.05;
+}
+
+.new-thread-folder-dropdown-chevron {
+  @apply h-4 w-4 sm:h-5 sm:w-5 mt-0;
+}
+
+.new-thread-mark {
+  @apply mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-300 text-zinc-700;
+}
+
+.new-thread-mark-icon {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2px;
+}
+
+.header-pill-select,
+.header-pill-button {
+  @apply inline-flex h-7 items-center gap-1.5 rounded-xl border border-zinc-200 bg-zinc-50 px-2.5 text-xs text-zinc-600;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.header-pill-select select {
+  @apply border-0 bg-transparent p-0 text-xs text-zinc-600 outline-none min-w-18;
+  appearance: none;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.header-pill-icon {
+  @apply shrink-0;
+  width: 15px;
+  height: 15px;
+  stroke-width: 2px;
+}
+
+.header-pill-chevron {
+  @apply shrink-0 text-zinc-500;
+  width: 15px;
+  height: 15px;
+  stroke-width: 2px;
+}
+
+.header-pill-button {
+  @apply transition hover:bg-zinc-100;
+}
+
+.header-divider {
+  @apply h-5 w-px bg-zinc-200 mx-1;
+}
+
+.header-icon-button {
+  @apply h-7 w-7 rounded-md border-0 bg-transparent text-zinc-500 inline-flex items-center justify-center transition hover:bg-zinc-100 hover:text-zinc-700;
+}
+
+.header-icon-size {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2px;
+}
+
+.header-stats {
+  @apply ml-1 inline-flex items-center gap-1 text-xs tabular-nums;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.header-stats-positive {
+  @apply text-emerald-600;
+}
+
+.header-stats-negative {
+  @apply text-rose-600;
+}
+
+.thread-composer {
+  @apply w-full max-w-175 mx-auto px-2 sm:px-6;
+}
+
+.thread-composer-shell {
+  @apply relative rounded-2xl border border-zinc-300 bg-white p-2 sm:p-3 shadow-sm;
+}
+
+.thread-composer-rate-limit {
+  @apply mb-1.5 mt-1.5 px-1 text-[11px] leading-5 text-zinc-500;
+}
+
+.thread-composer-rate-limit-row {
+  @apply flex min-w-0 items-center gap-x-1.5 gap-y-1;
+}
+
+.thread-composer-safe-text {
+  @apply text-orange-600;
+}
+
+.thread-composer-rate-limit-spacer {
+  @apply flex-1;
+}
+
+.thread-composer-rate-limit-clock {
+  @apply text-zinc-500;
+}
+
+.thread-composer-input-wrap {
+  @apply relative;
+}
+
+.thread-composer-input {
+  @apply w-full min-w-0 min-h-10 sm:min-h-11 max-h-40 rounded-xl border-0 bg-transparent px-1 py-2 text-sm text-zinc-900 outline-none transition resize-none overflow-y-auto;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.thread-composer-input:focus {
+  @apply ring-0;
+}
+
+.thread-composer-controls {
+  @apply relative mt-2 sm:mt-3 flex items-center gap-2 sm:gap-4 overflow-visible;
+}
+
+.thread-composer-attach {
+  @apply relative shrink-0;
+}
+
+.thread-composer-attach-trigger {
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-none border-0 bg-transparent text-xl leading-none text-zinc-700 transition hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+}
+
+.composer-dropdown-trigger {
+  @apply inline-flex h-7 min-w-0 items-center gap-1 border-0 bg-transparent p-0 text-sm leading-none text-zinc-500 outline-none transition;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.composer-dropdown-chevron {
+  @apply mt-px shrink-0 text-zinc-500;
+  width: 15px;
+  height: 15px;
+  stroke-width: 2px;
+}
+
+.thread-composer-actions {
+  @apply ml-auto flex min-w-0 items-center gap-2;
+}
+
+.thread-composer-mic {
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 bg-zinc-100 text-zinc-600 transition hover:bg-zinc-200 hover:text-zinc-900;
+  touch-action: none;
+}
+
+.thread-composer-mic-icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2px;
+}
+
+.thread-composer-submit {
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 bg-zinc-900 text-white transition hover:bg-black disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
+}
+
+.thread-composer-submit-icon {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2px;
+}
+
+.fast-banner-card {
+  @apply mb-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-3 py-2.5 flex items-center justify-between gap-3;
+}
+
+.fast-banner-copy {
+  @apply min-w-0;
+}
+
+.fast-banner-title {
+  @apply text-sm font-medium text-zinc-800;
+}
+
+.fast-banner-text {
+  @apply mt-0.5 text-xs text-zinc-600 flex items-center gap-1.5;
+}
+
+.fast-banner-bolt {
+  @apply text-amber-500 shrink-0;
+  width: 15px;
+  height: 15px;
+  stroke-width: 2px;
+}
+
+.fast-banner-actions {
+  @apply inline-flex items-center gap-2 shrink-0;
+}
+
+.fast-banner-enable {
+  @apply h-7 rounded-full border-0 bg-zinc-900 px-3.5 text-xs font-medium text-white transition hover:bg-black;
+}
+
+.fast-banner-close {
+  @apply h-6 w-6 rounded-full border-0 bg-transparent text-zinc-500 inline-flex items-center justify-center transition hover:bg-zinc-200 hover:text-zinc-700;
+}

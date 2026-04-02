@@ -1,10 +1,10 @@
 import { type ChildProcess, fork } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
 import { BrowserWindow, app, ipcMain } from "electron";
 
 import { type commandMap } from "@omi/protocol";
-import { createId } from "@omi/core";
 
 let mainWindow: BrowserWindow | null = null;
 let runner: ChildProcess | null = null;
@@ -75,6 +75,11 @@ function startRunner() {
   const runnerEntry = isPackaged
     ? resolve(process.resourcesPath, "runner", "dist", "index.js")
     : resolve(workspaceRoot, "apps/runner/src/index.ts");
+  const nodeExecPath =
+    process.env.npm_node_execpath ??
+    process.env.NODE ??
+    process.env.NODE_BINARY ??
+    "node";
 
   runner = isPackaged
     ? fork(runnerEntry, ["--workspace-root", workspaceRoot], {
@@ -85,11 +90,10 @@ function startRunner() {
       })
     : fork(runnerEntry, ["--workspace-root", workspaceRoot], {
         stdio: ["pipe", "pipe", "pipe", "ipc"],
-        execPath: process.execPath,
+        execPath: nodeExecPath,
         execArgv: ["--import", "tsx"],
         env: {
           ...process.env,
-          ELECTRON_RUN_AS_NODE: "1",
         },
       });
 
@@ -148,7 +152,7 @@ async function invokeRunner(method: keyof typeof commandMap, params: Record<stri
     throw new Error("Runner failed to start");
   }
 
-  const id = createId("rpc");
+  const id = `rpc_${randomUUID()}`;
   const payload = { id, method, params };
 
   return new Promise((resolve, reject) => {
