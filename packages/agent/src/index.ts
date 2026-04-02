@@ -9,3 +9,7 @@ export * from "./bash-executor";
 export * from "./slash-commands";
 export * from "./prompt-templates";
 export * from "./modes";
+export * from "./query-engine";
+export * from "./query-state";
+export * from "./recovery";
+export * from "./permissions";

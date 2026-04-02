@@ -14,3 +14,5 @@ export * from "./mime";
 export * from "./image-resize";
 export * from "./tools-manager";
 export * from "./read";
+export * from "./definitions";
+export * from "./registry";

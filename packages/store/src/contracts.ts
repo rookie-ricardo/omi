@@ -4,7 +4,9 @@ import type {
   ProviderConfig,
   ReviewRequest,
   Run,
+  RunCheckpoint,
   Session,
+  SessionBranch,
   SessionHistoryEntry,
   SessionMessage,
   Task,
@@ -52,4 +54,21 @@ export interface AppStore {
   getProviderConfig(providerId?: string): ProviderConfig | null;
   loadSessionRuntimeSnapshot(sessionId: string): { sessionId: string; snapshot: string; updatedAt: string } | null;
   saveSessionRuntimeSnapshot(input: { sessionId: string; snapshot: string; updatedAt: string }): void;
+
+  // Session Branch
+  createBranch(input: Omit<SessionBranch, "createdAt" | "updatedAt">): SessionBranch;
+  getBranch(branchId: string): SessionBranch | null;
+  listBranches(sessionId: string): SessionBranch[];
+  updateBranch(branchId: string, partial: Partial<SessionBranch>): SessionBranch;
+
+  // Run Checkpoint
+  createCheckpoint(input: Omit<RunCheckpoint, "createdAt">): RunCheckpoint;
+  listCheckpoints(runId: string): RunCheckpoint[];
+  getLatestCheckpoint(runId: string): RunCheckpoint | null;
+
+  // Branch-aware History
+  getHistoryEntry(entryId: string): SessionHistoryEntry | null;
+  getBranchHistory(sessionId: string, branchId: string): SessionHistoryEntry[];
+  getActiveBranchId(sessionId: string): string | null;
+  setActiveBranchId(sessionId: string, branchId: string): void;
 }

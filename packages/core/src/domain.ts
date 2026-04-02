@@ -56,6 +56,9 @@ export const runSchema = z.object({
   prompt: z.string().nullable().optional(),
   sourceRunId: z.string().nullable().optional(),
   recoveryMode: runRecoveryModeSchema.nullable().optional(),
+  originRunId: z.string().nullable().optional(),
+  resumeFromCheckpoint: z.string().nullable().optional(),
+  terminalReason: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -127,6 +130,9 @@ export const sessionHistoryEntrySchema = z.object({
   messageId: z.string().nullable().default(null),
   summary: z.string().nullable().default(null),
   details: z.record(z.any()).nullable().default(null),
+  branchId: z.string().nullable().default(null),
+  lineageDepth: z.number().default(0),
+  originRunId: z.string().nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -160,7 +166,6 @@ export const skillDescriptorSchema = z.object({
   references: z.array(z.string()).default([]),
   assets: z.array(z.string()).default([]),
   scripts: z.array(z.string()).default([]),
-  /** When true, this skill is excluded from the LLM prompt */
   disableModelInvocation: z.boolean().default(false),
 });
 
@@ -208,6 +213,57 @@ export const gitDiffPreviewSchema = z.object({
   rows: z.array(gitDiffRowSchema),
 });
 
+// ============================================================================
+// Session Branch & Run Checkpoint
+// ============================================================================
+
+export const sessionBranchSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  headEntryId: z.string().nullable().default(null),
+  title: z.string().default("main"),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const runCheckpointPhaseSchema = z.enum([
+  "before_model_call",
+  "after_model_stream",
+  "after_tool_batch",
+  "before_terminal_commit",
+]);
+
+export const runCheckpointSchema = z.object({
+  id: z.string(),
+  runId: z.string(),
+  sessionId: z.string(),
+  phase: runCheckpointPhaseSchema,
+  payload: z.record(z.any()).default({}),
+  createdAt: z.string(),
+});
+
+export const sessionRuntimeSnapshotSchema = z.object({
+  version: z.number().default(1),
+  sessionId: z.string(),
+  activeRunId: z.string().nullable(),
+  pendingRunIds: z.array(z.string()).default([]),
+  queuedRuns: z.array(z.any()).default([]),
+  blockedRunId: z.string().nullable(),
+  blockedToolCallId: z.string().nullable(),
+  pendingApprovalToolCallIds: z.array(z.string()).default([]),
+  interruptedRunIds: z.array(z.string()).default([]),
+  selectedProviderConfigId: z.string().nullable(),
+  lastUserPrompt: z.string().nullable(),
+  lastAssistantResponse: z.string().nullable(),
+  lastActivityAt: z.string(),
+  compaction: z.any(),
+  activeBranchId: z.string().nullable().default(null),
+});
+
+// ============================================================================
+// Type Exports
+// ============================================================================
+
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
@@ -233,3 +289,7 @@ export type GitChangedFile = z.infer<typeof gitChangedFileSchema>;
 export type GitRepoState = z.infer<typeof gitRepoStateSchema>;
 export type GitDiffRow = z.infer<typeof gitDiffRowSchema>;
 export type GitDiffPreview = z.infer<typeof gitDiffPreviewSchema>;
+export type SessionBranch = z.infer<typeof sessionBranchSchema>;
+export type RunCheckpointPhase = z.infer<typeof runCheckpointPhaseSchema>;
+export type RunCheckpoint = z.infer<typeof runCheckpointSchema>;
+export type SessionRuntimeSnapshotV1 = z.infer<typeof sessionRuntimeSnapshotSchema>;

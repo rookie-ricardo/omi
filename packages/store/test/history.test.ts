@@ -13,6 +13,9 @@ describe("session history storage helpers", () => {
       messageId: null,
       summary: "Branch checkpoint",
       details: { source: "test", depth: 1 },
+      branchId: null,
+      lineageDepth: 0,
+      originRunId: null,
       createdAt: "2026-03-30T00:00:00.000Z",
       updatedAt: "2026-03-30T00:00:00.000Z",
     };

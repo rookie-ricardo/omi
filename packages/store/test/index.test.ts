@@ -34,9 +34,10 @@ describe("database migrations", () => {
       expect.arrayContaining([
         "20260331_runs_lineage_columns",
         "20260331_provider_configs_api_key",
+        "20260402_session_kernel_branches",
       ]),
     );
-    expect(migrationIds(sqlite)).toHaveLength(2);
+    expect(migrationIds(sqlite)).toHaveLength(3);
   });
 
   it("upgrades legacy databases with missing columns", () => {
@@ -57,7 +58,9 @@ describe("database migrations", () => {
         "20260331_provider_configs_api_key",
       ]),
     );
-    expect(migrationIds(sqlite)).toHaveLength(2);
+    // The session_kernel_branches migration requires session_history_entries
+    // which doesn't exist in legacy schemas, so it may not be applied
+    expect(migrationIds(sqlite)).toHaveLength(3);
   });
 });
 

@@ -1,10 +1,8 @@
 import type {
   ProviderConfig,
   ResolvedSkill,
-  ReviewRequest,
   Run,
   Session,
-  SessionHistoryEntry,
   SkillMatch,
   Task,
   ToolCall,
@@ -16,12 +14,7 @@ import { createId, nowIso } from "@omi/core";
 import { ExtensionRunner } from "@omi/extensions";
 import {
   buildCompactionPlan,
-  estimateRuntimeMessagesTokens,
-  estimateTextTokens,
   generateCompactionSummary,
-  isOverflowError,
-  isRetryableError,
-  extractRetryAfterDelay,
   type CompactionSummaryGenerator,
   type CompactionMode,
 } from "@omi/memory";
@@ -29,7 +22,6 @@ import { createModelFromConfig } from "@omi/provider";
 import {
   buildSessionRuntimeMessages,
   buildSessionRuntimeMessageEnvelopes,
-  convertRuntimeMessagesToLlm,
   renderRuntimeMessagesForPrompt,
   type RuntimeMessage,
   type SessionCompactionSnapshot,
@@ -42,11 +34,24 @@ import {
   type ProviderRunResult,
   type ProviderToolRequestedEvent,
 } from "@omi/provider";
-import type { ToolName } from "@omi/tools";
 
 import type { ResourceLoader } from "./resource-loader";
 import type { SessionRuntime } from "./session-manager";
 import type { SettingsManager } from "@omi/settings";
+import {
+  type PermissionEvaluator,
+  MemoryDenialTracker,
+  createPermissionEvaluator,
+} from "./permissions";
+
+// Import QueryEngine for state machine-based execution
+import {
+  QueryEngine,
+  type QueryEngineRunInput,
+  type QueryEngineResult,
+  nextSessionStatus as queryNextSessionStatus,
+  nextTaskStatus as queryNextTaskStatus,
+} from "./query-engine";
 
 export interface RunnerEventEnvelope {
   type: string;
@@ -63,6 +68,8 @@ export interface AgentSessionOptions {
   provider?: ProviderAdapter;
   compactionSummarizer?: CompactionSummaryGenerator;
   settingsManager?: SettingsManager;
+  /** Permission evaluator for rule-based access control. */
+  evaluator?: PermissionEvaluator;
 }
 
 interface ExecuteRunInput {
@@ -77,39 +84,15 @@ interface ExecuteRunInput {
   checkpointDetails: unknown | null;
 }
 
-interface PreparedRunContext {
-  session: Session;
-  run: Run;
-  sessionId: string;
-  runId: string;
-  sessionStatus: Session["status"];
-  branchLeafEntryId: string | null;
-  currentHistoryMessages: RuntimeMessage[];
-}
-
-interface LoadedRunResources {
-  resolvedSkill: ResolvedSkill | null;
-  skillMatches: SkillMatch[];
-  extensionRunner: ExtensionRunner;
-}
-
-interface ProviderExecutionCompleted {
-  kind: "completed";
-  result: ProviderRunResult;
-}
-
-interface ProviderExecutionCanceled {
-  kind: "canceled";
-}
-
-type ProviderExecutionOutcome = ProviderExecutionCompleted | ProviderExecutionCanceled;
-
 export class AgentSession {
   private readonly provider: ProviderAdapter;
   private processingQueue = false;
+  private readonly evaluator: PermissionEvaluator;
+  private readonly denialTracker = new MemoryDenialTracker();
 
   constructor(private readonly options: AgentSessionOptions) {
     this.provider = options.provider ?? new PiAiProvider();
+    this.evaluator = options.evaluator ?? createPermissionEvaluator().withDenialTracker(this.denialTracker).build();
   }
 
   startRun(input: {
@@ -158,6 +141,29 @@ export class AgentSession {
     if (input.checkpointSummary !== null && input.checkpointSummary !== undefined && !this.options.database.addSessionHistoryEntry) {
       throw new Error(`Session history storage is not available for session ${session.id}`);
     }
+
+    // When continuing from a history entry, create a new branch to avoid
+    // polluting the original branch's history.
+    let branchId: string | null = null;
+    if (input.historyEntryId) {
+      const targetEntry = historyEntries.find((e) => e.id === input.historyEntryId);
+      const parentBranch = targetEntry?.branchId
+        ? this.options.database.getBranch(targetEntry.branchId)
+        : null;
+
+      branchId = createId("branch");
+      this.options.database.createBranch({
+        id: branchId,
+        sessionId: session.id,
+        headEntryId: input.historyEntryId,
+        title: `continue-from-${input.historyEntryId.slice(0, 8)}`,
+      });
+
+      // Update the active branch in runtime snapshot so future messages
+      // are associated with the new branch.
+      this.options.database.setActiveBranchId(session.id, branchId);
+    }
+
     const task = input.taskId ? this.options.database.getTask(input.taskId) : null;
     const run = this.options.database.createRun({
       sessionId: session.id,
@@ -413,579 +419,41 @@ export class AgentSession {
   }
 
   private async executeRun(input: ExecuteRunInput): Promise<void> {
-    const prepared = this.prepareRun(input);
+    // Create QueryEngine with all dependencies
+    const queryEngine = new QueryEngine({
+      database: this.options.database,
+      sessionId: this.options.sessionId,
+      workspaceRoot: this.options.workspaceRoot,
+      emit: (event) => this.emitAndPersist(input.run.id, input.session.id, event as RunnerEventEnvelope),
+      resources: this.options.resources,
+      runtime: this.options.runtime,
+      provider: this.provider,
+      compactionSummarizer: this.options.compactionSummarizer,
+      settingsManager: this.options.settingsManager,
+      evaluator: this.evaluator,
+      denialTracker: this.denialTracker,
+    });
 
     try {
-      const resources = await this.loadRunResources(input, prepared);
-      const executionInput = await this.buildExecutionInput(
-        input,
-        resources.resolvedSkill,
-        resources.extensionRunner,
-      );
-      const outcome = await this.executeProviderWithRecovery({
-        runInput: input,
-        prepared,
-        resolvedSkill: resources.resolvedSkill,
-        extensionRunner: resources.extensionRunner,
-        systemPrompt: executionInput.systemPrompt,
-        effectivePrompt: executionInput.effectivePrompt,
+      // Execute the query loop using the state machine
+      const result = await queryEngine.execute({
+        session: input.session,
+        task: input.task,
+        run: input.run,
+        prompt: input.prompt,
+        images: input.images,
+        providerConfig: input.providerConfig,
+        historyEntryId: input.historyEntryId,
+        checkpointSummary: input.checkpointSummary,
+        checkpointDetails: input.checkpointDetails,
       });
 
-      if (outcome.kind === "canceled") {
-        return;
+      // Handle failure cases
+      if (result.terminalReason === "error" || result.terminalReason === "canceled") {
+        await this.handleFailedRun(input, new Error(result.error ?? result.terminalReason));
       }
-
-      await this.finalizeSuccessfulRun({
-        runInput: input,
-        result: outcome.result,
-        extensionRunner: resources.extensionRunner,
-      });
     } catch (error) {
       await this.handleFailedRun(input, error);
-    }
-  }
-
-  private prepareRun(input: ExecuteRunInput): PreparedRunContext {
-    this.options.database.updateRun(input.run.id, {
-      status: "running",
-      provider: input.providerConfig.type,
-      prompt: input.prompt,
-    });
-
-    let branchLeafEntryId = input.historyEntryId ?? null;
-    if (input.checkpointSummary !== null && input.checkpointSummary !== undefined) {
-      if (!this.options.database.addSessionHistoryEntry) {
-        throw new Error(`Session history storage is not available for session ${input.session.id}`);
-      }
-
-      const checkpoint = this.options.database.addSessionHistoryEntry({
-        sessionId: input.session.id,
-        parentId: branchLeafEntryId,
-        kind: "branch_summary",
-        messageId: null,
-        summary: input.checkpointSummary,
-        details: normalizeHistoryDetails(input.checkpointDetails),
-      });
-      branchLeafEntryId = checkpoint.id;
-    }
-    const currentHistoryMessages = this.buildHistoricalRuntimeMessages(
-      input.session.id,
-      branchLeafEntryId,
-    );
-
-    const sessionStatus = nextSessionStatus(input.session.status, "run_started");
-    this.options.database.updateSession(input.session.id, {
-      status: sessionStatus,
-      latestUserMessage: input.prompt,
-    });
-
-    this.options.runtime.beginRun(input.run.id, input.prompt);
-
-    this.emitAndPersist(input.run.id, input.session.id, {
-      type: "run.started",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        taskId: input.task?.id ?? null,
-      },
-    });
-
-    return {
-      session: input.session,
-      run: input.run,
-      sessionId: input.session.id,
-      runId: input.run.id,
-      sessionStatus,
-      branchLeafEntryId,
-      currentHistoryMessages,
-    };
-  }
-
-  private async loadRunResources(
-    input: ExecuteRunInput,
-    prepared: PreparedRunContext,
-  ): Promise<LoadedRunResources> {
-    await this.options.resources.reload();
-
-    const resolvedSkill = await this.options.resources.resolveSkillForPrompt(input.prompt);
-    const skillMatches = await this.options.resources.searchSkills(input.prompt);
-
-    this.emitAndPersist(input.run.id, input.session.id, {
-      type: "run.skills_resolved",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        selectedSkillId: resolvedSkill?.skill.id ?? null,
-        matches: skillMatches.map((match) => ({
-          id: match.id,
-          name: match.name,
-          score: match.score,
-        })),
-      },
-    });
-
-    const extensionRunner = new ExtensionRunner(this.options.workspaceRoot);
-    const extensionCatalog = this.options.resources.getExtensions();
-    await extensionRunner.load(extensionCatalog.items);
-
-    this.emitAndPersist(input.run.id, input.session.id, {
-      type: "run.extensions_loaded",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        extensions: extensionCatalog.items.map((extension) => extension.name),
-        diagnostics: extensionCatalog.diagnostics,
-      },
-    });
-
-    await extensionRunner.emit({
-      type: "run.extensions_loaded",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        extensions: extensionCatalog.items.map((extension) => extension.name),
-        diagnostics: extensionCatalog.diagnostics,
-      },
-    });
-    await extensionRunner.emit({
-      type: "run.started",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        taskId: input.task?.id ?? null,
-      },
-    });
-
-    return {
-      resolvedSkill,
-      skillMatches,
-      extensionRunner,
-    };
-  }
-
-  private async buildExecutionInput(
-    input: ExecuteRunInput,
-    resolvedSkill: ResolvedSkill | null,
-    extensionRunner: ExtensionRunner,
-  ): Promise<{ systemPrompt: string; effectivePrompt: string }> {
-    const baseSystemPrompt = this.options.resources.buildSystemPrompt(resolvedSkill);
-    await extensionRunner.beforeRun({
-      prompt: input.prompt,
-      sessionId: input.session.id,
-      workspaceRoot: this.options.workspaceRoot,
-      systemPrompt: baseSystemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: input.prompt }],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    const systemPrompt = extensionRunner.buildSystemPrompt(baseSystemPrompt);
-    const runtimePrompt = renderRuntimeMessagesForPrompt(extensionRunner.getRuntimeMessages());
-    const effectivePrompt = runtimePrompt.trim().length > 0
-      ? `${runtimePrompt}\n\n${input.prompt}`
-      : input.prompt;
-
-    const taskCandidate = deriveTaskCandidate({
-      ...input.session,
-      latestUserMessage: input.prompt,
-    });
-    if (
-      taskCandidate &&
-      !this.options.database.listTasks().some((task) => task.originSessionId === input.session.id)
-    ) {
-      this.options.database.createTask({
-        title: taskCandidate.title,
-        status: "inbox",
-        originSessionId: input.session.id,
-        candidateReason: taskCandidate.candidateReason,
-        autoCreated: true,
-      });
-    }
-
-    return {
-      systemPrompt,
-      effectivePrompt,
-    };
-  }
-
-  private async executeProviderWithRecovery(input: {
-    runInput: ExecuteRunInput;
-    prepared: PreparedRunContext;
-    resolvedSkill: ResolvedSkill | null;
-    extensionRunner: ExtensionRunner;
-    systemPrompt: string;
-    effectivePrompt: string;
-  }): Promise<ProviderExecutionOutcome> {
-    let currentHistoryMessages = input.prepared.currentHistoryMessages;
-    const thresholdCompacted = await this.compactHistoricalContext({
-      session: input.runInput.session,
-      providerConfig: input.runInput.providerConfig,
-      mode: "threshold",
-      prompt: input.runInput.prompt,
-      historyEnvelopes: this.buildHistoricalRuntimeMessageEnvelopes(
-        input.runInput.session.id,
-        input.prepared.branchLeafEntryId,
-      ),
-    });
-    if (thresholdCompacted) {
-      currentHistoryMessages = this.buildHistoricalRuntimeMessages(
-        input.runInput.session.id,
-        input.prepared.branchLeafEntryId,
-      );
-    }
-
-    // Get retry settings from SettingsManager
-    const retrySettings = this.options.settingsManager?.getRetrySettings() ?? {
-      enabled: true,
-      maxRetries: 3,
-      baseDelayMs: 2000,
-      maxDelayMs: 60000,
-    };
-
-    // Track if we've done overflow recovery (only once per run to avoid infinite loops)
-    let overflowRecovered = false;
-    // Track retry attempts (excluding overflow recovery which is separate)
-    let retryAttempt = 0;
-
-    while (retryAttempt <= (retrySettings.enabled ? retrySettings.maxRetries : 0)) {
-      try {
-        const result = await this.provider.run({
-          runId: input.runInput.run.id,
-          sessionId: input.runInput.session.id,
-          workspaceRoot: this.options.workspaceRoot,
-          prompt: input.effectivePrompt,
-          historyMessages: convertRuntimeMessagesToLlm(currentHistoryMessages),
-          systemPrompt: input.systemPrompt,
-          providerConfig: input.runInput.providerConfig,
-          enabledTools: input.resolvedSkill?.enabledToolNames.length
-            ? (input.resolvedSkill.enabledToolNames as ToolName[])
-            : undefined,
-          onTextDelta: (delta) => {
-            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-              type: "run.delta",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-                delta,
-              },
-            });
-          },
-          onToolRequested: async (event) => {
-            await input.extensionRunner.emit({
-              type: "run.tool_requested",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-                toolName: event.toolName,
-                input: event.input,
-                requiresApproval: event.requiresApproval,
-              },
-            });
-            return this.handleToolRequested(
-              input.runInput.run.id,
-              input.runInput.session.id,
-              input.runInput.task?.id ?? null,
-              event,
-            );
-          },
-          onToolDecision: (toolCallId, decision) => {
-            this.handleToolDecision(input.runInput.run.id, input.runInput.session.id, toolCallId, decision);
-          },
-          onToolStarted: (toolCallId, toolName) => {
-            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-              type: "run.tool_started",
-              payload: {
-                runId: input.runInput.run.id,
-                toolCallId,
-                toolName,
-              },
-            });
-            void input.extensionRunner.emit({
-              type: "run.tool_started",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-                toolCallId,
-                toolName,
-              },
-            });
-          },
-          onToolFinished: (toolCallId, toolName, output, isError) => {
-            this.options.database.updateToolCall(toolCallId, {
-              output,
-              error: isError ? JSON.stringify(output) : null,
-            });
-            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-              type: "run.tool_finished",
-              payload: {
-                runId: input.runInput.run.id,
-                toolCallId,
-                toolName,
-                output,
-              },
-            });
-            void input.extensionRunner.emit({
-              type: "run.tool_finished",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-                toolCallId,
-                toolName,
-                output,
-                isError,
-              },
-            });
-          },
-        });
-
-        if (!result) {
-          throw new Error(`Run ${input.runInput.run.id} did not produce a result.`);
-        }
-
-        // Emit retry end event if we retried
-        if (retryAttempt > 0 || overflowRecovered) {
-          this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-            type: "auto_retry_end",
-            payload: {
-              runId: input.runInput.run.id,
-              sessionId: input.runInput.session.id,
-              success: true,
-              attempt: retryAttempt,
-            },
-          });
-        }
-
-        if (this.options.database.getRun(input.runInput.run.id)?.status === "canceled") {
-          this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-            type: "run.canceled",
-            payload: {
-              runId: input.runInput.run.id,
-              sessionId: input.runInput.session.id,
-            },
-          });
-          await input.extensionRunner.emit({
-            type: "run.canceled",
-            payload: {
-              runId: input.runInput.run.id,
-              sessionId: input.runInput.session.id,
-            },
-          });
-          return {
-            kind: "canceled",
-          };
-        }
-
-        return {
-          kind: "completed",
-          result,
-        };
-      } catch (error) {
-        // Check if this is a context overflow error
-        if (isOverflowError(error)) {
-          // Only perform overflow recovery once to avoid infinite loops
-          if (overflowRecovered) {
-            throw error;
-          }
-          overflowRecovered = true;
-
-          // Remove error message from agent state (but keep in session file for history)
-          // Note: We don't add error messages to agent state, so nothing to remove here
-
-          let overflowHistoryEnvelopes = this.buildHistoricalRuntimeMessageEnvelopes(
-            input.runInput.session.id,
-            input.prepared.branchLeafEntryId,
-          );
-          if (overflowHistoryEnvelopes.length === 0) {
-            const timestamp = Date.now();
-            overflowHistoryEnvelopes = [
-              {
-                timestamp,
-                order: 1,
-                sourceHistoryEntryId: null,
-                message: {
-                  role: "user",
-                  content: input.effectivePrompt,
-                  timestamp,
-                },
-              },
-            ];
-          }
-          const compacted = await this.compactHistoricalContext({
-            session: input.runInput.session,
-            providerConfig: input.runInput.providerConfig,
-            mode: "overflow",
-            prompt: input.runInput.prompt,
-            historyEnvelopes: overflowHistoryEnvelopes,
-          });
-          if (!compacted) {
-            throw error;
-          }
-
-          currentHistoryMessages = this.buildHistoricalRuntimeMessages(
-            input.runInput.session.id,
-            input.prepared.branchLeafEntryId,
-          );
-          // Retry immediately after compaction (don't increment retryAttempt since overflow is separate)
-          continue;
-        }
-
-        // Check if this is a retryable error
-        if (retrySettings.enabled && isRetryableError(error)) {
-          // Check if run was canceled
-          if (this.options.database.getRun(input.runInput.run.id)?.status === "canceled") {
-            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-              type: "run.canceled",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-              },
-            });
-            await input.extensionRunner.emit({
-              type: "run.canceled",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-              },
-            });
-            return {
-              kind: "canceled",
-            };
-          }
-
-          // Check if we've exhausted retries
-          if (retryAttempt >= retrySettings.maxRetries) {
-            // Emit retry end event with failure
-            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-              type: "auto_retry_end",
-              payload: {
-                runId: input.runInput.run.id,
-                sessionId: input.runInput.session.id,
-                success: false,
-                attempt: retryAttempt,
-                error: error instanceof Error ? error.message : String(error),
-              },
-            });
-            throw error;
-          }
-
-          // Calculate delay using exponential backoff
-          const baseDelay = retrySettings.baseDelayMs;
-          const exponentialDelay = baseDelay * Math.pow(2, retryAttempt);
-          const serverDelay = extractRetryAfterDelay(error);
-          const delay = Math.min(
-            exponentialDelay,
-            retrySettings.maxDelayMs,
-            serverDelay ?? retrySettings.maxDelayMs,
-          );
-
-          // Emit retry start event
-          this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
-            type: "auto_retry_start",
-            payload: {
-              runId: input.runInput.run.id,
-              sessionId: input.runInput.session.id,
-              attempt: retryAttempt + 1,
-              delayMs: delay,
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
-
-          // Wait with abort signal support
-          await this.delayWithAbort(delay, input.runInput.run.id);
-
-          retryAttempt++;
-          continue;
-        }
-
-        // Not retryable - throw immediately
-        throw error;
-      }
-    }
-
-    // Should not reach here, but just in case
-    throw new Error(`Run ${input.runInput.run.id} did not produce a result.`);
-  }
-
-  /**
-   * Delay with abort signal support - checks run status during delay
-   * @param ms - Delay in milliseconds
-   * @param runId - Run ID to check for cancellation
-   */
-  private async delayWithAbort(ms: number, runId: string): Promise<void> {
-    const start = Date.now();
-    const interval = 100; // Check every 100ms
-
-    while (Date.now() - start < ms) {
-      // Check if run was canceled
-      if (this.options.database.getRun(runId)?.status === "canceled") {
-        return; // Exit early, caller will detect cancellation
-      }
-
-      const remaining = ms - (Date.now() - start);
-      if (remaining <= 0) break;
-
-      await new Promise((resolve) => setTimeout(resolve, Math.min(interval, remaining)));
-    }
-  }
-
-  private async finalizeSuccessfulRun(input: {
-    runInput: ExecuteRunInput;
-    result: ProviderRunResult;
-    extensionRunner: ExtensionRunner;
-  }): Promise<void> {
-    const runId = input.runInput.run.id;
-    const sessionId = input.runInput.session.id;
-    const assistantText = input.result.assistantText.trim();
-
-    this.options.database.updateRun(runId, { status: "completed" });
-    this.options.database.updateSession(sessionId, {
-      status: nextSessionStatus(input.runInput.session.status, "run_completed"),
-      latestAssistantMessage: assistantText,
-    });
-
-    this.options.database.addMessage({
-      sessionId,
-      role: "user",
-      content: input.runInput.prompt,
-      parentHistoryEntryId: input.runInput.historyEntryId,
-    });
-
-    if (assistantText) {
-      this.options.database.addMessage({
-        sessionId,
-        role: "assistant",
-        content: assistantText,
-      });
-    }
-
-    this.options.runtime.completeRun(runId, assistantText);
-    this.persistRuntimeSnapshot(sessionId);
-
-    this.emitAndPersist(runId, sessionId, {
-      type: "run.completed",
-      payload: {
-        runId,
-        sessionId,
-        summary: assistantText,
-      },
-    });
-
-    await input.extensionRunner.emit({
-      type: "run.completed",
-      payload: {
-        runId,
-        sessionId,
-        summary: assistantText,
-      },
-    });
-
-    if (input.runInput.task) {
-      this.options.database.updateTask(input.runInput.task.id, {
-        status: nextTaskStatus(input.runInput.task.status, "run_completed"),
-      });
     }
   }
 
@@ -1077,97 +545,6 @@ export class AgentSession {
     return runs.flatMap((run) => this.options.database.listToolCalls(run.id));
   }
 
-  private async handleToolRequested(
-    runId: string,
-    sessionId: string,
-    taskId: string | null,
-    event: ProviderToolRequestedEvent,
-  ): Promise<string> {
-    const toolCallId = createId("tool");
-    this.options.database.createToolCall({
-      id: toolCallId,
-      runId,
-      sessionId,
-      taskId,
-      toolName: event.toolName,
-      approvalState: event.requiresApproval ? "pending" : "not_required",
-      input: event.input,
-      output: null,
-      error: null,
-    });
-
-    this.emitAndPersist(runId, sessionId, {
-      type: "run.tool_requested",
-      payload: {
-        runId,
-        sessionId,
-        toolCallId,
-        toolName: event.toolName,
-        requiresApproval: event.requiresApproval,
-        input: event.input,
-      },
-    });
-
-    if (event.requiresApproval) {
-      this.options.runtime.blockOnTool(runId, toolCallId);
-
-      const session = this.requireSession();
-      this.options.database.updateSession(sessionId, {
-        status: nextSessionStatus(session.status, "tool_blocked"),
-      });
-
-      this.emitAndPersist(runId, sessionId, {
-        type: "run.blocked",
-        payload: {
-          runId,
-          toolCallId,
-          reason: `Waiting for approval: ${event.toolName}`,
-        },
-      });
-    }
-
-    return toolCallId;
-  }
-
-  private handleToolDecision(
-    runId: string,
-    sessionId: string,
-    toolCallId: string,
-    decision: "approved" | "rejected",
-  ): void {
-    this.options.database.updateToolCall(toolCallId, {
-      approvalState: decision,
-    });
-
-    if (decision === "approved") {
-      this.options.runtime.approveTool(runId, toolCallId);
-
-      const session = this.requireSession();
-      this.options.database.updateSession(sessionId, {
-        status: nextSessionStatus(session.status, "resume"),
-      });
-    } else {
-      this.options.runtime.rejectTool(runId, toolCallId);
-      this.options.database.updateRun(runId, { status: "canceled" });
-      this.options.runtime.cancelRun(runId);
-
-      const session = this.requireSession();
-      this.options.database.updateSession(sessionId, {
-        status: nextSessionStatus(session.status, "run_canceled"),
-      });
-    }
-
-    this.emitAndPersist(runId, sessionId, {
-      type: "run.tool_decided",
-      payload: {
-        runId,
-        sessionId,
-        toolCallId,
-        decision,
-      },
-    });
-  }
-
   private async compactHistoricalContext(input: {
     session: Session;
     providerConfig: ProviderConfig;
@@ -1228,6 +605,9 @@ export class AgentSession {
         messageId: null,
         summary: snapshot.summary.goal,
         details: normalizeHistoryDetails(details),
+        branchId: null,
+        lineageDepth: 0,
+        originRunId: null,
       });
     }
 
@@ -1253,12 +633,11 @@ export class AgentSession {
   }
 
   private persistRuntimeSnapshot(sessionId: string): void {
-    this.options.database.writeMemory({
-      scope: "session",
-      scopeId: sessionId,
-      title: "Runtime Snapshot",
-      content: JSON.stringify(this.options.runtime.snapshot()),
-      tags: ["runtime"],
+    const state = this.options.runtime.snapshot();
+    this.options.database.saveSessionRuntimeSnapshot({
+      sessionId,
+      snapshot: JSON.stringify(state),
+      updatedAt: nowIso(),
     });
   }
 

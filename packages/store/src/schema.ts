@@ -30,6 +30,9 @@ export const runsTable = sqliteTable("runs", {
   prompt: text("prompt"),
   sourceRunId: text("source_run_id"),
   recoveryMode: text("recovery_mode"),
+  originRunId: text("origin_run_id"),
+  resumeFromCheckpoint: text("resume_from_checkpoint"),
+  terminalReason: text("terminal_reason"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -50,6 +53,9 @@ export const sessionHistoryEntriesTable = sqliteTable("session_history_entries",
   messageId: text("message_id"),
   summary: text("summary"),
   details: text("details"),
+  branchId: text("branch_id"),
+  lineageDepth: integer("lineage_depth").notNull().default(0),
+  originRunId: text("origin_run_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -117,4 +123,22 @@ export const providerConfigsTable = sqliteTable("provider_configs", {
   enabled: integer("enabled", { mode: "boolean" }).notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const sessionBranchesTable = sqliteTable("session_branches", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull(),
+  headEntryId: text("head_entry_id"),
+  title: text("title").notNull().default("main"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const runCheckpointsTable = sqliteTable("run_checkpoints", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull(),
+  sessionId: text("session_id").notNull(),
+  phase: text("phase").notNull(),
+  payload: text("payload").notNull(),
+  createdAt: text("created_at").notNull(),
 });

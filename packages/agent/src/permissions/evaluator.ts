@@ -1,0 +1,302 @@
+/**
+ * Permission Policy Engine - Evaluator
+ *
+ * Core evaluation engine that resolves permission decisions by:
+ * 1. Collecting rules from all sources
+ * 2. Filtering by source priority
+ * 3. Applying deny-first logic
+ * 4. Enforcing plan-mode read-only constraints
+ */
+
+import {
+  type PermissionContext,
+  type PermissionDecision,
+  type PermissionEvalResult,
+  type PermissionRule,
+  type PermissionRuleSource,
+  SOURCE_PRIORITY,
+  DEFAULT_RULES,
+  ruleMatchesContext,
+  WRITE_TOOLS,
+} from "./rules";
+
+import type { DenialTracker } from "./tracking";
+
+// ============================================================================
+// Evaluator Configuration
+// ============================================================================
+
+export interface PermissionEvaluatorConfig {
+  /** Rules from the session (highest priority). */
+  sessionRules?: PermissionRule[];
+  /** Rules from the project (.omi/permissions.json). */
+  projectRules?: PermissionRule[];
+  /** Rules from the user (~/.omi/permissions.json). */
+  userRules?: PermissionRule[];
+  /** Rules from managed/enterprise policies. */
+  managedRules?: PermissionRule[];
+  /** Custom default rules (merged with built-in defaults). */
+  extraDefaultRules?: PermissionRule[];
+  /** Maximum consecutive denials before escalating to error. */
+  maxConsecutiveDenials?: number;
+  /** Whether plan mode restrictions are enforced. */
+  enforcePlanMode?: boolean;
+}
+
+// ============================================================================
+// Evaluator
+// ============================================================================
+
+export class PermissionEvaluator {
+  private readonly config: Required<PermissionEvaluatorConfig>;
+
+  constructor(
+    config: PermissionEvaluatorConfig,
+    private readonly denialTracker?: DenialTracker,
+  ) {
+    this.config = {
+      sessionRules: config.sessionRules ?? [],
+      projectRules: config.projectRules ?? [],
+      userRules: config.userRules ?? [],
+      managedRules: config.managedRules ?? [],
+      extraDefaultRules: config.extraDefaultRules ?? [],
+      maxConsecutiveDenials: config.maxConsecutiveDenials ?? 5,
+      enforcePlanMode: config.enforcePlanMode ?? true,
+    };
+  }
+
+  // ============================================================================
+  // Public API
+  // ============================================================================
+
+  /**
+   * Evaluate whether a tool should be allowed, asked, or denied.
+   * Returns the resolved decision with matched rule information.
+   */
+  evaluate(context: PermissionContext): PermissionEvalResult {
+    // Plan mode: force read-only
+    if (this.config.enforcePlanMode && context.planMode) {
+      return this.evaluatePlanMode(context);
+    }
+
+    // Collect all applicable rules
+    const allRules = this.collectAllRules();
+
+    // Find all matching rules
+    const matched = allRules
+      .filter((rule) => ruleMatchesContext(rule, context))
+      .sort((a, b) => {
+        // Sort by source priority (descending), then by rule order within source
+        const priorityDiff = SOURCE_PRIORITY[b.source] - SOURCE_PRIORITY[a.source];
+        if (priorityDiff !== 0) return priorityDiff;
+        return a.id.localeCompare(b.id);
+      });
+
+    if (matched.length === 0) {
+      // No matching rule - use "ask" as safe default
+      return {
+        decision: "ask",
+        matchedRule: null,
+        matchedRules: [],
+      };
+    }
+
+    // Check denial tracker for escalation
+    const denialKey = this.buildDenialKey(context);
+    const denialCount = this.denialTracker?.getDenialCount(denialKey) ?? 0;
+
+    if (denialCount >= this.config.maxConsecutiveDenials) {
+      // Escalate: deny with "too many denials" reason
+      return {
+        decision: "deny",
+        matchedRule: matched[0] ?? null,
+        matchedRules: matched,
+      };
+    }
+
+    // Apply deny-first logic:
+    // If any matching rule is "deny", the decision is "deny"
+    // Otherwise, if any is "ask", the decision is "ask"
+    // Otherwise "allow"
+    const hasDeny = matched.some((rule) => rule.decision === "deny");
+    if (hasDeny) {
+      this.denialTracker?.recordDenial(denialKey);
+      return {
+        decision: "deny",
+        matchedRule: matched.find((rule) => rule.decision === "deny") ?? matched[0],
+        matchedRules: matched,
+      };
+    }
+
+    const hasAsk = matched.some((rule) => rule.decision === "ask");
+    if (hasAsk) {
+      return {
+        decision: "ask",
+        matchedRule: matched.find((rule) => rule.decision === "ask") ?? matched[0],
+        matchedRules: matched,
+      };
+    }
+
+    return {
+      decision: "allow",
+      matchedRule: matched[0],
+      matchedRules: matched,
+    };
+  }
+
+  /**
+   * Pre-filter: determine which tools the model can even see.
+   * Denied tools are hidden from the model to prevent it from requesting them.
+   */
+  filterVisibleTools(
+    toolNames: string[],
+    context: Omit<PermissionContext, "input">,
+  ): string[] {
+    return toolNames.filter((toolName) => {
+      const result = this.evaluate({ ...context, toolName, input: {} });
+      // Hide denied tools from model
+      return result.decision !== "deny";
+    });
+  }
+
+  /**
+   * Pre-flight check: verify a tool is allowed right before execution.
+   * This is a second-layer check to prevent bypass attempts.
+   * Returns null if allowed, error message if denied.
+   */
+  preflightCheck(context: PermissionContext): string | null {
+    const result = this.evaluate(context);
+
+    if (result.decision === "deny") {
+      return `Tool '${context.toolName}' is denied by rule: ${result.matchedRule?.description ?? "unknown rule"}`;
+    }
+
+    // In plan mode, write tools should have been already filtered
+    if (context.planMode && WRITE_TOOLS.has(context.toolName)) {
+      return `Tool '${context.toolName}' is not allowed in plan mode (read-only).`;
+    }
+
+    return null;
+  }
+
+  // ============================================================================
+  // Rule Management
+  // ============================================================================
+
+  /**
+   * Add a session-scoped rule (e.g., user approved for this session).
+   * Session rules take highest priority.
+   */
+  addSessionRule(rule: PermissionRule): void {
+    this.config.sessionRules.push({ ...rule, source: "session" });
+  }
+
+  /**
+   * Remove session-scoped rules for a specific tool.
+   * Used when a session ends or when revoking session-level approvals.
+   */
+  clearSessionRules(toolName?: string): void {
+    if (toolName === undefined) {
+      this.config.sessionRules.length = 0;
+      return;
+    }
+    const index = this.config.sessionRules.findIndex(
+      (rule) => rule.matchers.some(
+        (m) => m.type === "tool_name" && (m.pattern === toolName || m.pattern === "*"),
+      ),
+    );
+    if (index !== -1) {
+      this.config.sessionRules.splice(index, 1);
+    }
+  }
+
+  // ============================================================================
+  // Private Methods
+  // ============================================================================
+
+  private collectAllRules(): PermissionRule[] {
+    return [
+      ...this.config.sessionRules,
+      ...this.config.projectRules,
+      ...this.config.userRules,
+      ...this.config.managedRules,
+      ...DEFAULT_RULES,
+      ...this.config.extraDefaultRules,
+    ];
+  }
+
+  private evaluatePlanMode(context: PermissionContext): PermissionEvalResult {
+    if (WRITE_TOOLS.has(context.toolName)) {
+      const denyRule: PermissionRule = {
+        id: "plan-mode:write-blocked",
+        source: "default",
+        decision: "deny",
+        matchers: [{ type: "tool_name", pattern: context.toolName }],
+        description: `Tool '${context.toolName}' is blocked in plan mode`,
+        active: true,
+      };
+      return {
+        decision: "deny",
+        matchedRule: denyRule,
+        matchedRules: [denyRule],
+      };
+    }
+
+    // Read-only tools are allowed in plan mode
+    return {
+      decision: "allow",
+      matchedRule: null,
+      matchedRules: [],
+    };
+  }
+
+  private buildDenialKey(context: PermissionContext): string {
+    return `${context.sessionId}:${context.toolName}`;
+  }
+}
+
+// ============================================================================
+// Builder
+// ============================================================================
+
+export interface PermissionEvaluatorBuilder {
+  withSessionRules(rules: PermissionRule[]): PermissionEvaluatorBuilder;
+  withProjectRules(rules: PermissionRule[]): PermissionEvaluatorBuilder;
+  withUserRules(rules: PermissionRule[]): PermissionEvaluatorBuilder;
+  withManagedRules(rules: PermissionRule[]): PermissionEvaluatorBuilder;
+  withDenialTracker(tracker: DenialTracker): PermissionEvaluatorBuilder;
+  build(): PermissionEvaluator;
+}
+
+export function createPermissionEvaluator(
+  initialConfig: PermissionEvaluatorConfig = {},
+): PermissionEvaluatorBuilder {
+  let config = { ...initialConfig };
+  let tracker: DenialTracker | undefined;
+
+  return {
+    withSessionRules(rules) {
+      config.sessionRules = rules;
+      return this;
+    },
+    withProjectRules(rules) {
+      config.projectRules = rules;
+      return this;
+    },
+    withUserRules(rules) {
+      config.userRules = rules;
+      return this;
+    },
+    withManagedRules(rules) {
+      config.managedRules = rules;
+      return this;
+    },
+    withDenialTracker(t: DenialTracker) {
+      tracker = t;
+      return this;
+    },
+    build() {
+      return new PermissionEvaluator(config, tracker);
+    },
+  };
+}

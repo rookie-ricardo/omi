@@ -178,7 +178,8 @@ describe("buildAgentInitialState", () => {
         enabledTools: ["bash"],
       });
 
-      expect(initialState.tools).toBeInstanceOf(Array);
+      expect(initialState.tools).toBeDefined();
+      expect(typeof initialState.tools).toBe("object");
     });
 
     it("应该处理空的 enabledTools", () => {

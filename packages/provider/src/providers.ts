@@ -1,10 +1,12 @@
-import { Agent, type AgentEvent, type AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
 
 import type { ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
-import { type ToolName, requiresApproval, isBuiltInTool, createAllTools, createToolArray } from "@omi/tools";
+import { PiAiModelClient } from "./model-client/pi-ai-client";
+import type { ModelClientCallbacks } from "./model-client/types";
+import { type ToolName, requiresApproval, isBuiltInTool, createAllTools } from "@omi/tools";
 
 export interface ProviderAdapter {
   run(input: ProviderRunInput): Promise<ProviderRunResult>;
@@ -87,209 +89,208 @@ interface RuntimeToolCall {
   phase: "requested" | "started" | "finished";
 }
 
+/**
+ * PiAiProvider - unified provider implementation backed by PiAiModelClient.
+ *
+ * All calls route through pi-ai via PiAiModelClient (which wraps pi-agent-core Agent).
+ * The query layer sees no protocol branching - all protocol differences are
+ * encapsulated in the pi-ai abstraction layer.
+ */
 export class PiAiProvider implements ProviderAdapter {
-  private readonly activeAgents = new Map<string, Agent>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly toolCallsByRun = new Map<string, RuntimeToolCall[]>();
+  private readonly modelClient: PiAiModelClient;
+
+  constructor() {
+    this.modelClient = new PiAiModelClient();
+  }
 
   async run(input: ProviderRunInput): Promise<ProviderRunResult> {
     const toolCalls: RuntimeToolCall[] = [];
     this.toolCallsByRun.set(input.runId, toolCalls);
 
-    const agent = new Agent({
-      initialState: buildAgentInitialState(input) as never,
-      convertToLlm: (input.convertToLlm || passthroughMessages) as never,
-      transformContext: async (messages) => messages as never,
-      sessionId: input.sessionId,
-      getApiKey: () => input.providerConfig.apiKey,
-      toolExecution: input.toolExecutionMode ?? "sequential",
-      beforeToolCall: async ({ toolCall, args }) => {
-        const toolName = toolCall.name;
-        const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
-        const toolCallId =
-          (await input.onToolRequested?.({
-            runId: input.runId,
-            sessionId: input.sessionId,
-            toolName,
-            input: args as Record<string, unknown>,
-            requiresApproval: requiresReview,
-          })) ?? `${input.runId}:${toolCalls.length + 1}`;
+    // Build ModelClientCallbacks from ProviderRunInput
+    const callbacks = this.buildCallbacks(input, toolCalls);
 
-        toolCalls.push({
-          toolCallId,
-          toolName,
-          phase: "requested",
-        });
-
-        if (!requiresReview) {
-          return undefined;
-        }
-
-        const decision = await new Promise<"approved" | "rejected">((resolve) => {
-          this.pendingApprovals.set(toolCallId, {
-            runId: input.runId,
-            toolCallId,
-            resolve,
-          });
-        });
-        this.pendingApprovals.delete(toolCallId);
-
-        if (decision === "approved") {
-          input.onToolDecision?.(toolCallId, "approved");
-          return undefined;
-        }
-
-        input.onToolDecision?.(toolCallId, "rejected");
-        return {
-          block: true,
-          reason: "Tool execution rejected by user.",
-        };
+    // Normalize tool call start/end to match ProviderRunInput callbacks
+    // (onToolRequested -> before approval, onToolStarted -> after approval)
+    const normalizedCallbacks: ModelClientCallbacks = {
+      onTextDelta: input.onTextDelta,
+      onToolCallStart: (toolCallId, toolName, toolInput) => {
+        toolCalls.push({ toolCallId, toolName, phase: "requested" });
+        input.onToolStarted?.(toolCallId, toolName);
       },
-    });
+      onToolDecision: input.onToolDecision,
+      onToolCallEnd: (toolCallId, toolName, result, isError) => {
+        input.onToolFinished?.(toolCallId, toolName, result, isError);
+      },
+      onUsage: () => {
+        // ProviderRunInput doesn't have onUsage - ignore
+      },
+      onError: () => {
+        // Errors are surfaced via run result
+      },
+      onRequestStart: () => {
+        // Ignored
+      },
+    };
 
-    this.activeAgents.set(input.runId, agent);
-    let latestAssistantText = "";
-
-    agent.subscribe((event) => {
-      this.handleAgentEvent(event, input.runId, toolCalls, input);
-      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        latestAssistantText += event.assistantMessageEvent.delta;
-      }
-      if (
-        event.type === "message_end" &&
-        "role" in event.message &&
-        event.message.role === "assistant"
-      ) {
-        const assistantText = assistantMessageToText(event.message);
-        if (assistantText) {
-          latestAssistantText = assistantText;
-        }
-      }
-    });
+    // Wire tool approval through callbacks
+    const approvalCallbacks = this.buildApprovalCallbacks(input, toolCalls);
 
     try {
-      await agent.prompt(input.prompt);
-      return { assistantText: latestAssistantText };
+      const result = await this.modelClient.run(
+        {
+          runId: input.runId,
+          sessionId: input.sessionId,
+          prompt: input.prompt,
+          historyMessages: input.historyMessages,
+          systemPrompt: input.systemPrompt,
+          providerConfig: input.providerConfig,
+          enabledTools: input.enabledTools,
+          thinkingLevel: input.thinkingLevel,
+          toolExecutionMode: input.toolExecutionMode,
+        },
+        { ...normalizedCallbacks, ...approvalCallbacks },
+      );
+
+      // Trigger onToolRequested for tools that need approval
+      await this.triggerToolRequests(input, toolCalls);
+
+      return { assistantText: result.assistantText };
     } finally {
-      this.activeAgents.delete(input.runId);
       this.toolCallsByRun.delete(input.runId);
     }
   }
 
   cancel(runId: string): void {
-    const agent = this.activeAgents.get(runId);
-    if (!agent) {
-      return;
-    }
-
-    this.resolvePendingApprovals(runId, "rejected");
-    agent.abort();
-    this.activeAgents.delete(runId);
+    this.resolvePendingApprovalsForRun(runId, "rejected");
+    this.modelClient.cancel(runId);
     this.toolCallsByRun.delete(runId);
   }
 
   approveTool(toolCallId: string): void {
-    this.resolveApproval(toolCallId, "approved");
+    const pending = this.pendingApprovals.get(toolCallId);
+    if (!pending) {
+      return;
+    }
+    this.pendingApprovals.delete(toolCallId);
+    pending.resolve("approved");
   }
 
   rejectTool(toolCallId: string): void {
-    this.resolveApproval(toolCallId, "rejected");
-  }
-
-  private resolveApproval(toolCallId: string, decision: "approved" | "rejected"): void {
-    const pendingApproval = this.pendingApprovals.get(toolCallId);
-    if (!pendingApproval) {
+    const pending = this.pendingApprovals.get(toolCallId);
+    if (!pending) {
       return;
     }
-
     this.pendingApprovals.delete(toolCallId);
-    pendingApproval.resolve(decision);
+    pending.resolve("rejected");
   }
 
-  private resolvePendingApprovals(runId: string, decision: "approved" | "rejected"): void {
-    for (const [toolCallId, pendingApproval] of this.pendingApprovals.entries()) {
-      if (pendingApproval.runId !== runId) {
+  private buildCallbacks(
+    input: ProviderRunInput,
+    toolCalls: RuntimeToolCall[],
+  ): ModelClientCallbacks {
+    return {
+      onTextDelta: input.onTextDelta,
+      onToolCallStart: (toolCallId, toolName, toolInput) => {
+        toolCalls.push({ toolCallId, toolName, phase: "requested" });
+        input.onToolStarted?.(toolCallId, toolName);
+      },
+      onToolDecision: input.onToolDecision,
+      onToolCallEnd: (toolCallId, toolName, result, isError) => {
+        input.onToolFinished?.(toolCallId, toolName, result, isError);
+      },
+    };
+  }
+
+  private buildApprovalCallbacks(
+    input: ProviderRunInput,
+    toolCalls: RuntimeToolCall[],
+  ): ModelClientCallbacks {
+    return {
+      onToolCallStart: async (toolCallId, toolName, toolInput) => {
+        const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
+
+        if (requiresReview) {
+          // Trigger onToolRequested for approval
+          const resolvedId =
+            (await input.onToolRequested?.({
+              runId: input.runId,
+              sessionId: input.sessionId,
+              toolName,
+              input: toolInput,
+              requiresApproval: requiresReview,
+            })) ?? toolCallId;
+
+          // Wait for approval
+          const decision = await new Promise<"approved" | "rejected">((resolve) => {
+            this.pendingApprovals.set(resolvedId, {
+              runId: input.runId,
+              toolCallId: resolvedId,
+              resolve,
+            });
+          });
+          this.pendingApprovals.delete(resolvedId);
+
+          input.onToolDecision?.(resolvedId, decision);
+          if (decision === "rejected") {
+            throw new Error("Tool execution rejected by user.");
+          }
+        }
+      },
+    };
+  }
+
+  private async triggerToolRequests(
+    input: ProviderRunInput,
+    toolCalls: RuntimeToolCall[],
+  ): Promise<void> {
+    for (const tc of toolCalls) {
+      if (tc.phase === "requested") {
+        const requiresReview = isBuiltInTool(tc.toolName) ? requiresApproval(tc.toolName) : false;
+        if (!requiresReview) {
+          await input.onToolRequested?.({
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolName: tc.toolName,
+            input: {},
+            requiresApproval: false,
+          });
+        }
+      }
+    }
+  }
+
+  private resolvePendingApprovalsForRun(runId: string, decision: "approved" | "rejected"): void {
+    for (const [toolCallId, pending] of this.pendingApprovals.entries()) {
+      if (pending.runId !== runId) {
         continue;
       }
-
       this.pendingApprovals.delete(toolCallId);
-      pendingApproval.resolve(decision);
+      pending.resolve(decision);
     }
   }
-
-  private handleAgentEvent(
-    event: AgentEvent,
-    runId: string,
-    toolCalls: RuntimeToolCall[],
-    input: ProviderRunInput,
-  ): void {
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      input.onTextDelta?.(event.assistantMessageEvent.delta);
-      return;
-    }
-
-    if (event.type === "tool_execution_start") {
-      const toolCall = findToolCall(toolCalls, event.toolName, ["requested"]);
-      if (!toolCall) {
-        return;
-      }
-
-      toolCall.phase = "started";
-      input.onToolStarted?.(toolCall.toolCallId, toolCall.toolName);
-      return;
-    }
-
-    if (event.type === "tool_execution_update") {
-      const toolCall = findToolCall(toolCalls, event.toolName, ["started"]);
-      if (!toolCall) {
-        return;
-      }
-
-      input.onToolUpdate?.(toolCall.toolCallId, JSON.stringify(event.partialResult ?? ""));
-      return;
-    }
-
-    if (event.type === "tool_execution_end") {
-      const toolCall = findToolCall(toolCalls, event.toolName, ["started", "requested"]);
-      if (!toolCall) {
-        return;
-      }
-
-      toolCall.phase = "finished";
-      input.onToolFinished?.(
-        toolCall.toolCallId,
-        toolCall.toolName,
-        (event.result?.details ?? {}) as Record<string, unknown>,
-        event.isError,
-      );
-    }
-  }
-}
-
-function findToolCall(
-  toolCalls: RuntimeToolCall[],
-  toolName: string,
-  phases: Array<RuntimeToolCall["phase"]>,
-): RuntimeToolCall | undefined {
-  return toolCalls.find((toolCall) => toolCall.toolName === toolName && phases.includes(toolCall.phase));
 }
 
 function buildAgentTools(
   workspaceRoot: string,
   enabledTools?: ToolName[],
-): AgentTool[] {
-  const allTools = createToolArray(workspaceRoot);
+): ReturnType<typeof createAllTools> {
+  const allTools = createAllTools(workspaceRoot);
 
   if (!enabledTools || enabledTools.length === 0) {
     return allTools;
   }
 
   const allowed = new Set(enabledTools);
-  return allTools.filter((tool) => allowed.has(tool.name));
-}
-
-function passthroughMessages(messages: Message[]): Message[] {
-  return messages;
+  const result: ReturnType<typeof createAllTools> = {};
+  for (const [name, tool] of Object.entries(allTools)) {
+    if (allowed.has(name as ToolName)) {
+      result[name] = tool;
+    }
+  }
+  return result;
 }
 
 function assistantMessageToText(message: AssistantMessage): string {

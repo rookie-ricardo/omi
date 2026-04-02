@@ -10,6 +10,9 @@ export interface SessionHistoryRow {
   messageId: string | null;
   summary: string | null;
   details: string | null;
+  branchId: string | null;
+  lineageDepth: number;
+  originRunId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -23,6 +26,9 @@ export function serializeSessionHistoryEntry(entry: SessionHistoryEntry): Sessio
     messageId: entry.messageId,
     summary: entry.summary,
     details: entry.details ? JSON.stringify(entry.details) : null,
+    branchId: entry.branchId ?? null,
+    lineageDepth: entry.lineageDepth ?? 0,
+    originRunId: entry.originRunId ?? null,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
   };
@@ -37,6 +43,9 @@ export function parseSessionHistoryEntry(row: SessionHistoryRow): SessionHistory
     messageId: row.messageId,
     summary: row.summary,
     details: parseJson(row.details, null),
+    branchId: row.branchId ?? null,
+    lineageDepth: row.lineageDepth ?? 0,
+    originRunId: row.originRunId ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });

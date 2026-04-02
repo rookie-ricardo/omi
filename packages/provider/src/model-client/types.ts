@@ -1,0 +1,276 @@
+import type { Message } from "@mariozechner/pi-ai";
+import type { ProviderConfig } from "@omi/core";
+import type { ToolName } from "@omi/tools";
+
+// ============================================================================
+// Protocol Types
+// ============================================================================
+
+/**
+ * Supported protocol types for model providers.
+ * All protocol implementations are delegated to pi-ai.
+ */
+export type ProtocolType = "openai-chat" | "openai-responses" | "anthropic-messages";
+
+/**
+ * Unified tool call representation across all protocols.
+ */
+export interface ModelToolCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * Unified tool result representation across all protocols.
+ */
+export interface ModelToolResult {
+  id: string;
+  output: Record<string, unknown>;
+  isError: boolean;
+}
+
+/**
+ * Unified usage statistics across all protocols.
+ */
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
+/**
+ * Unified error classification for recovery.
+ */
+export type ModelErrorClass =
+  | "network"
+  | "rate_limit"
+  | "auth"
+  | "prompt_too_long"
+  | "max_output"
+  | "tool_error"
+  | "cancelled"
+  | "unknown";
+
+/**
+ * Unified stop reason across all protocols.
+ */
+export type ModelStopReason =
+  | "end_turn"
+  | "tool_use"
+  | "max_tokens"
+  | "stop_sequence"
+  | "content_filter"
+  | "error";
+
+// ============================================================================
+// Stream Events
+// ============================================================================
+
+/**
+ * Text delta event (streaming token output).
+ */
+export interface ModelTextDeltaEvent {
+  type: "text_delta";
+  delta: string;
+}
+
+/**
+ * Tool call start event.
+ */
+export interface ModelToolCallStartEvent {
+  type: "tool_call_start";
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * Tool call end event.
+ */
+export interface ModelToolCallEndEvent {
+  type: "tool_call_end";
+  toolCallId: string;
+  toolName: string;
+  result: Record<string, unknown>;
+  isError: boolean;
+}
+
+/**
+ * Tool result event (response from tool execution).
+ */
+export interface ModelToolResultEvent {
+  type: "tool_result";
+  toolCallId: string;
+  toolName: string;
+  output: Record<string, unknown>;
+  isError: boolean;
+}
+
+/**
+ * Usage update event (may be intermediate or final).
+ */
+export interface ModelUsageEvent {
+  type: "usage";
+  usage: ModelUsage;
+}
+
+/**
+ * Error event (can be recoverable or fatal).
+ */
+export interface ModelErrorEvent {
+  type: "error";
+  error: string;
+  errorClass: ModelErrorClass;
+  recoverable: boolean;
+}
+
+/**
+ * Streaming complete event (final).
+ */
+export interface ModelCompleteEvent {
+  type: "complete";
+  stopReason: ModelStopReason;
+  assistantText: string;
+  toolCalls: ModelToolCall[];
+  usage: ModelUsage;
+}
+
+/**
+ * Request start event.
+ */
+export interface ModelRequestStartEvent {
+  type: "request_start";
+  runId: string;
+  sessionId: string;
+}
+
+/**
+ * Union of all unified stream events.
+ */
+export type ModelStreamEvent =
+  | ModelTextDeltaEvent
+  | ModelToolCallStartEvent
+  | ModelToolCallEndEvent
+  | ModelToolResultEvent
+  | ModelUsageEvent
+  | ModelErrorEvent
+  | ModelCompleteEvent
+  | ModelRequestStartEvent;
+
+// ============================================================================
+// ModelClient Interface
+// ============================================================================
+
+export interface ModelClientRunInput {
+  runId: string;
+  sessionId: string;
+  prompt: string;
+  historyMessages: Message[];
+  systemPrompt?: string;
+  providerConfig: ProviderConfig;
+  enabledTools?: ToolName[];
+  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  toolExecutionMode?: "sequential" | "parallel";
+}
+
+export interface ModelClientRunResult {
+  assistantText: string;
+  stopReason: ModelStopReason;
+  toolCalls: ModelToolCall[];
+  usage: ModelUsage;
+  error: string | null;
+}
+
+/**
+ * Unified model client interface.
+ * All protocol differences are handled internally by pi-ai.
+ * The query loop only works with these unified types.
+ */
+export interface ModelClient {
+  /**
+   * Execute a model run with streaming events.
+   * All events are normalized to the unified ModelStreamEvent format.
+   */
+  run(
+    input: ModelClientRunInput,
+    callbacks: ModelClientCallbacks,
+  ): Promise<ModelClientRunResult>;
+
+  /**
+   * Cancel an in-progress run.
+   */
+  cancel(runId: string): void;
+
+  /**
+   * Approve a pending tool call.
+   */
+  approveTool(toolCallId: string): void;
+
+  /**
+   * Reject a pending tool call.
+   */
+  rejectTool(toolCallId: string): void;
+}
+
+/**
+ * Callbacks for receiving stream events from the model client.
+ */
+export interface ModelClientCallbacks {
+  onTextDelta?: (delta: string) => void;
+  onToolCallStart?: (toolCallId: string, toolName: string, input: Record<string, unknown>) => void;
+  onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void;
+  onToolCallEnd?: (toolCallId: string, toolName: string, result: Record<string, unknown>, isError: boolean) => void;
+  onToolResult?: (toolCallId: string, toolName: string, output: Record<string, unknown>, isError: boolean) => void;
+  onUsage?: (usage: ModelUsage) => void;
+  onError?: (error: string, errorClass: ModelErrorClass, recoverable: boolean) => void;
+  onRequestStart?: (runId: string, sessionId: string) => void;
+}
+
+// ============================================================================
+// Protocol Detection
+// ============================================================================
+
+/**
+ * Result of protocol detection.
+ */
+export interface ProtocolDetectionResult {
+  protocol: ProtocolType;
+  reasoning: string;
+}
+
+/**
+ * Detect the appropriate protocol for a given provider configuration.
+ * This is a pure function that determines routing based on provider metadata.
+ */
+export function detectProtocol(providerConfig: ProviderConfig): ProtocolDetectionResult {
+  const type = providerConfig.type.toLowerCase();
+
+  // Anthropic family -> anthropic-messages protocol
+  if (type === "anthropic" || type === "anthropic-compatible") {
+    return { protocol: "anthropic-messages", reasoning: `${type} -> anthropic-messages` };
+  }
+
+  // OpenAI family -> openai-responses protocol
+  if (type === "openai" || type === "openai-compatible") {
+    return { protocol: "openai-responses", reasoning: `${type} -> openai-responses` };
+  }
+
+  // Third-party providers that use OpenAI-compatible APIs
+  if (
+    type === "openrouter" ||
+    type === "groq" ||
+    type === "cerebras" ||
+    type === "mistral" ||
+    type === "xai" ||
+    type === "azure" ||
+    type === "bedrock" ||
+    type === "google"
+  ) {
+    return { protocol: "openai-chat", reasoning: `${type} -> openai-chat` };
+  }
+
+  // Default: openai-chat for unknown providers
+  return { protocol: "openai-chat", reasoning: `unknown provider ${type}, defaulting to openai-chat` };
+}

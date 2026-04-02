@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { AppStore } from "@omi/store";
 
-import type { Session, SessionHistoryEntry } from "@omi/core";
-import { nowIso } from "@omi/core";
+import type { Session, SessionBranch, SessionHistoryEntry } from "@omi/core";
+import { createId, nowIso, sessionRuntimeSnapshotSchema } from "@omi/core";
 
 import type { CompactionSummaryDocument } from "@omi/memory";
 
@@ -107,8 +107,10 @@ export interface SessionRunQueueEntry {
 }
 
 export interface SessionRuntimeState {
+  version: number;
   sessionId: string;
   activeRunId: string | null;
+  activeBranchId: string | null;
   pendingRunIds: string[];
   queuedRuns: SessionRunQueueEntry[];
   blockedRunId: string | null;
@@ -394,8 +396,12 @@ export class SessionManager {
   private readonly runtimes = new Map<string, SessionRuntime>();
   private readonly leafIds = new Map<string, string | null>();
   private readonly labels = new Map<string, string>();
+  private readonly activeBranchIds = new Map<string, string | null>();
 
-  constructor(private readonly store?: SessionRuntimeStore) {}
+  constructor(
+    private readonly store?: SessionRuntimeStore,
+    private readonly database?: AppStore,
+  ) {}
 
   getOrCreate(sessionId: string): SessionRuntime {
     const current = this.runtimes.get(sessionId);
@@ -403,7 +409,16 @@ export class SessionManager {
       return current;
     }
 
-    const runtime = new SessionRuntime(sessionId, this.store?.load(sessionId), (state) => {
+    const savedState = this.store?.load(sessionId) ?? null;
+    if (savedState && this.database) {
+      const branchId = this.database.getActiveBranchId(sessionId);
+      this.activeBranchIds.set(sessionId, branchId);
+      if (savedState.activeBranchId === undefined || savedState.activeBranchId === null) {
+        savedState.activeBranchId = branchId;
+      }
+    }
+
+    const runtime = new SessionRuntime(sessionId, savedState, (state) => {
       this.store?.save(state);
     });
     this.runtimes.set(sessionId, runtime);
@@ -504,6 +519,80 @@ export class SessionManager {
       throw new Error(`Entry ${branchFromId} not found`);
     }
     this.leafIds.set(sessionId, branchFromId);
+  }
+
+  // ============================================================================
+  // Branch CRUD (DB-backed)
+  // ============================================================================
+
+  getActiveBranchId(sessionId: string): string | null {
+    return this.activeBranchIds.get(sessionId) ?? null;
+  }
+
+  createBranch(sessionId: string, title: string, fromEntryId?: string | null): SessionBranch {
+    if (!this.database) {
+      throw new Error("Database not available for branch operations");
+    }
+
+    const branch = this.database.createBranch({
+      id: createId("branch"),
+      sessionId,
+      headEntryId: fromEntryId ?? null,
+      title,
+    });
+
+    this.activeBranchIds.set(sessionId, branch.id);
+    this.database.setActiveBranchId(sessionId, branch.id);
+
+    return branch;
+  }
+
+  switchBranch(sessionId: string, branchId: string): SessionBranch {
+    if (!this.database) {
+      throw new Error("Database not available for branch operations");
+    }
+
+    const branch = this.database.getBranch(branchId);
+    if (!branch) {
+      throw new Error(`Branch ${branchId} not found`);
+    }
+    if (branch.sessionId !== sessionId) {
+      throw new Error(`Branch ${branchId} does not belong to session ${sessionId}`);
+    }
+
+    this.activeBranchIds.set(sessionId, branchId);
+    this.database.setActiveBranchId(sessionId, branchId);
+
+    if (branch.headEntryId) {
+      this.leafIds.set(sessionId, branch.headEntryId);
+    }
+
+    return branch;
+  }
+
+  listBranches(sessionId: string): SessionBranch[] {
+    if (!this.database) {
+      return [];
+    }
+    return this.database.listBranches(sessionId);
+  }
+
+  getBranchById(branchId: string): SessionBranch | null {
+    if (!this.database) {
+      return null;
+    }
+    return this.database.getBranch(branchId);
+  }
+
+  updateBranchHead(sessionId: string, branchId: string, headEntryId: string): void {
+    if (!this.database) {
+      return;
+    }
+    this.database.updateBranch(branchId, { headEntryId });
+    const activeBranchId = this.activeBranchIds.get(sessionId);
+    if (activeBranchId === branchId) {
+      this.leafIds.set(sessionId, headEntryId);
+    }
   }
 
   fork(sessionId: string, parentSessionId?: string): string {
@@ -659,7 +748,14 @@ export function createDatabaseSessionRuntimeStore(database: AppStore): SessionRu
       const snapshot = database.loadSessionRuntimeSnapshot(sessionId);
       if (snapshot) {
         try {
-          return JSON.parse(snapshot.snapshot) as SessionRuntimeState;
+          const parsed = JSON.parse(snapshot.snapshot) as SessionRuntimeState;
+          if (!parsed.version) {
+            parsed.version = 1;
+          }
+          if (parsed.activeBranchId === undefined) {
+            parsed.activeBranchId = database.getActiveBranchId(sessionId);
+          }
+          return parsed;
         } catch {
           // Fall through to legacy recovery paths.
         }
@@ -668,6 +764,7 @@ export function createDatabaseSessionRuntimeStore(database: AppStore): SessionRu
       const legacyState = loadLegacyRuntimeSnapshot(database, sessionId);
       if (legacyState) {
         const normalized = normalizeRestoredState(legacyState);
+        normalized.activeBranchId = database.getActiveBranchId(sessionId);
         persistSessionRuntimeSnapshot(database, normalized);
         return normalized;
       }
@@ -677,6 +774,7 @@ export function createDatabaseSessionRuntimeStore(database: AppStore): SessionRu
         return null;
       }
 
+      restoredState.activeBranchId = database.getActiveBranchId(sessionId);
       persistSessionRuntimeSnapshot(database, restoredState);
       return restoredState;
     },
@@ -694,8 +792,10 @@ function hydrateState(
 ): SessionRuntimeState {
   const timestamp = nowIso();
   return {
+    version: 1,
     sessionId,
     activeRunId: partial?.activeRunId ?? null,
+    activeBranchId: partial?.activeBranchId ?? null,
     pendingRunIds: partial?.pendingRunIds ? [...partial.pendingRunIds] : [],
     queuedRuns: partial?.queuedRuns ? partial.queuedRuns.map((entry) => ({ ...entry })) : [],
     blockedRunId: partial?.blockedRunId ?? null,
@@ -791,9 +891,26 @@ interface ToolCallRow {
 
 function persistSessionRuntimeSnapshot(database: AppStore, state: SessionRuntimeState): void {
   const updatedAt = nowIso();
+  const snapshot = sessionRuntimeSnapshotSchema.parse({
+    version: state.version ?? 1,
+    sessionId: state.sessionId,
+    activeRunId: state.activeRunId,
+    activeBranchId: state.activeBranchId,
+    pendingRunIds: state.pendingRunIds,
+    queuedRuns: state.queuedRuns,
+    blockedRunId: state.blockedRunId,
+    blockedToolCallId: state.blockedToolCallId,
+    pendingApprovalToolCallIds: state.pendingApprovalToolCallIds,
+    interruptedRunIds: state.interruptedRunIds,
+    selectedProviderConfigId: state.selectedProviderConfigId,
+    lastUserPrompt: state.lastUserPrompt,
+    lastAssistantResponse: state.lastAssistantResponse,
+    lastActivityAt: state.lastActivityAt,
+    compaction: state.compaction,
+  });
   database.saveSessionRuntimeSnapshot({
     sessionId: state.sessionId,
-    snapshot: JSON.stringify(state),
+    snapshot: JSON.stringify(snapshot),
     updatedAt,
   });
 }
@@ -862,8 +979,13 @@ function restoreFromDatabaseRecords(database: AppStore, sessionId: string): Sess
   const runsById = new Map(runs.map((run) => [run.id, run] as const));
   const latestPrompt = resolveRecoveredPrompt(runs, runsById, session);
 
+  // Restore active branch from the latest branch record for this session
+  const branches = database.listBranches(sessionId);
+  const activeBranchId = branches.length > 0 ? branches[branches.length - 1].id : null;
+
   return hydrateState(sessionId, {
     activeRunId: null,
+    activeBranchId,
     pendingRunIds,
     queuedRuns: pendingRunRows.map((run) => ({
       runId: run.id,

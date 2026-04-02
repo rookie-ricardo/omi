@@ -5,7 +5,9 @@ import type {
   ProviderConfig,
   ReviewRequest,
   Run,
+  RunCheckpoint,
   Session,
+  SessionBranch,
   SessionMessage,
   SessionHistoryEntry,
   Task,
@@ -497,6 +499,8 @@ function createMockDatabase(): AppStore & {
   const runs = new Map<string, Run>();
   const memories = new Map<string, MemoryRecord[]>();
   const runtimeRows = new Map<string, { sessionId: string; snapshot: string; updatedAt: string }>();
+  const branches = new Map<string, SessionBranch>();
+  const checkpoints: RunCheckpoint[] = [];
 
   const database: AppStore & {
     readSessionRuntime(sessionId: string): { sessionId: string; snapshot: string; updatedAt: string } | null;
@@ -635,6 +639,46 @@ function createMockDatabase(): AppStore & {
     readSessionRuntime(sessionId: string) {
       return runtimeRows.get(sessionId) ?? null;
     },
+    createBranch(input) {
+      const now = nowIso();
+      const branch: SessionBranch = { ...input, createdAt: now, updatedAt: now };
+      branches.set(branch.id, branch);
+      return branch;
+    },
+    getBranch(branchId) {
+      return branches.get(branchId) ?? null;
+    },
+    listBranches() {
+      return [...branches.values()];
+    },
+    updateBranch(branchId, partial) {
+      const current = branches.get(branchId);
+      if (!current) throw new Error(`Branch ${branchId} not found`);
+      const next = { ...current, ...partial, updatedAt: nowIso() };
+      branches.set(branchId, next);
+      return next;
+    },
+    createCheckpoint(input) {
+      const cp: RunCheckpoint = { ...input, createdAt: nowIso() };
+      checkpoints.push(cp);
+      return cp;
+    },
+    listCheckpoints(runId) {
+      return checkpoints.filter((c) => c.runId === runId);
+    },
+    getLatestCheckpoint(runId) {
+      return checkpoints.filter((c) => c.runId === runId).at(-1) ?? null;
+    },
+    getHistoryEntry() {
+      return null;
+    },
+    getBranchHistory() {
+      return [];
+    },
+    getActiveBranchId() {
+      return null;
+    },
+    setActiveBranchId() {},
   };
 
   return database;

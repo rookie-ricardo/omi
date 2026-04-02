@@ -8,9 +8,11 @@ import {
   type MemoryRecord,
   type ProviderConfig,
   type ReviewRequest,
-  type SessionHistoryEntry,
   type Run,
+  type RunCheckpoint,
   type Session,
+  type SessionBranch,
+  type SessionHistoryEntry,
   type SessionMessage,
   type Task,
   type ToolCall,
@@ -18,7 +20,9 @@ import {
   memoryRecordSchema,
   providerConfigSchema,
   reviewRequestSchema,
+  runCheckpointSchema,
   runSchema,
+  sessionBranchSchema,
   sessionHistoryEntrySchema,
   sessionMessageSchema,
   sessionSchema,
@@ -34,6 +38,8 @@ import {
   messagesTable,
   providerConfigsTable,
   reviewRequestsTable,
+  runCheckpointsTable,
+  sessionBranchesTable,
   sessionHistoryEntriesTable,
   runsTable,
   sessionsTable,
@@ -174,6 +180,22 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
       updated_at TEXT NOT NULL
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(id, title, content, tags);
+    CREATE TABLE IF NOT EXISTS session_branches (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      head_entry_id TEXT,
+      title TEXT NOT NULL DEFAULT 'main',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS run_checkpoints (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
   applyMigrations(sqlite);
 
@@ -205,6 +227,18 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     });
 
     db.insert(sessionsTable).values(session).run();
+
+    // Create the default "main" branch for the new session.
+    const mainBranch = sessionBranchSchema.parse({
+      id: createId("branch"),
+      sessionId: session.id,
+      headEntryId: null,
+      title: "main",
+      createdAt: now,
+      updatedAt: now,
+    });
+    db.insert(sessionBranchesTable).values(mainBranch).run();
+
     return session;
   }
 
@@ -311,22 +345,33 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
   }
 
   function addMessage(
-    input: Omit<SessionMessage, "id" | "createdAt"> & { parentHistoryEntryId?: string | null },
+    input: Omit<SessionMessage, "id" | "createdAt"> & {
+      parentHistoryEntryId?: string | null;
+      branchId?: string | null;
+      originRunId?: string | null;
+    },
   ): SessionMessage {
-    const { parentHistoryEntryId, ...messageInput } = input;
+    const { parentHistoryEntryId, branchId, originRunId, ...messageInput } = input;
     const message = sessionMessageSchema.parse({
       id: createId("msg"),
       createdAt: nowIso(),
       ...messageInput,
     });
     db.insert(messagesTable).values(message).run();
+
+    const resolvedParentId = parentHistoryEntryId ?? getLatestSessionHistoryEntry(message.sessionId)?.id ?? null;
+    const activeBranchId = branchId ?? getActiveBranchId(message.sessionId) ?? null;
+
     addSessionHistoryEntry({
       sessionId: message.sessionId,
-      parentId: parentHistoryEntryId ?? getLatestSessionHistoryEntry(message.sessionId)?.id ?? null,
+      parentId: resolvedParentId,
       kind: "message",
       messageId: message.id,
       summary: null,
       details: null,
+      branchId: activeBranchId,
+      lineageDepth: computeLineageDepth(resolvedParentId),
+      originRunId: originRunId ?? null,
     });
     return message;
   }
@@ -694,6 +739,144 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
       .run(input.sessionId, input.snapshot, input.updatedAt);
   }
 
+  // --- Session Branch ---
+
+  function createBranch(input: Omit<SessionBranch, "createdAt" | "updatedAt">): SessionBranch {
+    const now = nowIso();
+    const branch = sessionBranchSchema.parse({
+      ...input,
+      createdAt: now,
+      updatedAt: now,
+    });
+    db.insert(sessionBranchesTable).values(branch).run();
+    return branch;
+  }
+
+  function getBranch(branchId: string): SessionBranch | null {
+    const row = db.select().from(sessionBranchesTable).where(eq(sessionBranchesTable.id, branchId)).get();
+    return row ? sessionBranchSchema.parse(row) : null;
+  }
+
+  function listBranches(sessionId: string): SessionBranch[] {
+    return db
+      .select()
+      .from(sessionBranchesTable)
+      .where(eq(sessionBranchesTable.sessionId, sessionId))
+      .orderBy(asc(sessionBranchesTable.createdAt))
+      .all()
+      .map((row) => sessionBranchSchema.parse(row));
+  }
+
+  function updateBranch(branchId: string, partial: Partial<SessionBranch>): SessionBranch {
+    const current = getBranch(branchId);
+    if (!current) {
+      throw new Error(`Branch ${branchId} not found`);
+    }
+    const next = sessionBranchSchema.parse({ ...current, ...partial, updatedAt: nowIso() });
+    db.update(sessionBranchesTable).set(next).where(eq(sessionBranchesTable.id, branchId)).run();
+    return next;
+  }
+
+  // --- Run Checkpoint ---
+
+  function createCheckpoint(input: Omit<RunCheckpoint, "createdAt">): RunCheckpoint {
+    const checkpoint = runCheckpointSchema.parse({
+      ...input,
+      createdAt: nowIso(),
+    });
+    db.insert(runCheckpointsTable)
+      .values({
+        ...checkpoint,
+        payload: JSON.stringify(checkpoint.payload),
+      })
+      .run();
+    return checkpoint;
+  }
+
+  function listCheckpoints(runId: string): RunCheckpoint[] {
+    return db
+      .select()
+      .from(runCheckpointsTable)
+      .where(eq(runCheckpointsTable.runId, runId))
+      .orderBy(asc(runCheckpointsTable.createdAt))
+      .all()
+      .map((row) =>
+        runCheckpointSchema.parse({
+          ...row,
+          payload: parseJson(row.payload as string, {}),
+        }),
+      );
+  }
+
+  function getLatestCheckpoint(runId: string): RunCheckpoint | null {
+    const checkpoints = listCheckpoints(runId);
+    return checkpoints.at(-1) ?? null;
+  }
+
+  // --- Branch-aware History ---
+
+  function getHistoryEntry(entryId: string): SessionHistoryEntry | null {
+    const row = db
+      .select()
+      .from(sessionHistoryEntriesTable)
+      .where(eq(sessionHistoryEntriesTable.id, entryId))
+      .get();
+    return row ? parseSessionHistoryEntry(row) : null;
+  }
+
+  function getBranchHistory(sessionId: string, branchId: string): SessionHistoryEntry[] {
+    return sortChronologicalRows(
+      db
+        .select()
+        .from(sessionHistoryEntriesTable)
+        .where(
+          and(
+            eq(sessionHistoryEntriesTable.sessionId, sessionId),
+            eq(sessionHistoryEntriesTable.branchId, branchId),
+          ),
+        )
+        .orderBy(asc(sessionHistoryEntriesTable.createdAt), asc(sessionHistoryEntriesTable.id))
+        .all()
+        .map((entry) => parseSessionHistoryEntry(entry)),
+    );
+  }
+
+  function computeLineageDepth(parentId: string | null): number {
+    if (!parentId) return 0;
+    const parent = getHistoryEntry(parentId);
+    if (!parent) return 0;
+    return parent.lineageDepth + 1;
+  }
+
+  function getActiveBranchId(sessionId: string): string | null {
+    const snapshotRow = loadSessionRuntimeSnapshot(sessionId);
+    if (!snapshotRow) return null;
+    try {
+      const parsed = JSON.parse(snapshotRow.snapshot) as Record<string, unknown>;
+      return (parsed.activeBranchId as string) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  function setActiveBranchId(sessionId: string, branchId: string): void {
+    const snapshotRow = loadSessionRuntimeSnapshot(sessionId);
+    let parsed: Record<string, unknown> = {};
+    if (snapshotRow) {
+      try {
+        parsed = JSON.parse(snapshotRow.snapshot) as Record<string, unknown>;
+      } catch {
+        parsed = {};
+      }
+    }
+    parsed.activeBranchId = branchId;
+    saveSessionRuntimeSnapshot({
+      sessionId,
+      snapshot: JSON.stringify(parsed),
+      updatedAt: nowIso(),
+    });
+  }
+
   return {
     listSessions,
     createSession,
@@ -729,6 +912,17 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     getProviderConfig,
     loadSessionRuntimeSnapshot,
     saveSessionRuntimeSnapshot,
+    createBranch,
+    getBranch,
+    listBranches,
+    updateBranch,
+    createCheckpoint,
+    listCheckpoints,
+    getLatestCheckpoint: getLatestCheckpoint,
+    getHistoryEntry,
+    getBranchHistory,
+    getActiveBranchId,
+    setActiveBranchId,
   };
 }
 
@@ -740,6 +934,8 @@ function resolveDatabasePath(): string {
 interface DatabaseMigration {
   id: string;
   apply: (sqlite: MigrationDatabase) => void;
+  revert?: (sqlite: MigrationDatabase) => void;
+  validate?: (sqlite: MigrationDatabase) => string[];
 }
 
 const DATABASE_MIGRATIONS: DatabaseMigration[] = [
@@ -760,6 +956,118 @@ const DATABASE_MIGRATIONS: DatabaseMigration[] = [
         "api_key",
         "ALTER TABLE provider_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''",
       );
+    },
+  },
+  {
+    id: "20260402_session_kernel_branches",
+    apply(sqlite) {
+      ensureColumnExists(sqlite, "runs", "origin_run_id", "ALTER TABLE runs ADD COLUMN origin_run_id TEXT");
+      ensureColumnExists(sqlite, "runs", "resume_from_checkpoint", "ALTER TABLE runs ADD COLUMN resume_from_checkpoint TEXT");
+      ensureColumnExists(sqlite, "runs", "terminal_reason", "ALTER TABLE runs ADD COLUMN terminal_reason TEXT");
+
+      const historyTableExists = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_history_entries'")
+        .all().length > 0;
+      if (historyTableExists) {
+        ensureColumnExists(sqlite, "session_history_entries", "branch_id", "ALTER TABLE session_history_entries ADD COLUMN branch_id TEXT");
+        ensureColumnExists(sqlite, "session_history_entries", "lineage_depth", "ALTER TABLE session_history_entries ADD COLUMN lineage_depth INTEGER NOT NULL DEFAULT 0");
+        ensureColumnExists(sqlite, "session_history_entries", "origin_run_id", "ALTER TABLE session_history_entries ADD COLUMN origin_run_id TEXT");
+      }
+
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS session_branches (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          head_entry_id TEXT,
+          title TEXT NOT NULL DEFAULT 'main',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS run_checkpoints (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+      `);
+    },
+    revert(sqlite) {
+      sqlite.exec(`DROP TABLE IF EXISTS run_checkpoints`);
+      sqlite.exec(`DROP TABLE IF EXISTS session_branches`);
+      // SQLite does not support DROP COLUMN before 3.35.0; leave the added columns in place.
+      // The added columns (origin_run_id, resume_from_checkpoint, terminal_reason,
+      // branch_id, lineage_depth, origin_run_id on history entries) are nullable and
+      // will simply be ignored by older code.
+    },
+    validate(sqlite) {
+      const errors: string[] = [];
+
+      // Check that session_branches rows reference valid sessions
+      const orphanBranches = sqlite
+        .prepare(
+          `SELECT sb.id, sb.session_id FROM session_branches sb
+           WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = sb.session_id)`,
+        )
+        .all() as Array<{ id: string; session_id: string }>;
+      for (const row of orphanBranches) {
+        errors.push(`Branch ${row.id} references non-existent session ${row.session_id}`);
+      }
+
+      // Check that run_checkpoints rows reference valid runs
+      const orphanCheckpoints = sqlite
+        .prepare(
+          `SELECT rc.id, rc.run_id FROM run_checkpoints rc
+           WHERE NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = rc.run_id)`,
+        )
+        .all() as Array<{ id: string; run_id: string }>;
+      for (const row of orphanCheckpoints) {
+        errors.push(`Checkpoint ${row.id} references non-existent run ${row.run_id}`);
+      }
+
+      // Check that history entries with branch_id reference valid branches
+      const historyTableExists = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_history_entries'")
+        .all().length > 0;
+      if (historyTableExists) {
+        const columnExists = sqlite
+          .prepare("PRAGMA table_info(session_history_entries)")
+          .all()
+          .some((row: unknown) => (row as { name: string }).name === "branch_id");
+        if (columnExists) {
+          const orphanEntries = sqlite
+            .prepare(
+              `SELECT she.id, she.branch_id FROM session_history_entries she
+               WHERE she.branch_id IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM session_branches sb WHERE sb.id = she.branch_id)`,
+            )
+            .all() as Array<{ id: string; branch_id: string }>;
+          for (const row of orphanEntries) {
+            errors.push(`History entry ${row.id} references non-existent branch ${row.branch_id}`);
+          }
+        }
+      }
+
+      // Check that runs with resume_from_checkpoint reference valid checkpoints
+      const runsColumnExists = sqlite
+        .prepare("PRAGMA table_info(runs)")
+        .all()
+        .some((row: unknown) => (row as { name: string }).name === "resume_from_checkpoint");
+      if (runsColumnExists) {
+        const orphanResumes = sqlite
+          .prepare(
+            `SELECT r.id, r.resume_from_checkpoint FROM runs r
+             WHERE r.resume_from_checkpoint IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM run_checkpoints rc WHERE rc.id = r.resume_from_checkpoint)`,
+          )
+          .all() as Array<{ id: string; resume_from_checkpoint: string }>;
+        for (const row of orphanResumes) {
+          errors.push(`Run ${row.id} references non-existent checkpoint ${row.resume_from_checkpoint}`);
+        }
+      }
+
+      return errors;
     },
   },
 ];
@@ -794,6 +1102,53 @@ export function applyMigrations(sqlite: MigrationDatabase): void {
     }
     runMigration(migration);
   }
+}
+
+/**
+ * Revert the most recent migration that has a revert function.
+ * Returns the reverted migration id, or null if nothing to revert.
+ */
+export function revertLastMigration(sqlite: MigrationDatabase): string | null {
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS ${MIGRATIONS_TABLE_NAME} (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL
+    );
+  `);
+
+  const applied = sqlite
+    .prepare(`SELECT id FROM ${MIGRATIONS_TABLE_NAME} ORDER BY created_at DESC, id DESC`)
+    .all()
+    .map((row: unknown) => (row as { id: string }).id);
+
+  for (const migrationId of applied) {
+    const migration = DATABASE_MIGRATIONS.find((m) => m.id === migrationId);
+    if (migration?.revert) {
+      const runRevert = sqlite.transaction(() => {
+        migration.revert!(sqlite);
+        sqlite.prepare(`DELETE FROM ${MIGRATIONS_TABLE_NAME} WHERE id = ?`).run(migrationId);
+      });
+      runRevert();
+      return migrationId;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Validate data consistency after schema migrations.
+ * Returns an array of error strings; empty array means consistent.
+ */
+export function validateSchemaConsistency(sqlite: MigrationDatabase): string[] {
+  const allErrors: string[] = [];
+  for (const migration of DATABASE_MIGRATIONS) {
+    if (migration.validate) {
+      const errors = migration.validate(sqlite);
+      allErrors.push(...errors);
+    }
+  }
+  return allErrors;
 }
 
 function serializeProviderConfig(config: ProviderConfig): ProviderConfig {

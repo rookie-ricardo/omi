@@ -8,7 +8,9 @@ import type {
   ResolvedSkill,
   ReviewRequest,
   Run,
+  RunCheckpoint,
   Session,
+  SessionBranch,
   SessionHistoryEntry,
   SessionMessage,
   SkillDescriptor,
@@ -154,7 +156,8 @@ describe("agent session", () => {
     expect(extensionEvents).toEqual(
       expect.arrayContaining(["run.started", "run.tool_requested", "run.tool_started", "run.tool_finished", "run.completed"]),
     );
-    expect(database.listMemories("session", session.id)).toHaveLength(1);
+    expect(database.listMemories("session", session.id)).toHaveLength(0);
+    expect(database.loadSessionRuntimeSnapshot(session.id)).not.toBeNull();
     expect(runtime.snapshot()).toMatchObject({
       sessionId: session.id,
       activeRunId: null,
@@ -977,6 +980,9 @@ function createMemoryDatabase(): AppStore {
   const providerConfigs = new Map<string, ProviderConfig>();
   const historyEntries: SessionHistoryEntry[] = [];
   const runtimeRows = new Map<string, { sessionId: string; snapshot: string; updatedAt: string }>();
+  const branches = new Map<string, SessionBranch>();
+  const checkpoints: RunCheckpoint[] = [];
+  const activeBranchIds = new Map<string, string | null>();
 
   return {
     listSessions: () => [...sessions.values()],
@@ -1204,5 +1210,49 @@ function createMemoryDatabase(): AppStore {
     saveSessionRuntimeSnapshot(input) {
       runtimeRows.set(input.sessionId, input);
     },
+    createBranch(input) {
+      const now = nowIso();
+      const branch: SessionBranch = {
+        ...input,
+        createdAt: now,
+        updatedAt: now,
+      };
+      branches.set(branch.id, branch);
+      return branch;
+    },
+    getBranch(branchId) {
+      return branches.get(branchId) ?? null;
+    },
+    listBranches(sessionId) {
+      return [...branches.values()].filter((b) => b.sessionId === sessionId);
+    },
+    updateBranch(branchId, partial) {
+      const current = branches.get(branchId);
+      if (!current) throw new Error(`Branch ${branchId} not found`);
+      const next = { ...current, ...partial, updatedAt: nowIso() };
+      branches.set(branchId, next);
+      return next;
+    },
+    createCheckpoint(input) {
+      const cp: RunCheckpoint = { ...input, createdAt: nowIso() };
+      checkpoints.push(cp);
+      return cp;
+    },
+    listCheckpoints(runId) {
+      return checkpoints.filter((c) => c.runId === runId);
+    },
+    getLatestCheckpoint(runId) {
+      return checkpoints.filter((c) => c.runId === runId).at(-1) ?? null;
+    },
+    getHistoryEntry() {
+      return null;
+    },
+    getBranchHistory() {
+      return [];
+    },
+    getActiveBranchId() {
+      return null;
+    },
+    setActiveBranchId() {},
   };
 }
