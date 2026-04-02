@@ -1,487 +1,296 @@
 /**
- * Context Pipeline Orchestrator
+ * Context Pipeline - Coordinates memory and compaction to ensure key memories are preserved.
  *
- * Implements the context management pipeline:
- * 1. Tool Result Budget - Fast budget check for tool results
- * 2. Micro Compact - Lightweight pruning of excessive tool results
- * 3. Context Collapse - Budget-based headroom management
- * 4. Auto Compact - LLM-based summarization when needed
- * 5. Compact and Continue - Full compaction with auto-retry
+ * This module provides:
+ * 1. Key memory protection: Memories tagged with "key" or "protected" are excluded from compaction
+ * 2. Memory-compaction coordination: Ensures compaction respects protected memories
+ * 3. Compaction hooks: Callbacks for memory operations during compaction lifecycle
  */
 
-import type { ProviderConfig, Session } from "@omi/core";
-import { nowIso } from "@omi/core";
-import type {
-  CompactionMode,
-  CompactionSummaryGenerator,
-  RuntimeMessage,
-  SessionCompactionSnapshot,
-  SessionRuntimeMessageEnvelope,
-} from "@omi/memory";
-import {
-  buildCompactionPlan,
-  buildSessionRuntimeMessageEnvelopes,
-  buildSessionRuntimeMessages,
-  generateCompactionSummary,
-  sessionCompactionSnapshotSchema,
-} from "@omi/memory";
-import { createModelFromConfig } from "@omi/provider";
+import type { MemoryRecord } from "@omi/core";
 
-import {
-  buildContextBudget,
-  calculateTokenWarningState,
-  createContextBudget,
-  estimateRuntimeMessagesTokens,
-  shouldAutoCompact,
-  type ContextBudget,
-  type TokenWarningState,
-} from "./context-budget";
-import {
-  estimateContextTokens,
-  estimateRuntimeMessageTokens,
-  estimateRuntimeMessagesTokens,
-  type ContextUsageEstimate,
-} from "./compaction";
+/** Tag used to mark memories as key/protected from compaction */
+export const KEY_MEMORY_TAG = "key";
+export const PROTECTED_MEMORY_TAG = "protected";
+
+/** All tags that mark memories as protected from compaction */
+export const PROTECTED_MEMORY_TAGS: readonly string[] = [KEY_MEMORY_TAG, PROTECTED_MEMORY_TAG];
+
+/**
+ * Check if a memory record is protected from compaction.
+ * Memories with "key" or "protected" tags are excluded from compaction.
+ */
+export function isProtectedMemory(memory: MemoryRecord): boolean {
+  return memory.tags.some((tag) => PROTECTED_MEMORY_TAGS.includes(tag.toLowerCase()));
+}
+
+/**
+ * Filter memories to only include those that should be compacted.
+ * Removes protected memories from the list.
+ */
+export function filterCompactableMemories(memories: MemoryRecord[]): MemoryRecord[] {
+  return memories.filter((memory) => !isProtectedMemory(memory));
+}
+
+/**
+ * Get only the protected memories from a list.
+ */
+export function getProtectedMemories(memories: MemoryRecord[]): MemoryRecord[] {
+  return memories.filter(isProtectedMemory);
+}
 
 // ============================================================================
-// Types
+// Context Pipeline State
 // ============================================================================
 
-export interface ContextPipelineConfig {
-  /** Provider configuration for model access */
-  providerConfig: ProviderConfig;
-  /** Custom compaction summarizer */
-  summarizer?: CompactionSummaryGenerator;
-  /** Enable micro compact (fast tool result pruning) */
-  enableMicroCompact?: boolean;
-  /** Enable context collapse (budget headroom management) */
-  enableContextCollapse?: boolean;
-  /** Maximum tool result size in tokens */
-  maxToolResultTokens?: number;
-  /** Headroom ratio for context collapse trigger (0-1) */
-  collapseHeadroomRatio?: number;
+/**
+ * State tracked by the context pipeline for compaction coordination.
+ */
+export interface ContextPipelineState {
+  /** Memories that have been marked as protected */
+  protectedMemoryIds: Set<string>;
+  /** History entry IDs that correspond to protected memories */
+  protectedHistoryEntryIds: Set<string>;
+  /** Whether compaction has been requested */
+  pendingCompaction: boolean;
+  /** Last compaction timestamp */
+  lastCompactedAt: string | null;
 }
 
-export interface ContextPipelineInput {
-  /** Current runtime messages */
-  messages: RuntimeMessage[];
-  /** Session for compaction history */
-  session: Session;
-  /** Optional current usage estimate */
-  usageEstimate?: ContextUsageEstimate;
-}
-
-export interface ContextPipelineResult {
-  /** Whether any action was taken */
-  didCompact: boolean;
-  /** Updated messages after processing */
-  messages: RuntimeMessage[];
-  /** Updated usage estimate */
-  usageEstimate: ContextUsageEstimate;
-  /** Warning state after processing */
-  warningState: TokenWarningState;
-  /** Compaction snapshot if compaction occurred */
-  compactionSnapshot?: SessionCompactionSnapshot;
-  /** Budget state after processing */
-  budget: ContextBudget;
-}
-
-export interface PipelineStage {
-  name: string;
-  didRun: boolean;
-  didModify: boolean;
-  description: string;
-}
-
-export interface ContextPipelineReport {
-  /** Whether full compaction was triggered */
-  didFullCompaction: boolean;
-  /** Stages that ran */
-  stages: PipelineStage[];
-  /** Final warning state */
-  finalWarningState: TokenWarningState;
-  /** Final budget */
-  finalBudget: ContextBudget;
-  /** Compaction result if any */
-  compactionResult?: {
-    mode: CompactionMode;
-    tokensBefore: number;
-    tokensKept: number;
+/**
+ * Create a new context pipeline state.
+ */
+export function createContextPipelineState(): ContextPipelineState {
+  return {
+    protectedMemoryIds: new Set(),
+    protectedHistoryEntryIds: new Set(),
+    pendingCompaction: false,
+    lastCompactedAt: null,
   };
 }
 
 // ============================================================================
-// Pipeline Implementation
+// Context Pipeline Coordinator
 // ============================================================================
 
-export class ContextPipeline {
-  private readonly config: ContextPipelineConfig;
-  private readonly budget: ContextBudget;
-  private stages: PipelineStage[] = [];
+/**
+ * Callbacks for memory-compaction coordination.
+ */
+export interface ContextPipelineCallbacks {
+  /** Called when a memory is marked as protected */
+  onMemoryProtected?: (memoryId: string) => void;
+  /** Called when a memory is unprotected */
+  onMemoryUnprotected?: (memoryId: string) => void;
+  /** Called before compaction starts */
+  onBeforeCompaction?: (protectedIds: Set<string>) => void;
+  /** Called after compaction completes */
+  onAfterCompaction?: (summary: string, protectedCount: number) => void;
+}
 
-  constructor(config: ContextPipelineConfig) {
-    this.config = config;
-    this.budget = createContextBudget(config.providerConfig);
+/**
+ * Context Pipeline Coordinator - Manages coordination between memory writes
+ * and compaction operations.
+ *
+ * Ensures that:
+ * 1. Key memories are never included in compaction candidates
+ * 2. Protected memory IDs are tracked across compaction boundaries
+ * 3. Compaction respects the protected memory set
+ */
+export class ContextPipelineCoordinator {
+  private state: ContextPipelineState;
+  private callbacks: ContextPipelineCallbacks;
+
+  constructor(callbacks: ContextPipelineCallbacks = {}) {
+    this.state = createContextPipelineState();
+    this.callbacks = callbacks;
   }
 
   /**
-   * Execute the full context pipeline.
+   * Get the current protected memory IDs.
    */
-  async execute(input: ContextPipelineInput): Promise<ContextPipelineResult> {
-    this.stages = [];
+  getProtectedMemoryIds(): Set<string> {
+    return new Set(this.state.protectedMemoryIds);
+  }
 
-    let messages = [...input.messages];
-    let usageEstimate = input.usageEstimate ?? estimateContextTokens(messages);
-    let warningState = calculateTokenWarningState(usageEstimate.tokens, this.budget);
+  /**
+   * Get the current protected history entry IDs.
+   */
+  getProtectedHistoryEntryIds(): Set<string> {
+    return new Set(this.state.protectedHistoryEntryIds);
+  }
 
-    // Stage 1: Tool Result Budget Check
-    const toolResultResult = this.runToolResultBudgetStage(messages);
-    if (toolResultResult.didModify) {
-      messages = toolResultResult.messages;
-      usageEstimate = estimateContextTokens(messages);
-      warningState = calculateTokenWarningState(usageEstimate.tokens, this.budget);
+  /**
+   * Check if compaction is pending.
+   */
+  isCompactionPending(): boolean {
+    return this.state.pendingCompaction;
+  }
+
+  /**
+   * Register a memory as protected from compaction.
+   */
+  protectMemory(memoryId: string): void {
+    if (!this.state.protectedMemoryIds.has(memoryId)) {
+      this.state.protectedMemoryIds.add(memoryId);
+      this.callbacks.onMemoryProtected?.(memoryId);
     }
+  }
 
-    // Stage 2: Micro Compact (if enabled and needed)
-    if (this.config.enableMicroCompact !== false && warningState.isAboveWarningThreshold) {
-      const microResult = this.runMicroCompactStage(messages, warningState);
-      if (microResult.didModify) {
-        messages = microResult.messages;
-        usageEstimate = estimateContextTokens(messages);
-        warningState = calculateTokenWarningState(usageEstimate.tokens, this.budget);
+  /**
+   * Unregister a memory from protected status.
+   */
+  unprotectMemory(memoryId: string): void {
+    if (this.state.protectedMemoryIds.delete(memoryId)) {
+      this.callbacks.onMemoryUnprotected?.(memoryId);
+    }
+  }
+
+  /**
+   * Sync protected memories from a list of memory records.
+   * Updates the internal state to match the provided records.
+   */
+  syncProtectedMemories(memories: MemoryRecord[]): void {
+    const newProtectedIds = new Set<string>();
+
+    for (const memory of memories) {
+      if (isProtectedMemory(memory)) {
+        newProtectedIds.add(memory.id);
       }
     }
 
-    // Stage 3: Context Collapse (if enabled)
-    if (this.config.enableContextCollapse !== false && warningState.isAboveAutoCompactThreshold) {
-      const collapseResult = this.runContextCollapseStage(messages, usageEstimate, warningState);
-      if (collapseResult.didCompact) {
-        return collapseResult;
+    // Detect changes
+    for (const id of newProtectedIds) {
+      if (!this.state.protectedMemoryIds.has(id)) {
+        this.state.protectedMemoryIds.add(id);
+        this.callbacks.onMemoryProtected?.(id);
       }
     }
 
-    // Stage 4: Auto Compact (if still needed)
-    if (shouldAutoCompact(usageEstimate.tokens, this.budget)) {
-      const autoCompactResult = await this.runAutoCompactStage(input.session, messages, usageEstimate);
-      if (autoCompactResult.didCompact) {
-        return autoCompactResult;
+    for (const id of this.state.protectedMemoryIds) {
+      if (!newProtectedIds.has(id)) {
+        this.state.protectedMemoryIds.delete(id);
+        this.callbacks.onMemoryUnprotected?.(id);
       }
     }
+  }
 
+  /**
+   * Register a history entry ID as protected (maps to a protected memory).
+   */
+  protectHistoryEntry(historyEntryId: string): void {
+    this.state.protectedHistoryEntryIds.add(historyEntryId);
+  }
+
+  /**
+   * Check if a history entry ID is protected.
+   */
+  isHistoryEntryProtected(historyEntryId: string): boolean {
+    return this.state.protectedHistoryEntryIds.has(historyEntryId);
+  }
+
+  /**
+   * Request compaction to be performed.
+   */
+  requestCompaction(): void {
+    this.state.pendingCompaction = true;
+    this.callbacks.onBeforeCompaction?.(this.state.protectedMemoryIds);
+  }
+
+  /**
+   * Mark compaction as completed.
+   */
+  completeCompaction(summary: string): void {
+    this.state.pendingCompaction = false;
+    this.state.lastCompactedAt = new Date().toISOString();
+    this.callbacks.onAfterCompaction?.(summary, this.state.protectedMemoryIds.size);
+  }
+
+  /**
+   * Mark compaction as failed.
+   */
+  failCompaction(): void {
+    this.state.pendingCompaction = false;
+  }
+
+  /**
+   * Filter history entry IDs to exclude protected ones.
+   * Used during compaction to determine which entries to compact.
+   */
+  filterCompactionCandidates<T extends { id?: string | null; sourceHistoryEntryId?: string | null }>(
+    entries: T[],
+    getId: (entry: T) => string | null,
+  ): T[] {
+    return entries.filter((entry) => {
+      const id = getId(entry);
+      return id === null || !this.state.protectedHistoryEntryIds.has(id);
+    });
+  }
+
+  /**
+   * Get the snapshot of protected state for persistence.
+   */
+  getSnapshot(): { protectedMemoryIds: string[]; protectedHistoryEntryIds: string[] } {
     return {
-      didCompact: false,
-      messages,
-      usageEstimate,
-      warningState,
-      budget: this.budget,
+      protectedMemoryIds: [...this.state.protectedMemoryIds],
+      protectedHistoryEntryIds: [...this.state.protectedHistoryEntryIds],
     };
   }
 
   /**
-   * Run tool result budget stage - fast check for excessive tool results.
+   * Restore state from a snapshot.
    */
-  private runToolResultBudgetStage(messages: RuntimeMessage[]): {
-    didModify: boolean;
-    messages: RuntimeMessage[];
-  } {
-    this.stages.push({
-      name: "tool_result_budget",
-      didRun: true,
-      didModify: false,
-      description: "Check tool results for budget compliance",
-    });
-
-    const maxTokens = this.config.maxToolResultTokens ?? 2000;
-    let modified = false;
-    const maxChars = maxTokens * 4; // Rough char/token ratio
-
-    const processed = messages.map((msg) => {
-      if (msg.role === "runtimeToolOutput") {
-        const content = typeof msg.content === "string" ? msg.content : "";
-        const tokens = estimateRuntimeMessageTokens(msg);
-
-        if (tokens > maxTokens) {
-          modified = true;
-          return {
-            ...msg,
-            content: content.slice(0, maxChars) + "\n\n[Truncated due to size]",
-          };
-        }
-      }
-      return msg;
-    });
-
-    return { didModify: modified, messages: modified ? processed : messages };
-  }
-
-  /**
-   * Run micro compact stage - lightweight pruning of excessive content.
-   */
-  private runMicroCompactStage(
-    messages: RuntimeMessage[],
-    warningState: TokenWarningState,
-  ): { didModify: boolean; messages: RuntimeMessage[] } {
-    this.stages.push({
-      name: "micro_compact",
-      didRun: true,
-      didModify: false,
-      description: "Lightweight pruning of excessive content",
-    });
-
-    // If we're past error threshold, do aggressive micro compaction
-    if (warningState.isAboveErrorThreshold) {
-      return this.runAggressiveMicroCompact(messages);
-    }
-
-    // Otherwise, do conservative micro compaction
-    return this.runConservativeMicroCompact(messages);
-  }
-
-  private runConservativeMicroCompact(messages: RuntimeMessage[]): {
-    didModify: boolean;
-    messages: RuntimeMessage[];
-  } {
-    const maxToolResultChars = 4000;
-    let modified = false;
-
-    const processed = messages.map((msg) => {
-      if (msg.role === "runtimeToolOutput") {
-        const content = typeof msg.content === "string" ? msg.content : "";
-        if (content.length > maxToolResultChars) {
-          modified = true;
-          return {
-            ...msg,
-            content: content.slice(0, maxToolResultChars) + "\n\n[Output truncated]",
-          };
-        }
-      }
-      return msg;
-    });
-
-    return { didModify: modified, messages: modified ? processed : messages };
-  }
-
-  private runAggressiveMicroCompact(messages: RuntimeMessage[]): {
-    didModify: boolean;
-    messages: RuntimeMessage[];
-  } {
-    const maxToolResultChars = 1500;
-    let modified = false;
-
-    const processed = messages.map((msg) => {
-      if (msg.role === "runtimeToolOutput") {
-        const content = typeof msg.content === "string" ? msg.content : "";
-        if (content.length > maxToolResultChars) {
-          modified = true;
-          return {
-            ...msg,
-            content: content.slice(0, maxToolResultChars) + "\n\n[Output truncated]",
-          };
-        }
-      }
-      return msg;
-    });
-
-    return { didModify: modified, messages: modified ? processed : messages };
-  }
-
-  /**
-   * Run context collapse stage - budget-based headroom management.
-   */
-  private runContextCollapseStage(
-    messages: RuntimeMessage[],
-    usageEstimate: ContextUsageEstimate,
-    warningState: TokenWarningState,
-  ): ContextPipelineResult {
-    this.stages.push({
-      name: "context_collapse",
-      didRun: true,
-      didModify: false,
-      description: "Budget-based headroom management",
-    });
-
-    const headroomRatio = this.config.collapseHeadroomRatio ?? 0.15; // 15% headroom target
-    const targetTokens = Math.floor(this.budget.effectiveContextWindow * (1 - headroomRatio));
-
-    // If we're already close to target, trigger collapse
-    if (usageEstimate.tokens > targetTokens) {
-      // Context collapse reduces the oldest content to make room
-      const collapseRatio = headroomRatio; // Remove this percentage of context
-      const keepRatio = 1 - collapseRatio;
-
-      // Find cut point based on ratio
-      const totalTokens = usageEstimate.tokens;
-      const targetKeepTokens = Math.floor(totalTokens * keepRatio);
-
-      let accumulated = 0;
-      let cutoffIndex = 0;
-
-      for (let i = 0; i < messages.length; i++) {
-        const tokens = estimateRuntimeMessageTokens(messages[i]);
-        accumulated += tokens;
-        if (accumulated > targetKeepTokens) {
-          cutoffIndex = i;
-          break;
-        }
-        cutoffIndex = i + 1;
-      }
-
-      if (cutoffIndex < messages.length) {
-        // Mark that context was collapsed (lightweight, not full compaction)
-        const collapsedMessages = messages.slice(cutoffIndex);
-        const newUsage = estimateContextTokens(collapsedMessages);
-
-        this.stages[this.stages.length - 1].didModify = true;
-
-        return {
-          didCompact: true,
-          messages: collapsedMessages,
-          usageEstimate: newUsage,
-          warningState: calculateTokenWarningState(newUsage.tokens, this.budget),
-          budget: this.budget,
-        };
-      }
-    }
-
-    return {
-      didCompact: false,
-      messages,
-      usageEstimate,
-      warningState,
-      budget: this.budget,
-    };
-  }
-
-  /**
-   * Run auto compact stage - LLM-based summarization.
-   */
-  private async runAutoCompactStage(
-    session: Session,
-    messages: RuntimeMessage[],
-    usageEstimate: ContextUsageEstimate,
-  ): Promise<ContextPipelineResult> {
-    this.stages.push({
-      name: "auto_compact",
-      didRun: true,
-      didModify: false,
-      description: "LLM-based context summarization",
-    });
-
-    const envelopes = this.buildEnvelopesFromMessages(messages);
-    const model = createModelFromConfig(this.config.providerConfig);
-    const plan = buildCompactionPlan(envelopes, model.contextWindow, "threshold");
-
-    if (!plan) {
-      return {
-        didCompact: false,
-        messages,
-        usageEstimate,
-        warningState: calculateTokenWarningState(usageEstimate.tokens, this.budget),
-        budget: this.budget,
-      };
-    }
-
-    const summary = await generateCompactionSummary(
-      {
-        sessionId: session.id,
-        providerConfig: this.config.providerConfig,
-        mode: "threshold",
-        tokensBefore: plan.tokensBefore,
-        tokensKept: plan.tokensKept,
-        keepRecentTokens: plan.keepRecentTokens,
-        summaryMessages: plan.summaryMessages,
-        keptMessages: plan.keptMessages,
-      },
-      this.config.summarizer,
-    );
-
-    const snapshot = sessionCompactionSnapshotSchema.parse({
-      version: 1,
-      summary,
-      compactedAt: nowIso(),
-      firstKeptHistoryEntryId: plan.firstKeptHistoryEntryId,
-      firstKeptTimestamp: plan.firstKeptTimestamp,
-      tokensBefore: plan.tokensBefore,
-      tokensKept: plan.tokensKept,
-    });
-
-    this.stages[this.stages.length - 1].didModify = true;
-
-    return {
-      didCompact: true,
-      messages: plan.keptMessages,
-      usageEstimate: {
-        tokens: plan.tokensKept,
-        usageTokens: plan.tokensKept,
-        trailingTokens: 0,
-        lastUsageIndex: null,
-      },
-      warningState: calculateTokenWarningState(plan.tokensKept, this.budget),
-      compactionSnapshot: snapshot,
-      budget: this.budget,
-    };
-  }
-
-  /**
-   * Build envelopes from messages for compaction planning.
-   */
-  private buildEnvelopesFromMessages(messages: RuntimeMessage[]): SessionRuntimeMessageEnvelope[] {
-    return messages.map((msg, index) => ({
-      message: msg,
-      timestamp: Date.now() - (messages.length - index) * 1000,
-      order: index,
-      sourceHistoryEntryId: null,
-    }));
-  }
-
-  /**
-   * Get pipeline report.
-   */
-  getReport(): ContextPipelineReport {
-    return {
-      didFullCompaction: this.stages.some((s) => s.name === "auto_compact" && s.didModify),
-      stages: this.stages,
-      finalWarningState: calculateTokenWarningState(0, this.budget),
-      finalBudget: this.budget,
-    };
+  restoreSnapshot(snapshot: { protectedMemoryIds?: string[]; protectedHistoryEntryIds?: string[] }): void {
+    this.state.protectedMemoryIds = new Set(snapshot.protectedMemoryIds ?? []);
+    this.state.protectedHistoryEntryIds = new Set(snapshot.protectedHistoryEntryIds ?? []);
   }
 }
 
 // ============================================================================
-// Convenience Functions
+// Memory Scoped Coordinator
 // ============================================================================
 
 /**
- * Run a quick context budget check.
+ * Factory for creating scope-specific coordinators.
+ * Useful when managing multiple session contexts.
  */
-export function quickBudgetCheck(
-  messages: RuntimeMessage[],
-  config: ProviderConfig,
-): TokenWarningState {
-  const budget = createContextBudget(config);
-  const usage = estimateRuntimeMessagesTokens(messages);
-  return calculateTokenWarningState(usage, budget);
+export interface MemoryScopeCoordinatorMap {
+  getOrCreate(scope: string, scopeId: string): ContextPipelineCoordinator;
+  get(scope: string, scopeId: string): ContextPipelineCoordinator | undefined;
+  delete(scope: string, scopeId: string): void;
+  clear(): void;
 }
 
 /**
- * Check if context needs attention.
+ * Create a scoped coordinator map.
  */
-export function needsContextAttention(
-  messages: RuntimeMessage[],
-  config: ProviderConfig,
-): boolean {
-  const state = quickBudgetCheck(messages, config);
-  return (
-    state.isAboveAutoCompactThreshold ||
-    state.isAboveWarningThreshold ||
-    state.isAtBlockingLimit
-  );
-}
+export function createMemoryScopeCoordinatorMap(): MemoryScopeCoordinatorMap {
+  const coordinators = new Map<string, ContextPipelineCoordinator>();
 
-/**
- * Get context health percentage (0-100).
- */
-export function getContextHealth(messages: RuntimeMessage[], config: ProviderConfig): number {
-  const state = quickBudgetCheck(messages, config);
-  return state.percentLeft;
+  function makeKey(scope: string, scopeId: string): string {
+    return `${scope}:${scopeId}`;
+  }
+
+  return {
+    getOrCreate(scope: string, scopeId: string): ContextPipelineCoordinator {
+      const key = makeKey(scope, scopeId);
+      let coordinator = coordinators.get(key);
+      if (!coordinator) {
+        coordinator = new ContextPipelineCoordinator();
+        coordinators.set(key, coordinator);
+      }
+      return coordinator;
+    },
+
+    get(scope: string, scopeId: string): ContextPipelineCoordinator | undefined {
+      return coordinators.get(makeKey(scope, scopeId));
+    },
+
+    delete(scope: string, scopeId: string): void {
+      coordinators.delete(makeKey(scope, scopeId));
+    },
+
+    clear(): void {
+      coordinators.clear();
+    },
+  };
 }
