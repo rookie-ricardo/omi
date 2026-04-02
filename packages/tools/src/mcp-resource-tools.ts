@@ -56,7 +56,7 @@ export const mcpResourceListSchema: TSchema = Type.Object({
   })),
 });
 
-export type McpResourceListInput = Static<typeof mcpResourceListSchema>;
+type McpResourceListInput = { pattern?: string; serverId?: string };
 
 /**
  * Schema for MCP resource read tool.
@@ -70,7 +70,7 @@ export const mcpResourceReadSchema: TSchema = Type.Object({
   })),
 });
 
-export type McpResourceReadInput = Static<typeof mcpResourceReadSchema>;
+type McpResourceReadInput = { uri: string; maxLength?: number };
 
 // ============================================================================
 // Tool Implementations
@@ -93,17 +93,20 @@ export function createMcpResourceListTool(
       _toolCallId: string,
       params: unknown,
     ) => {
-      const { pattern, serverId } = params as McpResourceListInput;
+      const { pattern, serverId } = params as { pattern?: string; serverId?: string };
 
       try {
-        let resources;
+        type ResourceItem = { serverId: string; serverName: string; resource: { uri: string; name?: string; description?: string; mimeType?: string } };
+        let resources: ResourceItem[];
 
         if (serverId) {
           // List from specific server
-          resources = config.registry.getResources(serverId).map((r) => ({
-            ...r,
+          const serverResources = config.registry.getResources(serverId);
+          const serverName = config.registry.getServer(serverId)?.config.name ?? serverId;
+          resources = serverResources.map((r) => ({
             serverId,
-            serverName: config.registry.getServer(serverId)?.config.name ?? serverId,
+            serverName,
+            resource: r,
           }));
         } else {
           // List from all servers
@@ -139,7 +142,7 @@ export function createMcpResourceListTool(
         const output = lines.join("\n");
         return {
           content: [{ type: "text", text: output || "No resources found." } as TextContent],
-          details: {},
+          details: {} as McpResourceToolDetails,
         };
       } catch (error) {
         return {
@@ -147,8 +150,7 @@ export function createMcpResourceListTool(
             type: "text",
             text: `Error listing MCP resources: ${error instanceof Error ? error.message : String(error)}`,
           } as TextContent],
-          details: { },
-          isError: true,
+          details: {} as McpResourceToolDetails,
         };
       }
     },
@@ -170,7 +172,7 @@ export function createMcpResourceReadTool(
       _toolCallId: string,
       params: unknown,
     ) => {
-      const { uri, maxLength } = params as McpResourceReadInput;
+      const { uri, maxLength } = params as { uri: string; maxLength?: number };
       const limit = maxLength ?? config.maxContentLength ?? DEFAULT_MAX_CONTENT_LENGTH;
 
       try {
@@ -202,8 +204,7 @@ export function createMcpResourceReadTool(
             type: "text",
             text: `Error reading MCP resource ${uri}: ${error instanceof Error ? error.message : String(error)}`,
           } as TextContent],
-          details: { uri },
-          isError: true,
+          details: { uri } as McpResourceToolDetails,
         };
       }
     },
