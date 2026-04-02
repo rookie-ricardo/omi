@@ -15,3 +15,6 @@ export * from "./image-resize";
 export * from "./tools-manager";
 export * from "./read";
 export * from "./mcp-resource-tools";
+export * from "./subagent-tools";
+export * from "./plan-tools";
+export * from "./worktree-tools";

@@ -19,3 +19,23 @@ export type {
   RpcExtensionUIResponse,
   RpcCommandType,
 } from "./rpc/rpc-types";
+
+// Plan Mode
+export { PlanMode, createPlanModeDenial, isPlanModeDenial, type ToolDenial } from "./plan-mode";
+export type {
+  PlanModeStatus,
+  PlanModeState,
+  PlanStep,
+  PlanModeConfig,
+  ApprovalRule,
+} from "./plan-mode";
+
+// Worktree Mode
+export { WorktreeMode } from "./worktree-mode";
+export type {
+  WorktreeStatus,
+  WorktreeInfo,
+  WorktreeConfig,
+  WorktreeChangeDetection,
+  WorktreeLifecycleEvents,
+} from "./worktree-mode";
