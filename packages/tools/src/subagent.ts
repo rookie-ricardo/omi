@@ -268,10 +268,13 @@ export function createSubagentSendTool(
       }
 
       try {
-        const typedParams: SubagentSendInput = params as unknown as SubagentSendInput;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const typedParams: SubagentSendInput = params as any;
         const result = await client.send(typedParams);
-        const agentId: string = String(typedParams.subAgentId ?? "");
-        const subAgentIdVal: string = String(typedParams.subAgentId ?? "");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const agentId: string = String((typedParams as any).subAgentId ?? "");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const subAgentIdVal: string = String((typedParams as any).subAgentId ?? "");
         if (!result.success) {
           return {
             content: [makeTextContent(
@@ -321,9 +324,9 @@ export function createSubagentWaitTool(
       }
 
       try {
-        const typedParams = params as unknown as SubagentWaitInput;
+        const typedParams = params as any as SubagentWaitInput;
         const result = await client.wait(typedParams);
-        const agentId = String(typedParams.subAgentId ?? "");
+        const agentId = String((typedParams as any).subAgentId ?? "");
         let message = "SubAgent " + agentId + " finished with status: " + result.status;
 
         if (result.timedOut) {
@@ -375,7 +378,7 @@ export function createSubagentCloseTool(
       }
 
       try {
-        const typedParams = params as unknown as SubagentCloseInput;
+        const typedParams: SubagentCloseInput = params as any;
         const result = await client.close(typedParams);
         const agentId = String(typedParams.subAgentId ?? "");
         const forced = typedParams.force ? " (forced)" : "";
@@ -484,7 +487,7 @@ export function createSubagentGetTool(
       }
 
       try {
-        const typedParams = params as unknown as SubagentGetInput;
+        const typedParams: SubagentGetInput = params as any;
         const result = await client.get(typedParams);
 
         if (!result.subAgent) {
@@ -550,7 +553,7 @@ export function createSubagentDelegateTool(
       }
 
       try {
-        const typedParams = params as unknown as SubagentDelegateInput;
+        const typedParams: SubagentDelegateInput = params as any;
 
         // Spawn the subagent
         const spawnResult = await client.spawn({
