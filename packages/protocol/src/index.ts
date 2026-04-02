@@ -209,8 +209,28 @@ export const commandMap = {
   "session.list": z.object({}).default({}),
   "session.get": z.object({ sessionId: z.string() }),
   "session.runtime.get": z.object({ sessionId: z.string() }),
+  "session.branch.create": z.object({
+    sessionId: z.string(),
+    branchName: z.string(),
+    fromEntryId: z.string().optional(),
+  }),
+  "session.branch.list": z.object({ sessionId: z.string() }),
+  "session.branch.switch": z.object({
+    sessionId: z.string(),
+    branchId: z.string(),
+  }),
+  "session.mode.enter": z.object({
+    sessionId: z.string(),
+    mode: z.enum(["plan", "auto"]),
+    config: z.record(z.any()).optional(),
+  }),
+  "session.mode.exit": z.object({
+    sessionId: z.string(),
+    discard: z.boolean().default(false),
+  }),
   "skill.list": z.object({}).default({}),
   "skill.search": skillSearchParamsSchema,
+  "skill.refresh": z.object({}).default({}),
   "task.list": z.object({}).default({}),
   "task.update": taskUpdateParamsSchema,
   "git.status": z.object({}).default({}),
@@ -219,6 +239,11 @@ export const commandMap = {
   "run.retry": runRetryParamsSchema,
   "run.resume": runResumeParamsSchema,
   "run.cancel": z.object({ runId: z.string() }),
+  "run.state.get": z.object({ runId: z.string() }),
+  "run.events.subscribe": z.object({
+    runId: z.string(),
+    events: z.array(z.string()),
+  }),
   "tool.approve": toolApprovalParamsSchema,
   "tool.reject": z.object({ toolCallId: z.string() }),
   "tool.pending.list": z.object({ sessionId: z.string() }),
@@ -230,6 +255,50 @@ export const commandMap = {
   "session.compact": sessionCompactParamsSchema,
   "extension.list": z.object({}).default({}),
   "model.list": z.object({}).default({}),
+  "permission.rule.list": z.object({
+    sessionId: z.string(),
+  }),
+  "permission.rule.add": z.object({
+    sessionId: z.string(),
+    rule: z.object({
+      id: z.string().optional(),
+      name: z.string(),
+      toolPattern: z.string(),
+      action: z.enum(["allow", "deny", "require_approval"]),
+      conditions: z.record(z.any()).optional(),
+      priority: z.number().optional(),
+    }),
+  }),
+  "permission.rule.delete": z.object({
+    sessionId: z.string(),
+    ruleId: z.string(),
+  }),
+  "mcp.server.list": z.object({}).default({}),
+  "mcp.server.connect": z.object({
+    serverId: z.string(),
+  }),
+  "mcp.server.disconnect": z.object({
+    serverId: z.string(),
+  }),
+  "agent.spawn": z.object({
+    ownerId: z.string(),
+    prompt: z.string(),
+    writeScope: z.enum(["shared", "isolated"]).default("shared"),
+    background: z.boolean().default(false),
+    deadline: z.number().optional(),
+    tags: z.array(z.string()).optional(),
+  }),
+  "agent.send": z.object({
+    taskId: z.string(),
+    message: z.string(),
+  }),
+  "agent.wait": z.object({
+    taskId: z.string(),
+    timeout: z.number().optional(),
+  }),
+  "agent.close": z.object({
+    taskId: z.string(),
+  }),
 } as const;
 
 export const resultSchemas = {
@@ -244,6 +313,154 @@ export const resultSchemas = {
   "extension.list": extensionListResultSchema,
   "model.list": modelListResultSchema,
 } as const;
+
+// Branch schemas
+export const sessionBranchSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  sessionId: z.string(),
+  parentEntryId: z.string().nullable(),
+  createdAt: z.string(),
+  isActive: z.boolean(),
+});
+
+export const sessionBranchListResultSchema = z.object({
+  sessionId: z.string(),
+  branches: z.array(sessionBranchSchema),
+});
+
+export const sessionBranchCreateResultSchema = z.object({
+  sessionId: z.string(),
+  branch: sessionBranchSchema,
+});
+
+export const sessionBranchSwitchResultSchema = z.object({
+  sessionId: z.string(),
+  branch: sessionBranchSchema,
+  previousBranchId: z.string().nullable(),
+});
+
+// Mode schemas
+export const sessionModeStateSchema = z.object({
+  sessionId: z.string(),
+  mode: z.enum(["plan", "auto", "none"]),
+  status: z.enum(["inactive", "planning", "reviewing", "approved", "rejected"]).optional(),
+  enteredAt: z.string().nullable(),
+  summary: z.string().nullable(),
+});
+
+export const sessionModeEnterResultSchema = z.object({
+  sessionId: z.string(),
+  mode: sessionModeStateSchema,
+});
+
+export const sessionModeExitResultSchema = z.object({
+  sessionId: z.string(),
+  previousMode: sessionModeStateSchema,
+  discarded: z.boolean(),
+});
+
+// Permission rules schemas
+export const permissionRuleSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  toolPattern: z.string(),
+  action: z.enum(["allow", "deny", "require_approval"]),
+  conditions: z.record(z.any()).optional(),
+  priority: z.number(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const permissionRuleListResultSchema = z.object({
+  sessionId: z.string(),
+  rules: z.array(permissionRuleSchema),
+});
+
+export const permissionRuleAddResultSchema = z.object({
+  sessionId: z.string(),
+  rule: permissionRuleSchema,
+});
+
+export const permissionRuleDeleteResultSchema = z.object({
+  sessionId: z.string(),
+  ruleId: z.string(),
+  deleted: z.boolean(),
+});
+
+// MCP server schemas
+export const mcpServerSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  command: z.string(),
+  args: z.array(z.string()),
+  env: z.record(z.string()).optional(),
+  status: z.enum(["disconnected", "connecting", "connected", "error"]),
+  error: z.string().nullable(),
+  tools: z.array(z.string()).default([]),
+  resources: z.array(z.object({
+    uri: z.string(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+  })).default([]),
+});
+
+export const mcpServerListResultSchema = z.object({
+  servers: z.array(mcpServerSchema),
+});
+
+export const mcpServerConnectResultSchema = z.object({
+  server: mcpServerSchema,
+});
+
+export const mcpServerDisconnectResultSchema = z.object({
+  serverId: z.string(),
+  disconnected: z.boolean(),
+});
+
+// Agent subagent schemas
+export const subagentTaskSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  ownerId: z.string(),
+  status: z.enum(["pending", "spawning", "running", "waiting", "completed", "failed", "canceled", "timeout"]),
+  writeScope: z.enum(["shared", "isolated", "worktree"]),
+  progress: z.number(),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  completedAt: z.string().nullable(),
+  output: z.any().nullable(),
+  error: z.string().nullable(),
+});
+
+export const agentSpawnResultSchema = z.object({
+  task: subagentTaskSchema,
+});
+
+export const agentWaitResultSchema = z.object({
+  task: subagentTaskSchema,
+  timedOut: z.boolean().default(false),
+});
+
+// Run state schemas
+export const runStateSchema = z.object({
+  runId: z.string(),
+  sessionId: z.string(),
+  status: z.enum(["pending", "running", "waiting_approval", "blocked", "completed", "failed", "canceled"]),
+  startedAt: z.string(),
+  currentToolCallId: z.string().nullable(),
+  pendingApprovalToolCallIds: z.array(z.string()),
+  error: z.string().nullable(),
+  checkpoints: z.array(z.object({
+    id: z.string(),
+    createdAt: z.string(),
+    summary: z.string(),
+  })).default([]),
+});
+
+export const runStateGetResultSchema = z.object({
+  run: runStateSchema,
+});
 
 export const eventSchemas = {
   "run.extensions_loaded": z.object({
@@ -313,6 +530,51 @@ export const eventSchemas = {
   "run.canceled": z.object({ runId: z.string(), sessionId: z.string() }),
   "run.completed": z.object({ runId: z.string(), sessionId: z.string(), summary: z.string() }),
   "run.failed": z.object({ runId: z.string(), sessionId: z.string(), error: z.string() }),
+  "run.state_changed": z.object({
+    runId: z.string(),
+    sessionId: z.string(),
+    previousStatus: z.string(),
+    currentStatus: z.string(),
+  }),
+  "subagent.spawned": z.object({
+    taskId: z.string(),
+    ownerId: z.string(),
+  }),
+  "subagent.started": z.object({
+    taskId: z.string(),
+  }),
+  "subagent.completed": z.object({
+    taskId: z.string(),
+    output: z.any(),
+  }),
+  "subagent.failed": z.object({
+    taskId: z.string(),
+    error: z.string(),
+  }),
+  "plan.mode_entered": z.object({
+    sessionId: z.string(),
+    mode: z.enum(["plan", "auto"]),
+  }),
+  "plan.mode_exited": z.object({
+    sessionId: z.string(),
+    status: z.enum(["approved", "rejected"]),
+    discarded: z.boolean(),
+  }),
+  "plan.step_added": z.object({
+    sessionId: z.string(),
+    stepId: z.string(),
+    description: z.string(),
+  }),
+  "mcp.server.connected": z.object({
+    serverId: z.string(),
+  }),
+  "mcp.server.disconnected": z.object({
+    serverId: z.string(),
+  }),
+  "mcp.server.error": z.object({
+    serverId: z.string(),
+    error: z.string(),
+  }),
 } as const;
 
 export type RpcRequest = z.infer<typeof rpcRequestSchema>;
@@ -338,6 +600,38 @@ export type ToolListResult = z.infer<typeof toolListResultSchema>;
 export type ExtensionListResult = z.infer<typeof extensionListResultSchema>;
 export type ModelListResult = z.infer<typeof modelListResultSchema>;
 export type SessionHistoryListResult = z.infer<typeof sessionHistoryListResultSchema>;
+
+// Branch types
+export type SessionBranch = z.infer<typeof sessionBranchSchema>;
+export type SessionBranchListResult = z.infer<typeof sessionBranchListResultSchema>;
+export type SessionBranchCreateResult = z.infer<typeof sessionBranchCreateResultSchema>;
+export type SessionBranchSwitchResult = z.infer<typeof sessionBranchSwitchResultSchema>;
+
+// Mode types
+export type SessionModeState = z.infer<typeof sessionModeStateSchema>;
+export type SessionModeEnterResult = z.infer<typeof sessionModeEnterResultSchema>;
+export type SessionModeExitResult = z.infer<typeof sessionModeExitResultSchema>;
+
+// Permission rule types
+export type PermissionRule = z.infer<typeof permissionRuleSchema>;
+export type PermissionRuleListResult = z.infer<typeof permissionRuleListResultSchema>;
+export type PermissionRuleAddResult = z.infer<typeof permissionRuleAddResultSchema>;
+export type PermissionRuleDeleteResult = z.infer<typeof permissionRuleDeleteResultSchema>;
+
+// MCP server types
+export type McpServer = z.infer<typeof mcpServerSchema>;
+export type McpServerListResult = z.infer<typeof mcpServerListResultSchema>;
+export type McpServerConnectResult = z.infer<typeof mcpServerConnectResultSchema>;
+export type McpServerDisconnectResult = z.infer<typeof mcpServerDisconnectResultSchema>;
+
+// Subagent types
+export type SubagentTask = z.infer<typeof subagentTaskSchema>;
+export type AgentSpawnResult = z.infer<typeof agentSpawnResultSchema>;
+export type AgentWaitResult = z.infer<typeof agentWaitResultSchema>;
+
+// Run state types
+export type RunState = z.infer<typeof runStateSchema>;
+export type RunStateGetResult = z.infer<typeof runStateGetResultSchema>;
 
 export type RunnerCommandName = keyof typeof commandMap;
 export type RunnerEventName = keyof typeof eventSchemas;
