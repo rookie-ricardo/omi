@@ -23,6 +23,7 @@ import AjvModule from "ajv";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderConfig } from "@omi/core";
+import { routeProtocol } from "./model-client/protocol-router";
 
 const Ajv = (AjvModule as any).default || AjvModule;
 const ajv = new Ajv();
@@ -304,6 +305,7 @@ export function listBuiltInModels(provider: string): Model<Api>[] {
  * This function registers the provider and returns the model.
  */
 export function createModelFromConfig(config: ProviderConfig): Model<Api> {
+  const routing = routeProtocol(config);
   const providerDefaults: Record<string, { provider: string; api: Api; baseUrl: string }> = {
     anthropic: { provider: "anthropic", api: "anthropic-responses", baseUrl: "https://api.anthropic.com" },
     openai: { provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
@@ -332,6 +334,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
     }
     return {
       ...model,
+      api: routing.apiVariant as Api,
       baseUrl: config.baseUrl || model.baseUrl,
     };
   }
@@ -342,7 +345,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
       id: config.model,
       name: config.model,
       provider: "openai-compatible",
-      api: "openai-completions",
+      api: routing.apiVariant as Api,
       baseUrl: config.baseUrl || "",
       reasoning: false,
       input: ["text", "image"],
@@ -357,7 +360,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
       id: config.model,
       name: config.model,
       provider: "anthropic-compatible",
-      api: "anthropic-messages",
+      api: routing.apiVariant as Api,
       baseUrl: config.baseUrl || "",
       reasoning: false,
       input: ["text", "image"],
@@ -372,7 +375,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
     id: config.model,
     name: config.model,
     provider: config.type,
-    api: "openai-completions",
+    api: routing.apiVariant as Api,
     baseUrl: config.baseUrl || "",
     reasoning: false,
     input: ["text"],

@@ -17,6 +17,7 @@ import type {
   McpTool,
   McpToolResult,
 } from "./mcp-client";
+import { createMcpClient } from "./mcp-client";
 
 // ============================================================================
 // Types
@@ -95,7 +96,6 @@ export class McpRegistry {
       throw new Error(`MCP server ${config.id} is already registered`);
     }
 
-    const { createMcpClient } = require("./mcp-client");
     const client = createMcpClient({
       server: config,
       onStateChange: (state: McpConnectionState) => {

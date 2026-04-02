@@ -6,7 +6,9 @@ import { createModelFromConfig } from "../src/model-registry";
 
 describe("model registry", () => {
   it("builds a built-in OpenAI model from pi-ai", () => {
-    const model = createModelFromConfig(makeConfig({ type: "openai", model: "gpt-4.1-mini" }));
+    const model = createModelFromConfig(
+      makeConfig({ type: "openai", protocol: "openai-responses", model: "gpt-4.1-mini" }),
+    );
     expect(model.provider).toBe("openai");
     expect(model.api).toBe("openai-responses");
     expect(model.baseUrl).toBe("https://api.openai.com/v1");
@@ -14,7 +16,7 @@ describe("model registry", () => {
 
   it("builds a built-in OpenRouter model from pi-ai", () => {
     const model = createModelFromConfig(
-      makeConfig({ type: "openrouter", model: "openai/gpt-4o-mini" }),
+      makeConfig({ type: "openrouter", protocol: "openai-chat", model: "openai/gpt-4o-mini" }),
     );
     expect(model.provider).toBe("openrouter");
     expect(model.api).toBe("openai-completions");
@@ -24,6 +26,7 @@ describe("model registry", () => {
     const model = createModelFromConfig(
       makeConfig({
         type: "openai-compatible",
+        protocol: "openai-chat",
         model: "gpt-oss:20b",
         baseUrl: "http://localhost:11434/v1",
       }),
@@ -37,6 +40,7 @@ describe("model registry", () => {
     const model = createModelFromConfig(
       makeConfig({
         type: "anthropic-compatible",
+        protocol: "anthropic-messages",
         model: "claude-sonnet-4-20250514",
         baseUrl: "http://localhost:8080",
       }),
@@ -48,13 +52,15 @@ describe("model registry", () => {
 
   it("rejects unknown models for built-in providers", () => {
     expect(() =>
-      createModelFromConfig(makeConfig({ type: "openai", model: "does-not-exist" })),
+      createModelFromConfig(
+        makeConfig({ type: "openai", protocol: "openai-responses", model: "does-not-exist" }),
+      ),
     ).toThrowError(/Model does-not-exist is not available for provider openai/);
   });
 
   it("rejects unsupported provider types", () => {
     expect(() =>
-      createModelFromConfig(makeConfig({ type: "made-up-provider", model: "x" })),
+      createModelFromConfig(makeConfig({ type: "made-up-provider", protocol: "openai-chat", model: "x" })),
     ).toThrowError(/Unsupported provider type: made-up-provider/);
   });
 });
@@ -64,6 +70,7 @@ function makeConfig(overrides: Partial<ProviderConfig>): ProviderConfig {
     id: "provider_1",
     name: "Test Provider",
     type: "anthropic",
+    protocol: "anthropic-messages",
     baseUrl: "",
     apiKey: "test-api-key",
     model: "claude-sonnet-4-20250514",

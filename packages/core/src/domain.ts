@@ -105,6 +105,7 @@ export const providerConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
   type: z.string().min(1),
+  protocol: z.string().min(1).optional(),
   baseUrl: z.string().default(""),
   apiKey: z.string().min(1),
   model: z.string().min(1),

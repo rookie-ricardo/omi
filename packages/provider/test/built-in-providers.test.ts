@@ -282,6 +282,7 @@ describe("createModelFromConfig - 新增 Provider", () => {
 				id: "provider-1",
 				name: "Mistral Provider",
 				type: "mistral",
+				protocol: "openai-chat",
 				baseUrl: "https://api.mistral.ai",
 				apiKey: "test-api-key",
 				model: "mistral-large-latest",
@@ -292,7 +293,7 @@ describe("createModelFromConfig - 新增 Provider", () => {
 			const model = createModelFromConfig(config);
 
 			expect(model.provider).toBe("mistral");
-			expect(model.api).toBe("mistral-conversations");
+			expect(model.api).toBe("openai-completions");
 			expect(model.baseUrl).toBe("https://api.mistral.ai");
 		});
 	});
@@ -303,6 +304,7 @@ describe("createModelFromConfig - 新增 Provider", () => {
 				id: "provider-1",
 				name: "xAI Provider",
 				type: "xai",
+				protocol: "openai-chat",
 				baseUrl: "https://api.x.ai",
 				apiKey: "test-api-key",
 				model: "grok-beta",
@@ -324,6 +326,7 @@ describe("createModelFromConfig - 新增 Provider", () => {
 				id: "provider-1",
 				name: "Groq Provider",
 				type: "groq",
+				protocol: "openai-chat",
 				baseUrl: "https://api.groq.com/openai/v1",
 				apiKey: "test-api-key",
 				model: "llama-3.3-70b-versatile",
@@ -360,6 +363,7 @@ describe("边界情况", () => {
 			id: "provider-1",
 			name: "Unsupported Provider",
 			type: "unsupported" as any,
+			protocol: "openai-chat",
 			baseUrl: "https://api.example.com",
 			apiKey: "test-api-key",
 			model: "model-1",
@@ -375,6 +379,7 @@ describe("边界情况", () => {
 			id: "provider-1",
 			name: "OpenAI Compatible",
 			type: "openai-compatible",
+			protocol: "openai-chat",
 			baseUrl: "https://api.example.com/v1",
 			apiKey: "test-api-key",
 			model: "custom-model",
@@ -394,6 +399,7 @@ describe("边界情况", () => {
 			id: "provider-1",
 			name: "Anthropic Compatible",
 			type: "anthropic-compatible",
+			protocol: "anthropic-messages",
 			baseUrl: "https://api.example.com",
 			apiKey: "test-api-key",
 			model: "custom-model",

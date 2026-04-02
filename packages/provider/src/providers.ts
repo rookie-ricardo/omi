@@ -116,6 +116,9 @@ export class PiAiProvider implements ProviderAdapter {
     // (onToolRequested -> before approval, onToolStarted -> after approval)
     const normalizedCallbacks: ModelClientCallbacks = {
       onTextDelta: input.onTextDelta,
+      onUpdate: (toolCallId, toolName, delta) => {
+        input.onToolUpdate?.(toolCallId, delta);
+      },
       onToolCallStart: (toolCallId, toolName, toolInput) => {
         toolCalls.push({ toolCallId, toolName, phase: "requested" });
         input.onToolStarted?.(toolCallId, toolName);
@@ -193,6 +196,9 @@ export class PiAiProvider implements ProviderAdapter {
   ): ModelClientCallbacks {
     return {
       onTextDelta: input.onTextDelta,
+      onUpdate: (toolCallId, toolName, delta) => {
+        input.onToolUpdate?.(toolCallId, delta);
+      },
       onToolCallStart: (toolCallId, toolName, toolInput) => {
         toolCalls.push({ toolCallId, toolName, phase: "requested" });
         input.onToolStarted?.(toolCallId, toolName);

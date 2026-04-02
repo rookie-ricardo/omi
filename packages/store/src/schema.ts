@@ -117,6 +117,7 @@ export const providerConfigsTable = sqliteTable("provider_configs", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   type: text("type").notNull(),
+  protocol: text("protocol").notNull().default(""),
   baseUrl: text("base_url").notNull(),
   apiKey: text("api_key").notNull(),
   model: text("model").notNull(),

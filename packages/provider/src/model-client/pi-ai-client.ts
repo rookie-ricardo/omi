@@ -46,7 +46,7 @@ interface RuntimeToolCall {
  * internally by pi-ai, so the query loop remains protocol-agnostic.
  *
  * Key design principles:
- * - All protocol routing is based on providerConfig.type (no global defaults)
+ * - All protocol routing is based on providerConfig.protocol when present
  * - Events are normalized to ModelStreamEvent format
  * - No direct use of openai or @anthropic-ai/sdk
  * - Protocol-specific behavior is encapsulated in pi-ai
@@ -72,7 +72,7 @@ export class PiAiModelClient implements ModelClient {
       toolExecutionMode,
     } = input;
 
-    // Route protocol for logging/observability
+    // Validate protocol routing contract before model execution.
     routeProtocol(providerConfig);
 
     const toolCalls: RuntimeToolCall[] = [];
@@ -160,7 +160,7 @@ export class PiAiModelClient implements ModelClient {
       for (const normalized of normalizedEvents) {
         this.emitNormalizedEvent(normalized, callbacks);
 
-        if (normalized.type === "text_delta") {
+        if (normalized.type === "assistant_delta") {
           latestAssistantText += normalized.delta;
         }
         if (normalized.type === "complete") {
@@ -233,7 +233,7 @@ export class PiAiModelClient implements ModelClient {
 
   private emitNormalizedEvent(event: ModelStreamEvent, callbacks: ModelClientCallbacks): void {
     switch (event.type) {
-      case "text_delta":
+      case "assistant_delta":
         callbacks.onTextDelta?.(event.delta);
         break;
       case "tool_call_start":
@@ -244,6 +244,9 @@ export class PiAiModelClient implements ModelClient {
         break;
       case "tool_result":
         callbacks.onToolResult?.(event.toolCallId, event.toolName, event.output, event.isError);
+        break;
+      case "update":
+        callbacks.onUpdate?.(event.toolCallId, event.toolName, event.delta, event.partialResult);
         break;
       case "usage":
         callbacks.onUsage?.(event.usage);

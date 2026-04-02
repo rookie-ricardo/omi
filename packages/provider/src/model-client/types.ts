@@ -72,7 +72,7 @@ export type ModelStopReason =
  * Text delta event (streaming token output).
  */
 export interface ModelTextDeltaEvent {
-  type: "text_delta";
+  type: "assistant_delta";
   delta: string;
 }
 
@@ -106,6 +106,17 @@ export interface ModelToolResultEvent {
   toolName: string;
   output: Record<string, unknown>;
   isError: boolean;
+}
+
+/**
+ * Streamed update event for tool execution progress.
+ */
+export interface ModelUpdateEvent {
+  type: "update";
+  toolCallId: string;
+  toolName: string;
+  delta: string;
+  partialResult: unknown;
 }
 
 /**
@@ -154,6 +165,7 @@ export type ModelStreamEvent =
   | ModelToolCallStartEvent
   | ModelToolCallEndEvent
   | ModelToolResultEvent
+  | ModelUpdateEvent
   | ModelUsageEvent
   | ModelErrorEvent
   | ModelCompleteEvent
@@ -223,6 +235,7 @@ export interface ModelClientCallbacks {
   onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void;
   onToolCallEnd?: (toolCallId: string, toolName: string, result: Record<string, unknown>, isError: boolean) => void;
   onToolResult?: (toolCallId: string, toolName: string, output: Record<string, unknown>, isError: boolean) => void;
+  onUpdate?: (toolCallId: string, toolName: string, delta: string, partialResult: unknown) => void;
   onUsage?: (usage: ModelUsage) => void;
   onError?: (error: string, errorClass: ModelErrorClass, recoverable: boolean) => void;
   onRequestStart?: (runId: string, sessionId: string) => void;
@@ -245,32 +258,25 @@ export interface ProtocolDetectionResult {
  * This is a pure function that determines routing based on provider metadata.
  */
 export function detectProtocol(providerConfig: ProviderConfig): ProtocolDetectionResult {
-  const type = providerConfig.type.toLowerCase();
-
-  // Anthropic family -> anthropic-messages protocol
-  if (type === "anthropic" || type === "anthropic-compatible") {
-    return { protocol: "anthropic-messages", reasoning: `${type} -> anthropic-messages` };
+  if (providerConfig.protocol === "anthropic-messages") {
+    return {
+      protocol: "anthropic-messages",
+      reasoning: "providerConfig.protocol -> anthropic-messages",
+    };
   }
-
-  // OpenAI family -> openai-responses protocol
-  if (type === "openai" || type === "openai-compatible") {
-    return { protocol: "openai-responses", reasoning: `${type} -> openai-responses` };
+  if (providerConfig.protocol === "openai-responses") {
+    return {
+      protocol: "openai-responses",
+      reasoning: "providerConfig.protocol -> openai-responses",
+    };
   }
-
-  // Third-party providers that use OpenAI-compatible APIs
-  if (
-    type === "openrouter" ||
-    type === "groq" ||
-    type === "cerebras" ||
-    type === "mistral" ||
-    type === "xai" ||
-    type === "azure" ||
-    type === "bedrock" ||
-    type === "google"
-  ) {
-    return { protocol: "openai-chat", reasoning: `${type} -> openai-chat` };
+  if (providerConfig.protocol === "openai-chat") {
+    return {
+      protocol: "openai-chat",
+      reasoning: "providerConfig.protocol -> openai-chat",
+    };
   }
-
-  // Default: openai-chat for unknown providers
-  return { protocol: "openai-chat", reasoning: `unknown provider ${type}, defaulting to openai-chat` };
+  throw new Error(
+    `providerConfig.protocol must be one of anthropic-messages | openai-responses | openai-chat`,
+  );
 }

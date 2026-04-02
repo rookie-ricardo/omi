@@ -52,7 +52,7 @@ describe("database migrations", () => {
       expect.arrayContaining(["prompt", "source_run_id", "recovery_mode"]),
     );
     expect(tableColumns(sqlite, "provider_configs")).toEqual(
-      expect.arrayContaining(["api_key"]),
+      expect.arrayContaining(["protocol", "api_key"]),
     );
     expect(migrationIds(sqlite)).toEqual(
       expect.arrayContaining([
@@ -221,6 +221,7 @@ function createFreshSchema(sqlite: BetterSqlite3.Database): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
+      protocol TEXT NOT NULL DEFAULT '',
       base_url TEXT NOT NULL,
       api_key TEXT NOT NULL,
       model TEXT NOT NULL,

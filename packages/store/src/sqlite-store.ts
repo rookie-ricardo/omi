@@ -172,6 +172,7 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       type TEXT NOT NULL,
+      protocol TEXT NOT NULL DEFAULT '',
       base_url TEXT NOT NULL,
       api_key TEXT NOT NULL,
       model TEXT NOT NULL,
@@ -956,6 +957,12 @@ const DATABASE_MIGRATIONS: DatabaseMigration[] = [
       ensureColumnExists(
         sqlite,
         "provider_configs",
+        "protocol",
+        "ALTER TABLE provider_configs ADD COLUMN protocol TEXT NOT NULL DEFAULT ''",
+      );
+      ensureColumnExists(
+        sqlite,
+        "provider_configs",
         "api_key",
         "ALTER TABLE provider_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''",
       );
@@ -1155,16 +1162,28 @@ export function validateSchemaConsistency(sqlite: MigrationDatabase): string[] {
 }
 
 function serializeProviderConfig(config: ProviderConfig): ProviderConfig {
+  if (!config.protocol || config.protocol.trim().length === 0) {
+    throw new Error(
+      "providerConfig.protocol is required and must be one of anthropic-messages | openai-responses | openai-chat",
+    );
+  }
   return {
     ...config,
+    protocol: config.protocol,
     apiKey: weakEncryptProviderApiKey(config.apiKey),
   };
 }
 
 function parseStoredProviderConfig(row: unknown): ProviderConfig {
   const parsed = providerConfigSchema.parse(row);
+  if (!parsed.protocol || parsed.protocol.trim().length === 0) {
+    throw new Error(
+      "Stored providerConfig.protocol is required and must be one of anthropic-messages | openai-responses | openai-chat",
+    );
+  }
   return {
     ...parsed,
+    protocol: parsed.protocol,
     apiKey: weakDecryptStoredProviderApiKey(parsed.apiKey),
   };
 }

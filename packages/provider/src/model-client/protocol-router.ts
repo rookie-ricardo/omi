@@ -5,7 +5,7 @@ import type { ProtocolType } from "./types";
  * Protocol router configuration.
  * Maps protocol + model to pi-ai API configuration.
  *
- * IMPORTANT: All routing decisions are based solely on providerConfig.type and model.
+ * IMPORTANT: All routing decisions are based on explicit providerConfig.protocol.
  * No global defaults or implicit priority rules.
  */
 export interface ProtocolRouterConfig {
@@ -22,21 +22,9 @@ export interface ProtocolRouterConfig {
  * Known API variants per protocol.
  */
 const PROTOCOL_API_VARIANTS: Record<ProtocolType, string[]> = {
-  "anthropic-messages": [
-    "anthropic-messages",
-    "anthropic-responses",
-  ],
-  "openai-responses": [
-    "openai-responses",
-  ],
-  "openai-chat": [
-    "openai-completions",
-    "openai-chat",
-    "google-generative-ai",
-    "bedrock-converse-stream",
-    "azure-openai-responses",
-    "mistral-conversations",
-  ],
+  "anthropic-messages": ["anthropic-messages"],
+  "openai-responses": ["openai-responses"],
+  "openai-chat": ["openai-completions"],
 };
 
 /**
@@ -81,7 +69,13 @@ const API_CAPABILITIES: Record<string, {
     supportsPromptCaching: true,
     maxConcurrentTools: 128,
   },
-  // Third-party providers
+  "mistral-conversations": {
+    supportsToolLoop: true,
+    supportsUsageInStreaming: false,
+    supportsThinking: false,
+    supportsPromptCaching: false,
+    maxConcurrentTools: 1,
+  },
   "google-generative-ai": {
     supportsToolLoop: true,
     supportsUsageInStreaming: false,
@@ -103,39 +97,21 @@ const API_CAPABILITIES: Record<string, {
     supportsPromptCaching: true,
     maxConcurrentTools: 5,
   },
-  "mistral-conversations": {
-    supportsToolLoop: true,
-    supportsUsageInStreaming: false,
-    supportsThinking: false,
-    supportsPromptCaching: false,
-    maxConcurrentTools: 1,
-  },
 };
 
 /**
  * Resolve the API variant for a provider configuration.
- * The API variant is determined by providerConfig.type + model compatibility.
+ * The API variant is determined by the configured protocol.
  */
 export function resolveApiVariant(providerConfig: ProviderConfig): string {
-  const type = providerConfig.type.toLowerCase();
-
-  // Explicit API mapping based on provider type
-  const explicitMapping: Record<string, string> = {
-    anthropic: "anthropic-messages",
-    "anthropic-compatible": "anthropic-messages",
-    openai: "openai-responses",
-    "openai-compatible": "openai-responses",
-    openrouter: "openai-completions",
-    groq: "openai-completions",
-    cerebras: "openai-completions",
-    mistral: "mistral-conversations",
-    xai: "openai-completions",
-    azure: "azure-openai-responses",
-    bedrock: "bedrock-converse-stream",
-    google: "google-generative-ai",
-  };
-
-  return explicitMapping[type] ?? "openai-completions";
+  switch (resolveProtocol(providerConfig)) {
+    case "anthropic-messages":
+      return "anthropic-messages";
+    case "openai-responses":
+      return "openai-responses";
+    case "openai-chat":
+      return "openai-completions";
+  }
 }
 
 /**
@@ -155,7 +131,7 @@ export function getApiCapabilities(apiVariant: string): {
  * Get the supported API variants for a protocol type.
  */
 export function getSupportedApiVariants(protocol: ProtocolType): string[] {
-  return PROTOCOL_API_VARIANTS[protocol];
+  return [...PROTOCOL_API_VARIANTS[protocol]];
 }
 
 /**
@@ -163,17 +139,7 @@ export function getSupportedApiVariants(protocol: ProtocolType): string[] {
  * Returns the full protocol routing configuration.
  */
 export function routeProtocol(providerConfig: ProviderConfig): ProtocolRouterConfig {
-  const type = providerConfig.type.toLowerCase();
-
-  // Determine protocol based on provider type
-  let protocol: ProtocolType;
-  if (type === "anthropic" || type === "anthropic-compatible") {
-    protocol = "anthropic-messages";
-  } else if (type === "openai" || type === "openai-compatible") {
-    protocol = "openai-responses";
-  } else {
-    protocol = "openai-chat";
-  }
+  const protocol = resolveProtocol(providerConfig);
 
   const apiVariant = resolveApiVariant(providerConfig);
   const capabilities = getApiCapabilities(apiVariant);
@@ -194,4 +160,19 @@ export function protocolSupportsFeature(
 ): boolean {
   const routing = routeProtocol(providerConfig);
   return Boolean(routing[feature]);
+}
+
+function resolveProtocol(providerConfig: ProviderConfig): ProtocolType {
+  if (providerConfig.protocol === "anthropic-messages") {
+    return "anthropic-messages";
+  }
+  if (providerConfig.protocol === "openai-responses") {
+    return "openai-responses";
+  }
+  if (providerConfig.protocol === "openai-chat") {
+    return "openai-chat";
+  }
+  throw new Error(
+    `providerConfig.protocol must be one of anthropic-messages | openai-responses | openai-chat`,
+  );
 }

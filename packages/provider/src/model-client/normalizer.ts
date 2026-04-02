@@ -23,7 +23,7 @@ export function normalizeEvent(
   // Text delta
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     events.push({
-      type: "text_delta",
+      type: "assistant_delta",
       delta: event.assistantMessageEvent.delta,
     });
     return events;
@@ -36,6 +36,24 @@ export function normalizeEvent(
       toolCallId: context.currentToolCallId ?? generateToolCallId(context),
       toolName: event.toolName,
       input: (event as Record<string, unknown>).args as Record<string, unknown> ?? {},
+    });
+    return events;
+  }
+
+  if (event.type === "tool_execution_update") {
+    const toolCallId = findToolCallId(context, event.toolName);
+    const partialResult = (event as Record<string, unknown>).partialResult;
+    const delta =
+      typeof partialResult === "string"
+        ? partialResult
+        : JSON.stringify(partialResult ?? {});
+
+    events.push({
+      type: "update",
+      toolCallId,
+      toolName: event.toolName,
+      delta,
+      partialResult,
     });
     return events;
   }
