@@ -16,3 +16,12 @@ export * from "./multi-agent";
 // Re-export plan-mode and worktree-mode from modes
 export * from "./modes/plan-mode";
 export * from "./modes/worktree-mode";
+
+// Telemetry and Audit Log
+export * from "./telemetry";
+export * from "./audit-log";
+
+// Observability
+export * from "./observability";
+export * from "./logger";
+export * from "./bash-observability";

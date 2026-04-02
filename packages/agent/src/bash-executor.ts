@@ -13,6 +13,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import stripAnsi from "strip-ansi";
 import { DEFAULT_MAX_BYTES, truncateTail } from "@omi/tools";
+import { getLogger } from "./logger";
+
+const logger = getLogger("bash-executor");
 
 // ============================================================================
 // Shell Utilities (from Pi-Mono shell.ts)
@@ -200,8 +203,12 @@ export function createLocalBashOperations(): BashOperations {
 		exec: (command, cwd, { onData, signal, timeout, env }) => {
 			return new Promise((resolve, reject) => {
 				const { shell, args } = getShellConfig();
+				const truncatedCommand = command.length > 50 ? `${command.slice(0, 50)}...` : command;
+
+				logger.debug("Shell spawn", { shell, cwd, command: truncatedCommand, hasTimeout: !!timeout });
 
 				if (!existsSync(cwd)) {
+					logger.error("Working directory does not exist", { cwd });
 					reject(new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`));
 					return;
 				}
@@ -214,12 +221,14 @@ export function createLocalBashOperations(): BashOperations {
 				});
 
 				let timedOut = false;
+				const spawnTime = Date.now();
 
 				// Set timeout if provided
 				let timeoutHandle: NodeJS.Timeout | undefined;
 				if (timeout !== undefined && timeout > 0) {
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
+						logger.warn("Bash command timed out", { command: truncatedCommand, timeout });
 						if (child.pid) {
 							killProcessTree(child.pid);
 						}
@@ -238,11 +247,13 @@ export function createLocalBashOperations(): BashOperations {
 				child.on("error", (err) => {
 					if (timeoutHandle) clearTimeout(timeoutHandle);
 					if (signal) signal.removeEventListener("abort", onAbort);
+					logger.errorWithError("Shell spawn error", err, { command: truncatedCommand, shell });
 					reject(err);
 				});
 
 				// Handle abort signal - kill entire process tree
 				const onAbort = () => {
+					logger.debug("Bash abort signal received", { command: truncatedCommand, pid: child.pid });
 					if (child.pid) {
 						killProcessTree(child.pid);
 					}
@@ -262,6 +273,7 @@ export function createLocalBashOperations(): BashOperations {
 					if (signal) signal.removeEventListener("abort", onAbort);
 
 					if (signal?.aborted) {
+						logger.debug("Bash process closed after abort", { command: truncatedCommand });
 						reject(new Error("aborted"));
 						return;
 					}
@@ -270,6 +282,12 @@ export function createLocalBashOperations(): BashOperations {
 						reject(new Error(`timeout:${timeout}`));
 						return;
 					}
+
+					logger.debug("Bash process exited", {
+						command: truncatedCommand,
+						exitCode: code,
+						durationMs: Date.now() - spawnTime,
+					});
 
 					resolve({ exitCode: code });
 				});
@@ -330,6 +348,22 @@ export async function executeBashWithOperations(
 	operations: BashOperations,
 	options?: BashExecutorOptions,
 ): Promise<BashResult> {
+	const startTime = Date.now();
+	const truncatedCommand = command.length > 100 ? `${command.slice(0, 100)}...` : command;
+
+	logger.debug("Bash execution started", { command: truncatedCommand, cwd });
+
+	// Check for cancellation before starting
+	if (options?.signal?.aborted) {
+		logger.info("Bash execution cancelled before start", { command: truncatedCommand });
+		return {
+			output: "",
+			exitCode: undefined,
+			cancelled: true,
+			truncated: false,
+		};
+	}
+
 	const outputChunks: string[] = [];
 	let outputBytes = 0;
 	const maxOutputBytes = DEFAULT_MAX_BYTES * 2;
@@ -354,6 +388,7 @@ export async function executeBashWithOperations(
 			for (const chunk of outputChunks) {
 				tempFileStream.write(chunk);
 			}
+			logger.debug("Bash output written to temp file", { tempFilePath, threshold: DEFAULT_MAX_BYTES });
 		}
 
 		if (tempFileStream) {
@@ -387,6 +422,25 @@ export async function executeBashWithOperations(
 		const fullOutput = outputChunks.join("");
 		const truncationResult = truncateTail(fullOutput);
 		const cancelled = options?.signal?.aborted ?? false;
+		const durationMs = Date.now() - startTime;
+
+		if (cancelled) {
+			logger.info("Bash execution cancelled", { command: truncatedCommand, durationMs });
+		} else if (result.exitCode !== 0) {
+			logger.warn("Bash execution completed with non-zero exit code", {
+				command: truncatedCommand,
+				exitCode: result.exitCode,
+				durationMs,
+				outputBytes: totalBytes,
+			});
+		} else {
+			logger.debug("Bash execution completed successfully", {
+				command: truncatedCommand,
+				exitCode: result.exitCode,
+				durationMs,
+				outputBytes: totalBytes,
+			});
+		}
 
 		return {
 			output: truncationResult.truncated ? truncationResult.content : fullOutput,
@@ -400,8 +454,11 @@ export async function executeBashWithOperations(
 			tempFileStream.end();
 		}
 
+		const durationMs = Date.now() - startTime;
+
 		// Check if it was an abort
 		if (options?.signal?.aborted) {
+			logger.info("Bash execution aborted", { command: truncatedCommand, durationMs });
 			const fullOutput = outputChunks.join("");
 			const truncationResult = truncateTail(fullOutput);
 			return {
@@ -412,6 +469,12 @@ export async function executeBashWithOperations(
 				fullOutputPath: tempFilePath,
 			};
 		}
+
+		logger.errorWithError("Bash execution failed", err, {
+			command: truncatedCommand,
+			durationMs,
+			outputBytes: totalBytes,
+		});
 
 		throw err;
 	}

@@ -12,6 +12,9 @@ import {
   type SessionRuntimeMessageEnvelope,
 } from "./messages";
 import { ContextPipelineCoordinator } from "./context-pipeline";
+import { getLogger } from "./logger";
+
+const logger = getLogger("memory:compaction");
 
 export type CompactionMode = "manual" | "threshold" | "overflow";
 
@@ -1031,6 +1034,7 @@ export async function compact(
   customInstructions?: string,
   signal?: AbortSignal,
 ): Promise<CompactionResult> {
+  const startTime = Date.now();
   const {
     firstKeptEntryId,
     messagesToSummarize,
@@ -1042,49 +1046,75 @@ export async function compact(
     settings,
   } = preparation;
 
-  // Generate summaries (can be parallel if both needed) and merge into one
-  let summary: string;
-
-  if (isSplitTurn && turnPrefixMessages.length > 0) {
-    // Generate both summaries in parallel
-    const [historyResult, turnPrefixResult] = await Promise.all([
-      messagesToSummarize.length > 0
-        ? generateSummary(
-            messagesToSummarize,
-            model,
-            settings.reserveTokens,
-            apiKey,
-            signal,
-            customInstructions,
-            previousSummary,
-          )
-        : Promise.resolve("No prior history."),
-      generateSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal),
-    ]);
-    // Merge into single summary
-    summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
-  } else {
-    // Just generate history summary
-    summary = await generateSummary(
-      messagesToSummarize,
-      model,
-      settings.reserveTokens,
-      apiKey,
-      signal,
-      customInstructions,
-      previousSummary,
-    );
-  }
-
-  // Compute file lists and append to summary
-  const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-  summary += formatFileOperations(readFiles, modifiedFiles);
-
-  return {
-    summary,
-    firstKeptEntryId,
+  logger.debug("Compaction started", {
+    isSplitTurn,
+    messagesToSummarize: messagesToSummarize.length,
+    turnPrefixMessages: turnPrefixMessages.length,
     tokensBefore,
-    details: { readFiles, modifiedFiles } as CompactionDetails,
-  };
+  });
+
+  try {
+    // Generate summaries (can be parallel if both needed) and merge into one
+    let summary: string;
+
+    if (isSplitTurn && turnPrefixMessages.length > 0) {
+      // Generate both summaries in parallel
+      const [historyResult, turnPrefixResult] = await Promise.all([
+        messagesToSummarize.length > 0
+          ? generateSummary(
+              messagesToSummarize,
+              model,
+              settings.reserveTokens,
+              apiKey,
+              signal,
+              customInstructions,
+              previousSummary,
+            )
+          : Promise.resolve("No prior history."),
+        generateSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal),
+      ]);
+      // Merge into single summary
+      summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
+    } else {
+      // Just generate history summary
+      summary = await generateSummary(
+        messagesToSummarize,
+        model,
+        settings.reserveTokens,
+        apiKey,
+        signal,
+        customInstructions,
+        previousSummary,
+      );
+    }
+
+    // Compute file lists and append to summary
+    const { readFiles, modifiedFiles } = computeFileLists(fileOps);
+    summary += formatFileOperations(readFiles, modifiedFiles);
+
+    const durationMs = Date.now() - startTime;
+    logger.info("Compaction completed", {
+      durationMs,
+      tokensBefore,
+      firstKeptEntryId,
+      readFiles: readFiles.length,
+      modifiedFiles: modifiedFiles.length,
+    });
+
+    return {
+      summary,
+      firstKeptEntryId,
+      tokensBefore,
+      details: { readFiles, modifiedFiles } as CompactionDetails,
+    };
+  } catch (error) {
+    const durationMs = Date.now() - startTime;
+    logger.errorWithError("Compaction failed", error, {
+      durationMs,
+      messagesToSummarize: messagesToSummarize.length,
+      isSplitTurn,
+    });
+    throw error;
+  }
 }
 

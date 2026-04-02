@@ -5,6 +5,29 @@
  * Implements the connection state machine: connecting/connected/degraded/disconnected/needs_auth
  */
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  SSEClientTransport,
+  type SSEClientTransportOptions,
+} from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  StreamableHTTPClientTransport,
+  type StreamableHTTPClientTransportOptions,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import {
+  type JSONRPCMessage,
+  ListResourcesResultSchema,
+  ListToolsResultSchema,
+  type ListToolsResult,
+  type ListResourcesResult,
+  type ListPromptsResult,
+  ListPromptsResultSchema,
+  type McpError,
+  ErrorCode,
+} from "@modelcontextprotocol/sdk/types.js";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -39,6 +62,8 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   /** Request headers for http/sse/websocket transports */
   headers?: Record<string, string>;
+  /** Auth token for websocket transports */
+  authToken?: string;
   /** Whether to enable automatic reconnection */
   autoReconnect?: boolean;
   /** Reconnection delay in milliseconds */
@@ -54,6 +79,12 @@ export interface McpTool {
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    openWorldHint?: boolean;
+  };
 }
 
 /**
@@ -61,7 +92,7 @@ export interface McpTool {
  */
 export interface McpResource {
   uri: string;
-  name: string;
+  name?: string;
   description?: string;
   mimeType?: string;
 }
@@ -82,6 +113,20 @@ export interface McpResourceContent {
 export interface McpToolResult {
   content: McpResourceContent[];
   isError?: boolean;
+  _meta?: Record<string, unknown>;
+  structuredContent?: unknown;
+}
+
+/**
+ * MCP server capabilities.
+ */
+export interface McpCapabilities {
+  tools?: Record<string, unknown>;
+  resources?: {
+    subscribe?: boolean;
+    listChanged?: boolean;
+  };
+  prompts?: Record<string, unknown>;
 }
 
 /**
@@ -100,6 +145,10 @@ export interface McpServerInfo {
 export interface McpClientOptions {
   /** Server configuration */
   server: McpServerConfig;
+  /** Client display name for MCP protocol */
+  clientName?: string;
+  /** Client version for MCP protocol */
+  clientVersion?: string;
   /** On state change callback */
   onStateChange?: (state: McpConnectionState, prevState: McpConnectionState) => void;
   /** On error callback */
@@ -122,6 +171,8 @@ export interface McpClient {
   getState(): McpConnectionState;
   /** Get server info */
   getServerInfo(): McpServerInfo | null;
+  /** Get server capabilities */
+  getCapabilities(): McpCapabilities | null;
   /** Get available tools */
   getTools(): McpTool[];
   /** Get available resources */
@@ -141,69 +192,31 @@ export interface McpClient {
 }
 
 // ============================================================================
-// MCP Client Events
-// ============================================================================
-
-export interface McpClientConnectedEvent {
-  type: "mcp.connected";
-  serverId: string;
-  serverInfo: McpServerInfo;
-}
-
-export interface McpClientDisconnectedEvent {
-  type: "mcp.disconnected";
-  serverId: string;
-  reason?: string;
-}
-
-export interface McpClientErrorEvent {
-  type: "mcp.error";
-  serverId: string;
-  error: string;
-}
-
-export interface McpClientToolsChangedEvent {
-  type: "mcp.tools_changed";
-  serverId: string;
-  tools: McpTool[];
-}
-
-export interface McpClientResourcesChangedEvent {
-  type: "mcp.resources_changed";
-  serverId: string;
-  resources: McpResource[];
-}
-
-export type McpClientEvent =
-  | McpClientConnectedEvent
-  | McpClientDisconnectedEvent
-  | McpClientErrorEvent
-  | McpClientToolsChangedEvent
-  | McpClientResourcesChangedEvent;
-
-// ============================================================================
 // MCP Client Implementation
 // ============================================================================
 
 /**
- * MCP Client implementation using the JSON-RPC protocol over stdio.
+ * MCP Client implementation supporting multiple transports.
  *
- * This is a simplified implementation that wraps the MCP protocol.
- * For production use, consider using @modelcontextprotocol/sdk.
+ * Supports:
+ * - stdio: Local subprocess communication
+ * - http: Streamable HTTP transport
+ * - sse: Server-Sent Events transport
+ * - websocket: WebSocket transport
  */
-export class StdioMcpClient implements McpClient {
+export class McpClientImpl implements McpClient {
   private state: McpConnectionState = "disconnected";
+  private client: Client | null = null;
+  private transport: Transport | null = null;
   private serverInfo: McpServerInfo | null = null;
+  private capabilities: McpCapabilities | null = null;
   private tools: McpTool[] = [];
   private resources: McpResource[] = [];
-  private process: ReturnType<typeof import("child_process").spawn> | null = null;
-  private requestId = 0;
-  private pendingRequests = new Map<string, {
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
+  private instructions: string | null = null;
+
   private readonly config: McpServerConfig;
+  private readonly clientName: string;
+  private readonly clientVersion: string;
   private readonly onStateChange?: (state: McpConnectionState, prevState: McpConnectionState) => void;
   private readonly onError?: (error: Error, serverId: string) => void;
   private readonly onToolsChanged?: (tools: McpTool[], serverId: string) => void;
@@ -211,6 +224,8 @@ export class StdioMcpClient implements McpClient {
 
   constructor(options: McpClientOptions) {
     this.config = options.server;
+    this.clientName = options.clientName ?? "omi-provider";
+    this.clientVersion = options.clientVersion ?? "0.1.0";
     this.onStateChange = options.onStateChange;
     this.onError = options.onError;
     this.onToolsChanged = options.onToolsChanged;
@@ -223,6 +238,10 @@ export class StdioMcpClient implements McpClient {
 
   getServerInfo(): McpServerInfo | null {
     return this.serverInfo;
+  }
+
+  getCapabilities(): McpCapabilities | null {
+    return this.capabilities;
   }
 
   getTools(): McpTool[] {
@@ -242,148 +261,170 @@ export class StdioMcpClient implements McpClient {
     this.setState("connecting");
 
     try {
-      // Dynamic import to avoid requiring child_process on non-node platforms
-      const { spawn } = await import("child_process");
+      // Create transport based on type
+      this.transport = await this.createTransport();
 
-      if (!this.config.command) {
-        throw new Error(`MCP server ${this.config.id}: command is required for stdio transport`);
-      }
-
-      this.process = spawn(this.config.command, this.config.args ?? [], {
-        env: { ...process.env, ...this.config.env },
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let buffer = "";
-
-      this.process.stdout?.on("data", (data: Buffer) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (line.trim()) {
-            this.handleMessage(line);
-          }
-        }
-      });
-
-      this.process.stderr?.on("data", (data: Buffer) => {
-        console.error(`[MCP ${this.config.id}] stderr:`, data.toString());
-      });
-
-      this.process.on("error", (error) => {
-        this.handleError(error as Error);
-      });
-
-      this.process.on("exit", (code) => {
-        if (code !== 0) {
-          this.handleError(new Error(`MCP server ${this.config.id} exited with code ${code}`));
-        }
-        this.setState("disconnected");
-      });
-
-      // Send initialize request
-      const result = await this.sendRequest<{
-        serverInfo?: { name?: string; version?: string };
-        protocolVersion?: string;
-        capabilities?: { tools?: unknown; resources?: unknown };
-      }>("initialize", {
-        protocolVersion: "2024-11-05",
-        capabilities: {
-          tools: {},
-          resources: {},
+      // Create MCP client
+      this.client = new Client(
+        {
+          name: this.clientName,
+          version: this.clientVersion,
         },
-        clientInfo: {
-          name: "omi-provider",
-          version: "0.1.0",
-        },
-      });
+        {
+          capabilities: {
+            // Enable roots capability
+            roots: {
+              listChanged: true,
+            },
+          },
+        }
+      );
 
-      this.serverInfo = {
-        id: this.config.id,
-        name: result.serverInfo?.name ?? this.config.name,
-        version: result.serverInfo?.version,
-        protocolVersion: result.protocolVersion,
+      // Set up roots handler
+      this.client.setRequestHandler(
+        // @ts-expect-error - ListRootsRequestSchema type mismatch
+        { method: "roots/list" },
+        async () => {
+          return { roots: [] };
+        }
+      );
+
+      // Set up notification handlers
+      this.client.onerror = (error: Error) => {
+        this.handleError(error);
       };
 
-      // Update capabilities based on server response
-      if (!result.capabilities?.tools) {
-        this.tools = [];
-      }
-      if (!result.capabilities?.resources) {
-        this.resources = [];
-      }
+      // Connect with timeout
+      const timeoutMs = this.config.timeoutMs ?? 30000;
+      await Promise.race([
+        this.client.connect(this.transport),
+        new Promise<void>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Connection timed out after ${timeoutMs}ms`)),
+            timeoutMs
+          )
+        ),
+      ]);
 
-      // Send initialized notification
-      await this.sendNotification("initialized", {});
+      // Get server capabilities and info
+      this.capabilities = this.client.getServerCapabilities() ?? {};
+      this.serverInfo = {
+        id: this.config.id,
+        name: this.config.name,
+        version: this.client.getServerVersion()?.version,
+      };
 
-      // Fetch tools and resources
+      // Set up notification handlers for list changes
+      this.setupNotificationHandlers();
+
+      // Fetch initial tools and resources
       await this.refreshTools();
       await this.refreshResources();
 
       this.setState("connected");
     } catch (error) {
       this.setState("disconnected");
-      this.handleError(error as Error);
+      this.handleError(error instanceof Error ? error : new Error(String(error)));
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
-    if (this.process) {
-      this.process.kill();
-      this.process = null;
+    try {
+      if (this.client) {
+        await this.client.close();
+      }
+      if (this.transport) {
+        await this.transport.close();
+      }
+    } catch (error) {
+      console.error(`[MCP ${this.config.id}] Error during disconnect:`, error);
+    } finally {
+      this.client = null;
+      this.transport = null;
+      this.setState("disconnected");
     }
-    this.setState("disconnected");
-    this.clearPendingRequests();
   }
 
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
-    if (this.state !== "connected") {
+    if (this.state !== "connected" || !this.client) {
       throw new Error(`MCP server ${this.config.id}: not connected`);
     }
 
-    const result = await this.sendRequest<{ content?: McpResourceContent[]; isError?: boolean }>("tools/call", {
-      name,
-      arguments: args,
-    });
+    try {
+      const result = await this.client.request(
+        {
+          method: "tools/call",
+          params: {
+            name,
+            arguments: args,
+          },
+        },
+        // @ts-expect-error - CallToolResult schema type
+        { method: "tools/call" }
+      );
 
-    return {
-      content: result.content ?? [],
-      isError: result.isError,
-    };
+      return {
+        content: result.content ?? [],
+        isError: result.isError,
+        _meta: result._meta,
+      };
+    } catch (error) {
+      if (error instanceof McpError && error.code === ErrorCode.ConnectionClosed) {
+        this.setState("disconnected");
+        throw new Error(`MCP server ${this.config.id}: connection closed`);
+      }
+      throw error;
+    }
   }
 
   async readResource(uri: string): Promise<McpResourceContent> {
-    if (this.state !== "connected") {
+    if (this.state !== "connected" || !this.client) {
       throw new Error(`MCP server ${this.config.id}: not connected`);
     }
 
-    const result = await this.sendRequest<{ contents?: McpResourceContent[] }>("resources/read", { uri });
+    try {
+      const result = await this.client.request(
+        {
+          method: "resources/read",
+          params: { uri },
+        },
+        // @ts-expect-error - ReadResourceResult schema type
+        { method: "resources/read" }
+      );
 
-    if (!result.contents || result.contents.length === 0) {
-      throw new Error(`MCP server ${this.config.id}: resource not found: ${uri}`);
+      if (!result.contents || result.contents.length === 0) {
+        throw new Error(`MCP server ${this.config.id}: resource not found: ${uri}`);
+      }
+
+      return result.contents[0];
+    } catch (error) {
+      throw error;
     }
-
-    return result.contents[0];
   }
 
   async listResources(uriPattern?: string): Promise<McpResource[]> {
-    if (this.state !== "connected") {
+    if (this.state !== "connected" || !this.client) {
       throw new Error(`MCP server ${this.config.id}: not connected`);
     }
 
-    const result = await this.sendRequest<{ resources?: McpResource[] }>("resources/list", {
-      ...(uriPattern ? { pattern: uriPattern } : {}),
-    });
+    try {
+      const result = await this.client.request(
+        {
+          method: "resources/list",
+          params: uriPattern ? { pattern: uriPattern } : {},
+        },
+        ListResourcesResultSchema
+      ) as ListResourcesResult;
 
-    return result.resources ?? [];
+      return result.resources ?? [];
+    } catch (error) {
+      throw error;
+    }
   }
 
   dispose(): void {
     this.disconnect();
-    this.clearPendingRequests();
   }
 
   // --------------------------------------------------------------------------
@@ -403,79 +444,114 @@ export class StdioMcpClient implements McpClient {
     this.onError?.(error, this.config.id);
   }
 
-  private handleMessage(data: string): void {
-    try {
-      const message = JSON.parse(data);
+  private setupNotificationHandlers(): void {
+    if (!this.client) return;
 
-      // Handle response
-      if (message.id) {
-        const pending = this.pendingRequests.get(message.id);
-        if (pending) {
-          clearTimeout(pending.timeout);
-          this.pendingRequests.delete(message.id);
-
-          if (message.error) {
-            pending.reject(new Error(message.error.message ?? "Unknown error"));
-          } else {
-            pending.resolve(message.result ?? {});
-          }
-        }
-        return;
+    // Handle tools list changed
+    this.client.notificationHandler = (message: JSONRPCMessage) => {
+      if (message.method === "notifications/tools/list_changed") {
+        void this.refreshTools();
+      } else if (message.method === "notifications/resources/list_changed") {
+        void this.refreshResources();
       }
-
-      // Handle notification
-      if (message.method) {
-        this.handleNotification(message);
-      }
-    } catch {
-      console.error(`[MCP ${this.config.id}] Failed to parse message:`, data);
-    }
+    };
   }
 
-  private handleNotification(message: { method: string; params?: unknown }): void {
-    switch (message.method) {
-      case "tools/list_changed":
-        this.refreshTools();
-        break;
-      case "resources/list_changed":
-        this.refreshResources();
-        break;
+  private async createTransport(): Promise<Transport> {
+    switch (this.config.transport) {
+      case "stdio":
+        return this.createStdioTransport();
+      case "http":
+        return this.createHttpTransport();
+      case "sse":
+        return this.createSseTransport();
+      case "websocket":
+        return this.createWebsocketTransport();
       default:
-        console.debug(`[MCP ${this.config.id}] Unhandled notification:`, message.method);
+        throw new Error(`Unsupported transport type: ${this.config.transport}`);
     }
   }
 
-  private async sendRequest<T = unknown>(method: string, params: unknown): Promise<T> {
-    const id = String(++this.requestId);
-    const timeout = this.config.timeoutMs ?? 30000;
+  private async createStdioTransport(): Promise<Transport> {
+    if (!this.config.command) {
+      throw new Error(`MCP server ${this.config.id}: command is required for stdio transport`);
+    }
 
-    return new Promise((resolve, reject) => {
-      const timeoutHandle = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        reject(new Error(`MCP request ${method} timed out after ${timeout}ms`));
-      }, timeout);
-
-      this.pendingRequests.set(id, {
-        resolve: resolve as (value: unknown) => void,
-        reject,
-        timeout: timeoutHandle,
-      });
-
-      const request = JSON.stringify({ jsonrpc: "2.0", id, method, params });
-      this.process?.stdin?.write(request + "\n");
+    return new StdioClientTransport({
+      command: this.config.command,
+      args: this.config.args ?? [],
+      env: {
+        ...process.env,
+        ...this.config.env,
+      } as Record<string, string>,
+      stderr: "pipe",
     });
   }
 
-  private async sendNotification(method: string, params: unknown): Promise<void> {
-    const notification = JSON.stringify({ jsonrpc: "2.0", method, params });
-    this.process?.stdin?.write(notification + "\n");
+  private async createHttpTransport(): Promise<Transport> {
+    if (!this.config.url) {
+      throw new Error(`MCP server ${this.config.id}: url is required for http transport`);
+    }
+
+    const transportOptions: StreamableHTTPClientTransportOptions = {
+      requestInit: {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          ...this.config.headers,
+        },
+      },
+    };
+
+    return new StreamableHTTPClientTransport(
+      new URL(this.config.url),
+      transportOptions
+    );
+  }
+
+  private async createSseTransport(): Promise<Transport> {
+    if (!this.config.url) {
+      throw new Error(`MCP server ${this.config.id}: url is required for sse transport`);
+    }
+
+    const transportOptions: SSEClientTransportOptions = {
+      requestInit: {
+        headers: {
+          Accept: "text/event-stream",
+          ...this.config.headers,
+        },
+      },
+    };
+
+    return new SSEClientTransport(
+      new URL(this.config.url),
+      transportOptions
+    );
+  }
+
+  private async createWebsocketTransport(): Promise<Transport> {
+    // WebSocket support requires custom transport or ws library
+    // For now, throw an error indicating this needs implementation
+    throw new Error(
+      `WebSocket transport for ${this.config.id} requires additional setup. ` +
+      `Use http or sse transport, or implement WebSocket transport with a custom solution.`
+    );
   }
 
   private async refreshTools(): Promise<void> {
-    if (this.state !== "connected") return;
+    if (this.state !== "connected" || !this.client) return;
 
     try {
-      const result = await this.sendRequest<{ tools: McpTool[] }>("tools/list", {});
+      if (!this.capabilities?.tools) {
+        this.tools = [];
+        return;
+      }
+
+      const result = await this.client.request(
+        { method: "tools/list" },
+        ListToolsResultSchema
+      ) as ListToolsResult;
+
       const prevTools = this.tools;
       this.tools = result.tools ?? [];
 
@@ -488,10 +564,19 @@ export class StdioMcpClient implements McpClient {
   }
 
   private async refreshResources(): Promise<void> {
-    if (this.state !== "connected") return;
+    if (this.state !== "connected" || !this.client) return;
 
     try {
-      const result = await this.sendRequest<{ resources: McpResource[] }>("resources/list", {});
+      if (!this.capabilities?.resources) {
+        this.resources = [];
+        return;
+      }
+
+      const result = await this.client.request(
+        { method: "resources/list" },
+        ListResourcesResultSchema
+      ) as ListResourcesResult;
+
       const prevResources = this.resources;
       this.resources = result.resources ?? [];
 
@@ -502,14 +587,6 @@ export class StdioMcpClient implements McpClient {
       console.error(`[MCP ${this.config.id}] Failed to refresh resources:`, error);
     }
   }
-
-  private clearPendingRequests(): void {
-    for (const [id, pending] of this.pendingRequests) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("MCP client disposed"));
-    }
-    this.pendingRequests.clear();
-  }
 }
 
 // ============================================================================
@@ -517,23 +594,22 @@ export class StdioMcpClient implements McpClient {
 // ============================================================================
 
 /**
- * Create an MCP client for stdio transport.
+ * Create an MCP client based on server configuration.
+ */
+export function createMcpClient(options: McpClientOptions): McpClient {
+  return new McpClientImpl(options);
+}
+
+// ============================================================================
+// Backward Compatibility
+// ============================================================================
+
+/**
+ * @deprecated Use createMcpClient() instead.
  */
 export function createStdioMcpClient(options: McpClientOptions): McpClient {
   if (options.server.transport !== "stdio") {
     throw new Error(`Expected stdio transport, got ${options.server.transport}`);
   }
-  return new StdioMcpClient(options);
-}
-
-/**
- * Create an MCP client based on server configuration.
- */
-export function createMcpClient(options: McpClientOptions): McpClient {
-  switch (options.server.transport) {
-    case "stdio":
-      return createStdioMcpClient(options);
-    default:
-      throw new Error(`Unsupported transport: ${options.server.transport}`);
-  }
+  return new McpClientImpl(options);
 }

@@ -215,7 +215,8 @@ export function createSubagentSpawnTool(
     label: SUBAGENT_SPAWN_TOOL,
     description: "Spawn a new SubAgent to execute a task in parallel. The SubAgent will start working immediately after spawning. Use subagent_wait to wait for completion or subagent_list to monitor progress.",
     parameters: subagentSpawnSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = params as SubagentSpawnInput;
       const client = getClient();
       if (!client) {
         return {
@@ -225,20 +226,17 @@ export function createSubagentSpawnTool(
       }
 
       try {
-        const typedParams = params as SubagentSpawnInput;
-        const input = typedParams as unknown as { task: string; name?: string; workspaceRoot?: string; isolated?: boolean; allowedTools?: string[]; blockedTools?: string[] };
-        const result = await client.spawn(input);
-        const taskDesc = String(input.task ?? "");
+        const result = await client.spawn(typedParams);
         return {
           content: [makeTextContent(
-            "SubAgent spawned successfully:\n- ID: " + result.subAgentId + "\n- Name: " + result.name + "\n- Task: " + taskDesc
+            `SubAgent spawned successfully:\n- ID: ${result.subAgentId}\n- Name: ${result.name}\n- Task: ${typedParams.task}`
           )],
           details: { subAgentId: result.subAgentId },
         };
       } catch (error) {
         return {
           content: [makeTextContent(
-            "Failed to spawn SubAgent: " + (error instanceof Error ? error.message : String(error))
+            `Failed to spawn SubAgent: ${error instanceof Error ? error.message : String(error)}`
           )],
           details: {},
         };
@@ -258,7 +256,8 @@ export function createSubagentSendTool(
     label: SUBAGENT_SEND_TOOL,
     description: "Send a message to a running SubAgent. Use this to provide additional instructions or context to the subagent.",
     parameters: subagentSendSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = params as SubagentSendInput;
       const client = getClient();
       if (!client) {
         return {
@@ -268,33 +267,26 @@ export function createSubagentSendTool(
       }
 
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const typedParams: SubagentSendInput = params as any;
         const result = await client.send(typedParams);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const agentId: string = String((typedParams as any).subAgentId ?? "");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const subAgentIdVal: string = String((typedParams as any).subAgentId ?? "");
         if (!result.success) {
           return {
             content: [makeTextContent(
-              "Failed to send message: SubAgent " + agentId + " not found or not running"
+              `Failed to send message: SubAgent ${typedParams.subAgentId} not found or not running`
             )],
             details: {},
           };
         }
 
-        const msgId = result.messageId ? " (ID: " + result.messageId + ")" : "";
         return {
           content: [makeTextContent(
-            "Message sent to SubAgent " + agentId + msgId
+            `Message sent to SubAgent ${typedParams.subAgentId}${result.messageId ? ` (ID: ${result.messageId})` : ""}`
           )],
-          details: { subAgentId: subAgentIdVal },
+          details: { subAgentId: typedParams.subAgentId },
         };
       } catch (error) {
         return {
           content: [makeTextContent(
-            "Failed to send message: " + (error instanceof Error ? error.message : String(error))
+            `Failed to send message: ${error instanceof Error ? error.message : String(error)}`
           )],
           details: {},
         };
@@ -314,7 +306,8 @@ export function createSubagentWaitTool(
     label: SUBAGENT_WAIT_TOOL,
     description: "Wait for a SubAgent to complete its task. Returns the result when the subagent finishes or reports back. Optionally accepts a timeout.",
     parameters: subagentWaitSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = params as SubagentWaitInput;
       const client = getClient();
       if (!client) {
         return {
@@ -324,21 +317,19 @@ export function createSubagentWaitTool(
       }
 
       try {
-        const typedParams = params as any as SubagentWaitInput;
         const result = await client.wait(typedParams);
-        const agentId = String((typedParams as any).subAgentId ?? "");
-        let message = "SubAgent " + agentId + " finished with status: " + result.status;
+        let message = `SubAgent ${typedParams.subAgentId} finished with status: ${result.status}`;
 
         if (result.timedOut) {
           message += "\n\nNote: Wait timed out before subagent completion.";
         }
 
         if (result.result) {
-          message += "\n\nResult:\n" + result.result;
+          message += `\n\nResult:\n${result.result}`;
         }
 
         if (result.error) {
-          message += "\n\nError:\n" + result.error;
+          message += `\n\nError:\n${result.error}`;
         }
 
         return {
@@ -348,7 +339,7 @@ export function createSubagentWaitTool(
       } catch (error) {
         return {
           content: [makeTextContent(
-            "Failed to wait for SubAgent: " + (error instanceof Error ? error.message : String(error))
+            `Failed to wait for SubAgent: ${error instanceof Error ? error.message : String(error)}`
           )],
           details: {},
         };
@@ -368,7 +359,8 @@ export function createSubagentCloseTool(
     label: SUBAGENT_CLOSE_TOOL,
     description: "Close a SubAgent, optionally forcing termination. Use force=true to immediately terminate without waiting for the current task to complete.",
     parameters: subagentCloseSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = params as SubagentCloseInput;
       const client = getClient();
       if (!client) {
         return {
@@ -378,20 +370,19 @@ export function createSubagentCloseTool(
       }
 
       try {
-        const typedParams: SubagentCloseInput = params as any;
         const result = await client.close(typedParams);
-        const agentId = String(typedParams.subAgentId ?? "");
-        const forced = typedParams.force ? " (forced)" : "";
-        const successMsg = "SubAgent " + agentId + " closed" + forced;
-        const failMsg = "Failed to close SubAgent " + agentId + ": not found";
         return {
-          content: [makeTextContent(result.success ? successMsg : failMsg)],
+          content: [makeTextContent(
+            result.success
+              ? `SubAgent ${typedParams.subAgentId} closed${typedParams.force ? " (forced)" : ""}`
+              : `Failed to close SubAgent ${typedParams.subAgentId}: not found`
+          )],
           details: { subAgentId: typedParams.subAgentId },
         };
       } catch (error) {
         return {
           content: [makeTextContent(
-            "Failed to close SubAgent: " + (error instanceof Error ? error.message : String(error))
+            `Failed to close SubAgent: ${error instanceof Error ? error.message : String(error)}`
           )],
           details: {},
         };
@@ -411,7 +402,8 @@ export function createSubagentListTool(
     label: SUBAGENT_LIST_TOOL,
     description: "List all SubAgents, optionally filtered by status or parent agent. Use this to monitor the status of spawned subagents.",
     parameters: subagentListSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = (params || {}) as SubagentListInput;
       const client = getClient();
       if (!client) {
         return {
@@ -421,7 +413,6 @@ export function createSubagentListTool(
       }
 
       try {
-        const typedParams = (params || {}) as SubagentListInput;
         const result = await client.list(typedParams);
 
         if (result.subAgents.length === 0) {
@@ -432,20 +423,20 @@ export function createSubagentListTool(
         }
 
         const lines = result.subAgents.map((agent) => {
-          const parts: string[] = [
-            "## " + agent.name + " (" + agent.id + ")",
-            "- Status: " + agent.status,
-            "- Task: " + String(agent.task ?? "").slice(0, 80) + (String(agent.task ?? "").length > 80 ? "..." : ""),
-            "- Created: " + agent.createdAt,
+          const parts = [
+            `## ${agent.name} (${agent.id})`,
+            `- Status: ${agent.status}`,
+            `- Task: ${agent.task.slice(0, 80)}${agent.task.length > 80 ? "..." : ""}`,
+            `- Created: ${agent.createdAt}`,
           ];
 
-          if (agent.startedAt) parts.push("- Started: " + agent.startedAt);
-          if (agent.completedAt) parts.push("- Completed: " + agent.completedAt);
-          if (agent.progress !== undefined) parts.push("- Progress: " + agent.progress + "%");
-          if (agent.error) parts.push("- Error: " + agent.error);
-          if (agent.result) parts.push("- Result: " + String(agent.result ?? "").slice(0, 100) + (String(agent.result ?? "").length > 100 ? "..." : ""));
+          if (agent.startedAt) parts.push(`- Started: ${agent.startedAt}`);
+          if (agent.completedAt) parts.push(`- Completed: ${agent.completedAt}`);
+          if (agent.progress !== undefined) parts.push(`- Progress: ${agent.progress}%`);
+          if (agent.error) parts.push(`- Error: ${agent.error}`);
+          if (agent.result) parts.push(`- Result: ${agent.result.slice(0, 100)}${agent.result.length > 100 ? "..." : ""}`);
 
-          parts.push("- Messages: " + agent.messages + ", Tool Calls: " + agent.toolCalls);
+          parts.push(`- Messages: ${agent.messages}, Tool Calls: ${agent.toolCalls}`);
 
           return parts.join("\n");
         });
@@ -457,7 +448,7 @@ export function createSubagentListTool(
       } catch (error) {
         return {
           content: [makeTextContent(
-            "Failed to list SubAgents: " + (error instanceof Error ? error.message : String(error))
+            `Failed to list SubAgents: ${error instanceof Error ? error.message : String(error)}`
           )],
           details: { subAgents: [] },
         };
@@ -477,7 +468,8 @@ export function createSubagentGetTool(
     label: SUBAGENT_GET_TOOL,
     description: "Get detailed information about a specific SubAgent by its ID.",
     parameters: subagentGetSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = params as SubagentGetInput;
       const client = getClient();
       if (!client) {
         return {
@@ -487,34 +479,33 @@ export function createSubagentGetTool(
       }
 
       try {
-        const typedParams: SubagentGetInput = params as any;
         const result = await client.get(typedParams);
 
         if (!result.subAgent) {
           return {
-            content: [makeTextContent("SubAgent " + String(typedParams.subAgentId ?? "") + " not found.")],
+            content: [makeTextContent(`SubAgent ${typedParams.subAgentId} not found.`)],
             details: {},
           };
         }
 
         const agent = result.subAgent;
-        const lines: string[] = [
-          "## " + agent.name + " (" + agent.id + ")",
-          "- Status: " + agent.status,
-          "- Task: " + String(agent.task ?? ""),
-          "- Workspace: " + agent.workspaceRoot,
-          "- Parent ID: " + agent.parentId,
-          "- Created: " + agent.createdAt,
+        const lines = [
+          `## ${agent.name} (${agent.id})`,
+          `- Status: ${agent.status}`,
+          `- Task: ${agent.task}`,
+          `- Workspace: ${agent.workspaceRoot}`,
+          `- Parent ID: ${agent.parentId}`,
+          `- Created: ${agent.createdAt}`,
         ];
 
-        if (agent.startedAt) lines.push("- Started: " + agent.startedAt);
-        if (agent.completedAt) lines.push("- Completed: " + agent.completedAt);
-        if (agent.progress !== undefined) lines.push("- Progress: " + agent.progress + "%");
-        if (agent.error) lines.push("- Error: " + agent.error);
-        if (agent.result) lines.push("\n## Result\n" + agent.result);
-        lines.push("\n## Statistics");
-        lines.push("- Messages: " + agent.messages);
-        lines.push("- Tool Calls: " + agent.toolCalls);
+        if (agent.startedAt) lines.push(`- Started: ${agent.startedAt}`);
+        if (agent.completedAt) lines.push(`- Completed: ${agent.completedAt}`);
+        if (agent.progress !== undefined) lines.push(`- Progress: ${agent.progress}%`);
+        if (agent.error) lines.push(`- Error: ${agent.error}`);
+        if (agent.result) lines.push(`\n## Result\n${agent.result}`);
+        lines.push(`\n## Statistics`);
+        lines.push(`- Messages: ${agent.messages}`);
+        lines.push(`- Tool Calls: ${agent.toolCalls}`);
 
         return {
           content: [makeTextContent(lines.join("\n"))],
@@ -523,7 +514,7 @@ export function createSubagentGetTool(
       } catch (error) {
         return {
           content: [makeTextContent(
-            "Failed to get SubAgent: " + (error instanceof Error ? error.message : String(error))
+            `Failed to get SubAgent: ${error instanceof Error ? error.message : String(error)}`
           )],
           details: {},
         };
@@ -543,7 +534,8 @@ export function createSubagentDelegateTool(
     label: SUBAGENT_DELEGATE_TOOL,
     description: "Delegate a task to a SubAgent and optionally wait for completion. This is a convenience tool that combines spawn and wait into a single operation. Returns the subagent's result when complete or on timeout.",
     parameters: subagentDelegateSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params: unknown) => {
+      const typedParams = params as SubagentDelegateInput;
       const client = getClient();
       if (!client) {
         return {
@@ -553,8 +545,6 @@ export function createSubagentDelegateTool(
       }
 
       try {
-        const typedParams: SubagentDelegateInput = params as any;
-
         // Spawn the subagent
         const spawnResult = await client.spawn({
           task: typedParams.task,
@@ -572,19 +562,19 @@ export function createSubagentDelegateTool(
             timeout: typedParams.timeout,
           });
 
-          let message = "Task delegated to SubAgent " + spawnResult.name + " (" + spawnResult.subAgentId + ")\n";
-          message += "Status: " + waitResult.status;
+          let message = `Task delegated to SubAgent ${spawnResult.name} (${spawnResult.subAgentId})\n`;
+          message += `Status: ${waitResult.status}`;
 
           if (waitResult.timedOut) {
             message += "\n\nNote: Wait timed out before completion.";
           }
 
           if (waitResult.result) {
-            message += "\n\nResult:\n" + waitResult.result;
+            message += `\n\nResult:\n${waitResult.result}`;
           }
 
           if (waitResult.error) {
-            message += "\n\nError:\n" + waitResult.error;
+            message += `\n\nError:\n${waitResult.error}`;
           }
 
           return {
@@ -595,7 +585,7 @@ export function createSubagentDelegateTool(
 
         return {
           content: [makeTextContent(
-            "Task delegated to SubAgent " + spawnResult.name + " (" + spawnResult.subAgentId + "). Use subagent_wait to wait for completion or subagent_list to monitor progress."
+            `Task delegated to SubAgent ${spawnResult.name} (${spawnResult.subAgentId}). Use subagent_wait to wait for completion or subagent_list to monitor progress.`
           )],
           details: { subAgentId: spawnResult.subAgentId, completed: false },
         };

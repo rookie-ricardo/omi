@@ -1,537 +1,538 @@
 /**
- * Diagnostics Module
+ * Diagnostics - 观测性与运维面板
  *
- * Provides runtime diagnostics and health checks for the runner:
- * - Health check endpoints
- * - Performance metrics
- * - Error aggregation
- * - Release gate metrics
+ * 提供诊断信息和运维指标：
+ * - Run 状态和性能指标
+ * - 连接状态（MCP、Provider）
+ * - 资源使用情况
+ * - 健康检查接口
  */
 
-import { nowIso } from "@omi/core";
-import type { TelemetryCollector, RunMetrics } from "@omi/agent";
+import { createEventBus, type EventBusController } from "@omi/agent/event-bus";
+import { getGlobalTelemetry, type TelemetryService } from "@omi/agent/telemetry";
+import { getGlobalAuditLog, type AuditLogService } from "@omi/agent/audit-log";
 
 // ============================================================================
-// Health Check Types
+// Types
 // ============================================================================
 
-export type HealthStatus = "healthy" | "degraded" | "unhealthy";
+/**
+ * Run 诊断信息
+ */
+export interface RunDiagnostics {
+	runId: string;
+	sessionId: string;
+	status: RunStatus;
+	startTime: string;
+	durationMs: number;
+	model?: string;
+	provider?: string;
+	tokenUsage?: TokenUsageInfo;
+	lastActivity: string;
+}
 
+/**
+ * Run 状态
+ */
+export type RunStatus = "pending" | "running" | "blocked" | "completed" | "failed" | "cancelled";
+
+/**
+ * Token 使用信息
+ */
+export interface TokenUsageInfo {
+	inputTokens: number;
+	outputTokens: number;
+	totalTokens: number;
+	cacheHits?: number;
+	cacheMisses?: number;
+}
+
+/**
+ * MCP 服务器诊断信息
+ */
+export interface McpServerDiagnostics {
+	serverName: string;
+	serverType: string;
+	status: McpServerStatus;
+	connectedAt?: string;
+	lastActivity?: string;
+	reconnectCount: number;
+	errorCount: number;
+	lastError?: string;
+	latencyMs?: number;
+}
+
+/**
+ * MCP 服务器状态
+ */
+export type McpServerStatus = "connecting" | "connected" | "disconnected" | "error" | "reconnecting";
+
+/**
+ * Provider 诊断信息
+ */
+export interface ProviderDiagnostics {
+	providerId: string;
+	status: ProviderStatus;
+	model?: string;
+	latencyMs?: number;
+	errorCount: number;
+	lastError?: string;
+	requestCount: number;
+}
+
+/**
+ * Provider 状态
+ */
+export type ProviderStatus = "healthy" | "degraded" | "error" | "rate_limited";
+
+/**
+ * 系统诊断信息
+ */
+export interface SystemDiagnostics {
+	uptime: number;
+	memoryUsage: NodeJS.MemoryUsage;
+	cpuUsage: NodeJS.CpuUsage;
+	activeSessions: number;
+	activeRuns: number;
+	pendingToolCalls: number;
+}
+
+/**
+ * 健康检查结果
+ */
 export interface HealthCheckResult {
-  status: HealthStatus;
-  timestamp: string;
-  checks: ComponentHealthCheck[];
-  overallMessage?: string;
+	status: "healthy" | "degraded" | "unhealthy";
+	checks: HealthCheck[];
+	timestamp: string;
 }
 
-export interface ComponentHealthCheck {
-  component: string;
-  status: HealthStatus;
-  message?: string;
-  latencyMs?: number;
-  details?: Record<string, unknown>;
-}
-
-// ============================================================================
-// Performance Metrics
-// ============================================================================
-
-export interface PerformanceMetrics {
-  timestamp: string;
-  uptime: number;
-  requests: {
-    total: number;
-    success: number;
-    failed: number;
-    averageLatencyMs: number;
-  };
-  runs: {
-    active: number;
-    completed: number;
-    failed: number;
-    averageDurationMs: number;
-  };
-  tools: {
-    totalCalls: number;
-    approvalRate: number;
-    averageLatencyMs: number;
-  };
-  memory: {
-    usedBytes: number;
-    totalBytes: number;
-    usagePercent: number;
-  };
-  cpu: {
-    usagePercent: number;
-  };
+/**
+ * 单个健康检查项
+ */
+export interface HealthCheck {
+	name: string;
+	status: "pass" | "fail" | "warn";
+	message?: string;
+	details?: Record<string, unknown>;
 }
 
 // ============================================================================
-// Error Aggregation
+// Diagnostics Service
 // ============================================================================
 
-export interface ErrorSummary {
-  errorCode: string;
-  count: number;
-  lastOccurrence: string;
-  firstOccurrence: string;
-  messages: string[];
-  affectedRuns: string[];
-}
-
-export interface ErrorReport {
-  timestamp: string;
-  period: {
-    start: string;
-    end: string;
-  };
-  totalErrors: number;
-  uniqueErrorCodes: number;
-  errorsByCode: ErrorSummary[];
-  recentErrors: Array<{
-    timestamp: string;
-    runId?: string;
-    errorCode: string;
-    message: string;
-  }>;
-}
-
-// ============================================================================
-// Release Gate Metrics
-// ============================================================================
-
-export interface ReleaseGateMetrics {
-  timestamp: string;
-  period: {
-    start: string;
-    end: string;
-  };
-  successRate: number;
-  errorRate: number;
-  toolApprovalRate: number;
-  toolRejectionRate: number;
-  averageRunDurationMs: number;
-  p95RunDurationMs: number;
-  compactionSuccessRate: number;
-  subagentSuccessRate: number;
-  mcpConnectionSuccessRate: number;
-  gateStatus: "pass" | "fail" | "warning";
-  gateChecks: GateCheck[];
-}
-
-export interface GateCheck {
-  name: string;
-  metric: string;
-  threshold: number;
-  actual: number;
-  status: "pass" | "fail" | "warning";
-  message?: string;
-}
-
-// ============================================================================
-// Diagnostics Collector
-// ============================================================================
-
+/**
+ * 诊断服务配置
+ */
 export interface DiagnosticsConfig {
-  /** Telemetry collector instance */
-  telemetry?: TelemetryCollector;
-  /** Error reporting window in ms */
-  errorWindowMs?: number;
-  /** Release gate thresholds */
-  gateThresholds?: GateThresholds;
+	/** Telemetry 服务实例 */
+	telemetry?: TelemetryService;
+	/** 审计日志服务实例 */
+	auditLog?: AuditLogService;
+	/** 健康检查间隔（毫秒） */
+	healthCheckIntervalMs?: number;
 }
 
-export interface GateThresholds {
-  minSuccessRate?: number;
-  maxErrorRate?: number;
-  maxAverageRunDurationMs?: number;
-  minToolApprovalRate?: number;
-  minCompactionSuccessRate?: number;
+/**
+ * 诊断服务
+ */
+export class DiagnosticsService {
+	private readonly eventBus: EventBusController;
+	private readonly telemetry: TelemetryService;
+	private readonly auditLog: AuditLogService;
+	private readonly runs = new Map<string, RunDiagnostics>();
+	private readonly mcpServers = new Map<string, McpServerDiagnostics>();
+	private readonly providers = new Map<string, ProviderDiagnostics>();
+	private readonly startTime: Date;
+
+	constructor(config: DiagnosticsConfig = {}) {
+		this.eventBus = createEventBus();
+		this.telemetry = config.telemetry ?? getGlobalTelemetry();
+		this.auditLog = config.auditLog ?? getGlobalAuditLog();
+		this.startTime = new Date();
+
+		// 订阅事件
+		this.subscribeToEvents();
+	}
+
+	/**
+	 * 注册 Run
+	 */
+	registerRun(run: Omit<RunDiagnostics, "lastActivity">): void {
+		this.runs.set(run.runId, {
+			...run,
+			lastActivity: run.startTime,
+		});
+		this.emitEvent("run:registered", { runId: run.runId });
+	}
+
+	/**
+	 * 更新 Run 状态
+	 */
+	updateRunStatus(runId: string, status: RunStatus): void {
+		const run = this.runs.get(runId);
+		if (run) {
+			run.status = status;
+			run.lastActivity = new Date().toISOString();
+			this.emitEvent("run:status_changed", { runId, status });
+		}
+	}
+
+	/**
+	 * 更新 Token 使用量
+	 */
+	updateTokenUsage(runId: string, usage: TokenUsageInfo): void {
+		const run = this.runs.get(runId);
+		if (run) {
+			run.tokenUsage = usage;
+			run.lastActivity = new Date().toISOString();
+		}
+	}
+
+	/**
+	 * 注册 MCP 服务器
+	 */
+	registerMcpServer(server: Omit<McpServerDiagnostics, "reconnectCount" | "errorCount">): void {
+		this.mcpServers.set(server.serverName, {
+			...server,
+			reconnectCount: 0,
+			errorCount: 0,
+		});
+		this.emitEvent("mcp:server_registered", { serverName: server.serverName });
+	}
+
+	/**
+	 * 更新 MCP 服务器状态
+	 */
+	updateMcpServerStatus(serverName: string, status: McpServerStatus, error?: string): void {
+		const server = this.mcpServers.get(serverName);
+		if (server) {
+			server.status = status;
+			server.lastActivity = new Date().toISOString();
+			if (error) {
+				server.lastError = error;
+				server.errorCount++;
+			}
+			if (status === "connected") {
+				server.connectedAt = new Date().toISOString();
+			}
+			if (status === "reconnecting") {
+				server.reconnectCount++;
+			}
+			this.emitEvent("mcp:server_status_changed", { serverName, status });
+		}
+	}
+
+	/**
+	 * 注册 Provider
+	 */
+	registerProvider(provider: Omit<ProviderDiagnostics, "errorCount" | "requestCount">): void {
+		this.providers.set(provider.providerId, {
+			...provider,
+			errorCount: 0,
+			requestCount: 0,
+		});
+		this.emitEvent("provider:registered", { providerId: provider.providerId });
+	}
+
+	/**
+	 * 更新 Provider 状态
+	 */
+	updateProviderStatus(providerId: string, status: ProviderStatus, error?: string): void {
+		const provider = this.providers.get(providerId);
+		if (provider) {
+			provider.status = status;
+			if (error) {
+				provider.lastError = error;
+				provider.errorCount++;
+			}
+			this.emitEvent("provider:status_changed", { providerId, status });
+		}
+	}
+
+	/**
+	 * 记录 Provider 请求
+	 */
+	recordProviderRequest(providerId: string, latencyMs: number): void {
+		const provider = this.providers.get(providerId);
+		if (provider) {
+			provider.requestCount++;
+			provider.latencyMs = latencyMs;
+		}
+	}
+
+	/**
+	 * 获取 Run 诊断信息
+	 */
+	getRun(runId: string): RunDiagnostics | undefined {
+		return this.runs.get(runId);
+	}
+
+	/**
+	 * 获取所有 Runs
+	 */
+	getAllRuns(): RunDiagnostics[] {
+		return [...this.runs.values()];
+	}
+
+	/**
+	 * 获取活跃 Runs
+	 */
+	getActiveRuns(): RunDiagnostics[] {
+		return this.runs.values().filter((run) => run.status === "running" || run.status === "blocked");
+	}
+
+	/**
+	 * 获取 MCP 服务器诊断信息
+	 */
+	getMcpServer(serverName: string): McpServerDiagnostics | undefined {
+		return this.mcpServers.get(serverName);
+	}
+
+	/**
+	 * 获取所有 MCP 服务器
+	 */
+	getAllMcpServers(): McpServerDiagnostics[] {
+		return [...this.mcpServers.values()];
+	}
+
+	/**
+	 * 获取 Provider 诊断信息
+	 */
+	getProvider(providerId: string): ProviderDiagnostics | undefined {
+		return this.providers.get(providerId);
+	}
+
+	/**
+	 * 获取所有 Providers
+	 */
+	getAllProviders(): ProviderDiagnostics[] {
+		return [...this.providers.values()];
+	}
+
+	/**
+	 * 获取系统诊断信息
+	 */
+	getSystemDiagnostics(): SystemDiagnostics {
+		const memUsage = process.memoryUsage();
+		const cpuUsage = process.cpuUsage();
+
+		return {
+			uptime: Date.now() - this.startTime.getTime(),
+			memoryUsage: memUsage,
+			cpuUsage: cpuUsage,
+			activeSessions: this.runs.size,
+			activeRuns: this.getActiveRuns().length,
+			pendingToolCalls: this.auditLog.getToolCallEntries().filter((e) => e.status === "pending").length,
+		};
+	}
+
+	/**
+	 * 执行健康检查
+	 */
+	performHealthCheck(): HealthCheckResult {
+		const checks: HealthCheck[] = [];
+
+		// 检查 Runs
+		const failedRuns = this.runs.values().filter((run) => run.status === "failed");
+		checks.push({
+			name: "runs",
+			status: failedRuns.length > 0 ? "warn" : "pass",
+			message: `${this.runs.size} runs registered, ${failedRuns.length} failed`,
+			details: {
+				total: this.runs.size,
+				failed: failedRuns.length,
+			},
+		});
+
+		// 检查 MCP 服务器
+		const disconnectedMcpServers = this.mcpServers.values().filter((server) => server.status !== "connected");
+		checks.push({
+			name: "mcp_servers",
+			status: disconnectedMcpServers.length > 0 ? "warn" : "pass",
+			message: `${this.mcpServers.size} servers registered, ${disconnectedMcpServers.length} disconnected`,
+			details: {
+				total: this.mcpServers.size,
+				disconnected: disconnectedMcpServers.length,
+			},
+		});
+
+		// 检查 Providers
+		const errorProviders = this.providers.values().filter((provider) => provider.status === "error");
+		checks.push({
+			name: "providers",
+			status: errorProviders.length > 0 ? "fail" : "pass",
+			message: `${this.providers.size} providers, ${errorProviders.length} errors`,
+			details: {
+				total: this.providers.size,
+				errors: errorProviders.length,
+			},
+		});
+
+		// 检查内存使用
+		const memUsage = process.memoryUsage();
+		const heapUsedPercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
+		checks.push({
+			name: "memory",
+			status: heapUsedPercent > 90 ? "fail" : heapUsedPercent > 70 ? "warn" : "pass",
+			message: `Heap usage: ${heapUsedPercent.toFixed(1)}%`,
+			details: {
+				heapUsed: memUsage.heapUsed,
+				heapTotal: memUsage.heapTotal,
+				heapUsedPercent,
+			},
+		});
+
+		// 确定整体状态
+		const hasFails = checks.some((c) => c.status === "fail");
+		const hasWarns = checks.some((c) => c.status === "warn");
+
+		return {
+			status: hasFails ? "unhealthy" : hasWarns ? "degraded" : "healthy",
+			checks,
+			timestamp: new Date().toISOString(),
+		};
+	}
+
+	/**
+	 * 获取诊断快照
+	 */
+	getSnapshot(): DiagnosticsSnapshot {
+		return {
+			system: this.getSystemDiagnostics(),
+			runs: this.getAllRuns(),
+			mcpServers: this.getAllMcpServers(),
+			providers: this.getAllProviders(),
+			telemetry: this.telemetry.getAllCounters(),
+			auditStats: this.auditLog.getStats(),
+			timestamp: new Date().toISOString(),
+		};
+	}
+
+	/**
+	 * 订阅诊断事件
+	 */
+	on(channel: string, handler: (data: unknown) => void): () => void {
+		return this.eventBus.on(channel, handler);
+	}
+
+	private emitEvent(channel: string, data: unknown): void {
+		this.eventBus.emit(channel, data);
+	}
+
+	private subscribeToEvents(): void {
+		// 订阅 Telemetry 事件
+		this.telemetry.on("run", (event: unknown) => {
+			const runEvent = event as { runId: string; sessionId: string };
+			this.emitEvent("telemetry:run", runEvent);
+		});
+
+		this.telemetry.on("compaction", (event: unknown) => {
+			this.emitEvent("telemetry:compaction", event);
+		});
+
+		this.telemetry.on("mcp", (event: unknown) => {
+			const mcpEvent = event as { serverName: string; type: string };
+			if (mcpEvent.type === "mcp:connected" || mcpEvent.type === "mcp:disconnected") {
+				this.updateMcpServerStatus(
+					mcpEvent.serverName,
+					mcpEvent.type === "mcp:connected" ? "connected" : "disconnected",
+				);
+			}
+		});
+	}
 }
 
-export class DiagnosticsCollector {
-  private telemetry?: TelemetryCollector;
-  private startTime: Date;
-  private requestCount = 0;
-  private successCount = 0;
-  private failureCount = 0;
-  private totalLatencyMs = 0;
-  private recentErrors: Array<{
-    timestamp: string;
-    runId?: string;
-    errorCode: string;
-    message: string;
-  }> = [];
-  private readonly errorWindowMs: number;
-  private readonly gateThresholds: Required<GateThresholds>;
+/**
+ * 诊断快照
+ */
+export interface DiagnosticsSnapshot {
+	system: SystemDiagnostics;
+	runs: RunDiagnostics[];
+	mcpServers: McpServerDiagnostics[];
+	providers: ProviderDiagnostics[];
+	telemetry: Record<string, number>;
+	auditStats: {
+		totalToolCalls: number;
+		permissionsApproved: number;
+		permissionsRejected: number;
+		securityEventsBlocked: number;
+	};
+	timestamp: string;
+}
 
-  constructor(config: DiagnosticsConfig = {}) {
-    this.telemetry = config.telemetry;
-    this.startTime = new Date();
-    this.errorWindowMs = config.errorWindowMs ?? 3600000; // 1 hour
-    this.gateThresholds = {
-      minSuccessRate: config.gateThresholds?.minSuccessRate ?? 0.95,
-      maxErrorRate: config.gateThresholds?.maxErrorRate ?? 0.05,
-      maxAverageRunDurationMs: config.gateThresholds?.maxAverageRunDurationMs ?? 300000,
-      minToolApprovalRate: config.gateThresholds?.minToolApprovalRate ?? 0.80,
-      minCompactionSuccessRate: config.gateThresholds?.minCompactionSuccessRate ?? 0.90,
-    };
-  }
+// ============================================================================
+// Global Diagnostics Instance
+// ============================================================================
 
-  // ==========================================================================
-  // Health Checks
-  // ==========================================================================
+let globalDiagnostics: DiagnosticsService | null = null;
 
-  /**
-   * Run all health checks.
-   */
-  async checkHealth(): Promise<HealthCheckResult> {
-    const checks = await Promise.all([
-      this.checkDatabaseHealth(),
-      this.checkTelemetryHealth(),
-      this.checkMemoryHealth(),
-    ]);
+/**
+ * 获取全局诊断服务实例
+ */
+export function getGlobalDiagnostics(): DiagnosticsService {
+	if (!globalDiagnostics) {
+		globalDiagnostics = new DiagnosticsService();
+	}
+	return globalDiagnostics;
+}
 
-    const overallStatus = this.getOverallStatus(checks);
-    const message = this.getStatusMessage(overallStatus);
+/**
+ * 设置全局诊断服务实例
+ */
+export function setGlobalDiagnostics(diagnostics: DiagnosticsService): void {
+	globalDiagnostics = diagnostics;
+}
 
-    return {
-      status: overallStatus,
-      timestamp: nowIso(),
-      checks,
-      overallMessage: message,
-    };
-  }
+/**
+ * 创建新的诊断服务
+ */
+export function createDiagnostics(config?: DiagnosticsConfig): DiagnosticsService {
+	return new DiagnosticsService(config);
+}
 
-  private async checkDatabaseHealth(): Promise<ComponentHealthCheck> {
-    const start = Date.now();
-    try {
-      // Placeholder - would actually check database connection
-      const latency = Date.now() - start;
-      return {
-        component: "database",
-        status: "healthy",
-        latencyMs: latency,
-      };
-    } catch (error) {
-      return {
-        component: "database",
-        status: "unhealthy",
-        message: error instanceof Error ? error.message : "Unknown error",
-        latencyMs: Date.now() - start,
-      };
-    }
-  }
+// ============================================================================
+// Express Middleware for Diagnostics Endpoints
+// ============================================================================
 
-  private async checkTelemetryHealth(): Promise<ComponentHealthCheck> {
-    const start = Date.now();
-    try {
-      if (!this.telemetry) {
-        return {
-          component: "telemetry",
-          status: "degraded",
-          message: "Telemetry not configured",
-          latencyMs: Date.now() - start,
-        };
-      }
+/**
+ * 创建诊断路由处理器
+ * 用于在 Express/Fastify 等框架中暴露诊断端点
+ */
+export function createDiagnosticsMiddleware(diagnostics: DiagnosticsService) {
+	return {
+		/**
+		 * GET /health - 健康检查
+		 */
+		healthCheck: async (): Promise<HealthCheckResult> => {
+			return diagnostics.performHealthCheck();
+		},
 
-      // Test telemetry query
-      this.telemetry.getEvents(undefined, 1);
-      const latency = Date.now() - start;
+		/**
+		 * GET /diagnostics - 完整诊断快照
+		 */
+		snapshot: async (): Promise<DiagnosticsSnapshot> => {
+			return diagnostics.getSnapshot();
+		},
 
-      return {
-        component: "telemetry",
-        status: "healthy",
-        latencyMs: latency,
-      };
-    } catch (error) {
-      return {
-        component: "telemetry",
-        status: "unhealthy",
-        message: error instanceof Error ? error.message : "Unknown error",
-        latencyMs: Date.now() - start,
-      };
-    }
-  }
+		/**
+		 * GET /diagnostics/runs - Runs 状态
+		 */
+		getRuns: async (): Promise<RunDiagnostics[]> => {
+			return diagnostics.getAllRuns();
+		},
 
-  private checkMemoryHealth(): ComponentHealthCheck {
-    const memUsage = process.memoryUsage();
-    const usagePercent = (memUsage.heapUsed / memUsage.heapTotal) * 100;
+		/**
+		 * GET /diagnostics/mcp - MCP 服务器状态
+		 */
+		getMcpServers: async (): Promise<McpServerDiagnostics[]> => {
+			return diagnostics.getAllMcpServers();
+		},
 
-    let status: HealthStatus = "healthy";
-    if (usagePercent > 90) {
-      status = "unhealthy";
-    } else if (usagePercent > 80) {
-      status = "degraded";
-    }
-
-    return {
-      component: "memory",
-      status,
-      latencyMs: 0,
-      details: {
-        usedBytes: memUsage.heapUsed,
-        totalBytes: memUsage.heapTotal,
-        usagePercent,
-      },
-    };
-  }
-
-  private getOverallStatus(checks: ComponentHealthCheck[]): HealthStatus {
-    if (checks.some((c) => c.status === "unhealthy")) {
-      return "unhealthy";
-    }
-    if (checks.some((c) => c.status === "degraded")) {
-      return "degraded";
-    }
-    return "healthy";
-  }
-
-  private getStatusMessage(status: HealthStatus): string {
-    switch (status) {
-      case "healthy":
-        return "All systems operational";
-      case "degraded":
-        return "Some components are experiencing issues";
-      case "unhealthy":
-        return "Critical issues detected - immediate attention required";
-    }
-  }
-
-  // ==========================================================================
-  // Performance Metrics
-  // ==========================================================================
-
-  /**
-   * Get performance metrics.
-   */
-  getPerformanceMetrics(): PerformanceMetrics {
-    const memUsage = process.memoryUsage();
-    const cpuUsage = process.cpuUsage();
-
-    const uptime = Date.now() - this.startTime.getTime();
-
-    // Get run metrics from telemetry
-    const runMetrics = this.telemetry?.getAllRunMetrics() ?? [];
-    const completedRuns = runMetrics.filter((r) => r.completedAt);
-    const failedRuns = completedRuns.filter((r) => r.finalState === "failed");
-
-    const totalRunDuration = completedRuns.reduce(
-      (sum, r) => sum + (r.durationMs ?? 0),
-      0
-    );
-
-    return {
-      timestamp: nowIso(),
-      uptime,
-      requests: {
-        total: this.requestCount,
-        success: this.successCount,
-        failed: this.failureCount,
-        averageLatencyMs: this.requestCount > 0 ? this.totalLatencyMs / this.requestCount : 0,
-      },
-      runs: {
-        active: runMetrics.length - completedRuns.length,
-        completed: completedRuns.length,
-        failed: failedRuns.length,
-        averageDurationMs: completedRuns.length > 0 ? totalRunDuration / completedRuns.length : 0,
-      },
-      tools: {
-        totalCalls: runMetrics.reduce((sum, r) => sum + r.toolCallCount, 0),
-        approvalRate: this.calculateApprovalRate(runMetrics),
-        averageLatencyMs: 0, // Would need per-tool tracking
-      },
-      memory: {
-        usedBytes: memUsage.heapUsed,
-        totalBytes: memUsage.heapTotal,
-        usagePercent: (memUsage.heapUsed / memUsage.heapTotal) * 100,
-      },
-      cpu: {
-        usagePercent: 0, // Would need delta calculation
-      },
-    };
-  }
-
-  private calculateApprovalRate(runs: RunMetrics[]): number {
-    const totalApprovals = runs.reduce((sum, r) => sum + r.toolApprovalCount, 0);
-    const totalCalls = runs.reduce((sum, r) => sum + r.toolCallCount, 0);
-    return totalCalls > 0 ? totalApprovals / totalCalls : 0;
-  }
-
-  // ==========================================================================
-  // Error Reporting
-  // ==========================================================================
-
-  /**
-   * Record an error.
-   */
-  recordError(runId: string | undefined, errorCode: string, message: string): void {
-    const now = nowIso();
-
-    // Add to recent errors
-    this.recentErrors.push({
-      timestamp: now,
-      runId,
-      errorCode,
-      message,
-    });
-
-    // Trim old errors
-    const cutoff = Date.now() - this.errorWindowMs;
-    const cutoffDate = new Date(cutoff).toISOString();
-    this.recentErrors = this.recentErrors.filter((e) => e.timestamp > cutoffDate);
-  }
-
-  /**
-   * Get error report.
-   */
-  getErrorReport(periodMs?: number): ErrorReport {
-    const period = periodMs ?? this.errorWindowMs;
-    const start = new Date(Date.now() - period).toISOString();
-    const end = nowIso();
-
-    const recentErrors = this.recentErrors.filter((e) => e.timestamp >= start);
-
-    // Aggregate by error code
-    const byCode = new Map<string, ErrorSummary>();
-    for (const error of recentErrors) {
-      const existing = byCode.get(error.errorCode);
-      if (existing) {
-        existing.count++;
-        if (!existing.messages.includes(error.message)) {
-          existing.messages.push(error.message);
-        }
-        if (error.runId && !existing.affectedRuns.includes(error.runId)) {
-          existing.affectedRuns.push(error.runId);
-        }
-      } else {
-        byCode.set(error.errorCode, {
-          errorCode: error.errorCode,
-          count: 1,
-          lastOccurrence: error.timestamp,
-          firstOccurrence: error.timestamp,
-          messages: [error.message],
-          affectedRuns: error.runId ? [error.runId] : [],
-        });
-      }
-    }
-
-    const errorsByCode = Array.from(byCode.values()).sort((a, b) => b.count - a.count);
-
-    return {
-      timestamp: nowIso(),
-      period: { start, end },
-      totalErrors: recentErrors.length,
-      uniqueErrorCodes: errorsByCode.length,
-      errorsByCode,
-      recentErrors: recentErrors.slice(-10).reverse(),
-    };
-  }
-
-  // ==========================================================================
-  // Release Gate Metrics
-  // ==========================================================================
-
-  /**
-   * Get release gate metrics.
-   */
-  getReleaseGateMetrics(periodMs?: number): ReleaseGateMetrics {
-    const period = periodMs ?? this.errorWindowMs;
-    const start = new Date(Date.now() - period).toISOString();
-    const end = nowIso();
-
-    const runMetrics = this.telemetry?.getAllRunMetrics() ?? [];
-    const completedRuns = runMetrics.filter((r) => r.completedAt);
-    const failedRuns = completedRuns.filter((r) => r.finalState === "failed");
-
-    const successRate = completedRuns.length > 0
-      ? (completedRuns.length - failedRuns.length) / completedRuns.length
-      : 0;
-
-    const errorRate = completedRuns.length > 0
-      ? failedRuns.length / completedRuns.length
-      : 0;
-
-    const totalRunDuration = completedRuns.reduce((sum, r) => sum + (r.durationMs ?? 0), 0);
-    const averageRunDurationMs = completedRuns.length > 0
-      ? totalRunDuration / completedRuns.length
-      : 0;
-
-    // Sort durations for p95
-    const durations = completedRuns
-      .map((r) => r.durationMs ?? 0)
-      .sort((a, b) => a - b);
-    const p95Index = Math.floor(durations.length * 0.95);
-    const p95RunDurationMs = durations[p95Index] ?? 0;
-
-    const gateChecks: GateCheck[] = [
-      {
-        name: "Success Rate",
-        metric: "successRate",
-        threshold: this.gateThresholds.minSuccessRate,
-        actual: successRate,
-        status: successRate >= this.gateThresholds.minSuccessRate ? "pass" : "fail",
-        message: `${(successRate * 100).toFixed(1)}% (threshold: ${(this.gateThresholds.minSuccessRate * 100).toFixed(0)}%)`,
-      },
-      {
-        name: "Error Rate",
-        metric: "errorRate",
-        threshold: this.gateThresholds.maxErrorRate,
-        actual: errorRate,
-        status: errorRate <= this.gateThresholds.maxErrorRate ? "pass" : "fail",
-        message: `${(errorRate * 100).toFixed(1)}% (max: ${(this.gateThresholds.maxErrorRate * 100).toFixed(0)}%)`,
-      },
-      {
-        name: "Average Run Duration",
-        metric: "averageRunDurationMs",
-        threshold: this.gateThresholds.maxAverageRunDurationMs,
-        actual: averageRunDurationMs,
-        status: averageRunDurationMs <= this.gateThresholds.maxAverageRunDurationMs ? "pass" : "warning",
-        message: `${(averageRunDurationMs / 1000).toFixed(1)}s (max: ${(this.gateThresholds.maxAverageRunDurationMs / 1000).toFixed(0)}s)`,
-      },
-    ];
-
-    const failedChecks = gateChecks.filter((c) => c.status === "fail").length;
-    const warnedChecks = gateChecks.filter((c) => c.status === "warning").length;
-
-    let gateStatus: "pass" | "fail" | "warning" = "pass";
-    if (failedChecks > 0) {
-      gateStatus = "fail";
-    } else if (warnedChecks > 0) {
-      gateStatus = "warning";
-    }
-
-    return {
-      timestamp: nowIso(),
-      period: { start, end },
-      successRate,
-      errorRate,
-      toolApprovalRate: this.calculateApprovalRate(runMetrics),
-      toolRejectionRate: 1 - this.calculateApprovalRate(runMetrics),
-      averageRunDurationMs,
-      p95RunDurationMs,
-      compactionSuccessRate: 0, // Would need compaction metrics
-      subagentSuccessRate: 0, // Would need subagent metrics
-      mcpConnectionSuccessRate: 0, // Would need MCP metrics
-      gateStatus,
-      gateChecks,
-    };
-  }
-
-  // ==========================================================================
-  // Request Tracking
-  // ==========================================================================
-
-  /**
-   * Record a request.
-   */
-  recordRequest(success: boolean, latencyMs: number): void {
-    this.requestCount++;
-    if (success) {
-      this.successCount++;
-    } else {
-      this.failureCount++;
-    }
-    this.totalLatencyMs += latencyMs;
-  }
+		/**
+		 * GET /diagnostics/providers - Provider 状态
+		 */
+		getProviders: async (): Promise<ProviderDiagnostics[]> => {
+			return diagnostics.getAllProviders();
+		},
+	};
 }

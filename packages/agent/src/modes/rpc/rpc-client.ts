@@ -4,6 +4,9 @@
 
 import type { RpcCommand, RpcExtensionUIResponse, RpcResponse, RpcSessionState } from "./rpc-types";
 import { serializeJsonLine, parseJsonLine } from "./jsonl";
+import { getLogger } from "../../logger";
+
+const logger = getLogger("rpc-client");
 
 export interface RpcClientOptions {
   /** Command to spawn the server process */
@@ -27,6 +30,9 @@ export class RpcClient {
   private listeners: RpcEventListener[] = [];
   private pendingRequests = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private connected = false;
+  private connectionStartTime = 0;
+  private requestCounter = 0;
+  private errorCounter = 0;
 
   constructor(private readonly options: RpcClientOptions) {}
 
@@ -35,6 +41,12 @@ export class RpcClient {
    */
   async connect(): Promise<void> {
     const { spawn } = await import("node:child_process");
+    this.connectionStartTime = Date.now();
+
+    logger.info("RPC client connecting", {
+      command: this.options.command[0],
+      cwd: this.options.cwd,
+    });
 
     this.proc = spawn(this.options.command[0], this.options.command.slice(1), {
       env: { ...process.env, ...this.options.env },
@@ -43,7 +55,10 @@ export class RpcClient {
     });
 
     return new Promise((resolve, reject) => {
-      if (!this.proc) return reject(new Error("Process not created"));
+      if (!this.proc) {
+        logger.error("RPC client failed: Process not created");
+        return reject(new Error("Process not created"));
+      }
 
       this.proc.stdout?.on("data", (data: Buffer) => {
         const lines = data.toString().split("\n").filter((l) => l.trim());
@@ -73,6 +88,8 @@ export class RpcClient {
           for (const listener of this.listeners) {
             if ((parsed as { type: string }).type === "rpc_ready") {
               this.connected = true;
+              const durationMs = Date.now() - this.connectionStartTime;
+              logger.info("RPC client connected", { durationMs });
               resolve();
             }
             listener({ type: "event", event: (parsed as { type: string }).type, data: parsed });
@@ -81,15 +98,19 @@ export class RpcClient {
       });
 
       this.proc.stderr?.on("data", (data: Buffer) => {
-        console.error("RPC stderr:", data.toString());
+        logger.warn("RPC stderr", { data: data.toString().slice(0, 200) });
       });
 
       this.proc.on("error", (err) => {
+        logger.errorWithError("RPC client connection error", err);
         reject(err);
       });
 
       this.proc.on("close", (code) => {
+        const wasConnected = this.connected;
         this.connected = false;
+        logger.info("RPC client disconnected", { exitCode: code, wasConnected });
+
         // Reject all pending requests
         for (const [_, pending] of this.pendingRequests) {
           pending.reject(new Error(`Process exited with code ${code}`));
@@ -103,6 +124,7 @@ export class RpcClient {
    * Disconnect from the RPC server.
    */
   disconnect(): void {
+    logger.info("RPC client disconnecting");
     this.proc?.kill();
     this.proc = null;
     this.connected = false;
@@ -113,13 +135,18 @@ export class RpcClient {
    */
   async sendCommand<T>(command: RpcCommand): Promise<T> {
     if (!this.proc || !this.connected) {
+      logger.error("RPC command failed: Not connected", { command: command.type });
       throw new Error("Not connected to RPC server");
     }
 
     const id = generateId();
     const cmdWithId = { ...command, id };
+    this.requestCounter++;
 
-    return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    logger.debug("RPC command sending", { command: command.type, id });
+
+    return new Promise<T>((resolve, reject) => {
       this.pendingRequests.set(id, { resolve: resolve as (value: unknown) => void, reject });
 
       this.proc?.stdin?.write(serializeJsonLine(cmdWithId));
@@ -128,9 +155,20 @@ export class RpcClient {
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
+          this.errorCounter++;
+          logger.warn("RPC command timeout", { command: command.type, id, timeoutMs: 60000 });
           reject(new Error("Request timeout"));
         }
       }, 60000);
+    }).then((result) => {
+      const durationMs = Date.now() - startTime;
+      logger.debug("RPC command completed", { command: command.type, id, durationMs });
+      return result as T;
+    }).catch((error) => {
+      const durationMs = Date.now() - startTime;
+      this.errorCounter++;
+      logger.warn("RPC command failed", { command: command.type, id, durationMs, error: String(error) });
+      throw error;
     });
   }
 
