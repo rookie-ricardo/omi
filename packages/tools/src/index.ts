@@ -1,4 +1,5 @@
 export * from "./tools";
+export { SAFE_TOOL_NAMES, PLAN_MODE_TOOL_NAMES } from "./registry";
 export * from "./frontmatter";
 export * from "./truncate";
 export * from "./path-utils";

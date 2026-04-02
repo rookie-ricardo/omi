@@ -32,6 +32,7 @@ import {
 } from "@omi/memory";
 import { createModelFromConfig, PiAiProvider } from "@omi/provider";
 import type { ProviderAdapter, ProviderRunResult, ProviderToolRequestedEvent } from "@omi/provider";
+import { SAFE_TOOL_NAMES } from "@omi/tools";
 import type { ToolName } from "@omi/tools";
 import type { AppStore } from "@omi/store";
 import type { ResourceLoader } from "./resource-loader";
@@ -45,6 +46,7 @@ import {
   type QueryLoopState,
   type QueryLoopTerminalEvent,
   type QueryLoopTransitionEvent,
+  type ToolExecutionMode,
   type TerminalReason,
   createInitialMutableState,
   isValidTransition,
@@ -154,6 +156,18 @@ const DEFAULT_RETRY_SETTINGS: RetrySettings = {
   maxDelayMs: DEFAULT_RECOVERY_SETTINGS.maxDelayMs,
 };
 
+export function resolveToolExecutionMode(
+  enabledTools: ToolName[] | undefined,
+): ToolExecutionMode {
+  if (!enabledTools || enabledTools.length === 0) {
+    return "sequential";
+  }
+
+  return enabledTools.every((toolName) => SAFE_TOOL_NAMES.has(toolName))
+    ? "parallel"
+    : "sequential";
+}
+
 // ============================================================================
 // QueryEngine - State Machine Core
 // ============================================================================
@@ -163,6 +177,7 @@ export class QueryEngine {
   private readonly evaluator: PermissionEvaluator;
   private readonly denialTracker: DenialTracker;
   private state: QueryLoopMutableState;
+  private currentRunId: string | null = null;
   private canceled = false;
   private recoveryEngine: RecoveryEngine | null = null;
 
@@ -179,7 +194,7 @@ export class QueryEngine {
   snapshot(): QueryLoopSnapshot {
     return {
       sessionId: this.deps.sessionId,
-      runId: "",
+      runId: this.currentRunId ?? "",
       ...this.state,
     };
   }
@@ -206,6 +221,7 @@ export class QueryEngine {
 
   async execute(input: QueryEngineRunInput): Promise<QueryEngineResult> {
     this.state = createInitialMutableState();
+    this.currentRunId = input.run.id;
     this.canceled = false;
 
     // Initialize recovery engine for this run
@@ -227,6 +243,10 @@ export class QueryEngine {
         prepared,
         extensionRunner,
       );
+      this.state.messages = prepared.currentHistoryMessages;
+      this.state.compactTracking.lastContextTokens = estimateContextTokens(
+        prepared.currentHistoryMessages,
+      ).tokens;
 
       // preprocess_context -> calling_model
       this.transition("calling_model", "context_prepared");
@@ -242,13 +262,17 @@ export class QueryEngine {
       );
       if (pipelineResult.didCompact) {
         currentHistoryMessages = pipelineResult.messages;
+        this.state.messages = currentHistoryMessages;
       }
 
       const retrySettings =
         this.deps.settingsManager?.getRetrySettings?.() ?? DEFAULT_RETRY_SETTINGS;
 
       // Outer retry loop for transient errors
-      while (this.state.retryAttempt <= (retrySettings.enabled ? retrySettings.maxRetries : 0)) {
+      while (this.state.recoveryCount <= (retrySettings.enabled ? retrySettings.maxRetries : 0)) {
+        if (this.state.budget.maxTurns > 0 && this.state.turnCount >= this.state.budget.maxTurns) {
+          return this.terminate("max_turns", null);
+        }
         if (this.canceled) {
           return this.terminate("canceled", null);
         }
@@ -256,9 +280,8 @@ export class QueryEngine {
         // Checkpoint: before_model_call
         this.recoveryEngine.saveCheckpoint("before_model_call", {
           turnCount: this.state.turnCount,
-          retryAttempt: this.state.retryAttempt,
-          maxOutputRecoveryCount: this.state.maxOutputRecoveryCount,
-          overflowRecovered: this.state.overflowRecovered,
+          recoveryCount: this.state.recoveryCount,
+          compactTracking: this.state.compactTracking,
           partialAssistantText: "",
         });
 
@@ -280,9 +303,8 @@ export class QueryEngine {
         } catch (error) {
           // Error classification and recovery via RecoveryEngine
           const { action } = this.recoveryEngine.classifyAndDecide(error, {
-            retryAttempt: this.state.retryAttempt,
-            maxOutputRecoveryCount: this.state.maxOutputRecoveryCount,
-            overflowRecovered: this.state.overflowRecovered,
+            recoveryCount: this.state.recoveryCount,
+            compactTracking: this.state.compactTracking,
           });
 
           if (action.kind === "retry") {
@@ -292,13 +314,13 @@ export class QueryEngine {
               payload: {
                 runId: input.run.id,
                 sessionId: input.session.id,
-                attempt: this.state.retryAttempt + 1,
+                attempt: this.state.recoveryCount + 1,
                 delayMs: action.delayMs,
                 error: error instanceof Error ? error.message : String(error),
               },
             });
             await this.delayWithAbort(action.delayMs, input.run.id);
-            this.state.retryAttempt++;
+            this.state.recoveryCount++;
             this.transition("calling_model", "retry");
             continue;
           }
@@ -320,16 +342,20 @@ export class QueryEngine {
                 input.session.id,
                 prepared.branchLeafEntryId,
               );
-              this.state.overflowRecovered = true;
+              this.state.compactTracking.overflowRecovered = true;
+              this.state.messages = currentHistoryMessages;
               this.transition("calling_model", "overflow_retry");
               continue;
             }
             // Compaction failed, fall through to terminal
-            return this.terminate("prompt_too_long", error instanceof Error ? error.message : String(error));
+            return this.terminate(
+              "budget_exceeded",
+              error instanceof Error ? error.message : String(error),
+            );
           }
           if (action.kind === "max_output_recovery") {
             this.transition("recovering", "max_output_recovery");
-            this.state.maxOutputRecoveryCount++;
+            this.state.compactTracking.maxOutputRecoveryCount++;
             // Max output recovery continues the conversation with a meta message
             this.transition("calling_model", "max_output_retry");
             continue;
@@ -358,21 +384,20 @@ export class QueryEngine {
         // Checkpoint: after_model_stream
         this.recoveryEngine.saveCheckpoint("after_model_stream", {
           turnCount: this.state.turnCount,
-          retryAttempt: this.state.retryAttempt,
-          maxOutputRecoveryCount: this.state.maxOutputRecoveryCount,
-          overflowRecovered: this.state.overflowRecovered,
+          recoveryCount: this.state.recoveryCount,
+          compactTracking: this.state.compactTracking,
           partialAssistantText: result.assistantText,
         });
 
         // Emit retry-end event if we retried
-        if (this.state.retryAttempt > 0 || this.state.overflowRecovered) {
+        if (this.state.recoveryCount > 0 || this.state.compactTracking.overflowRecovered) {
           this.emitEvent({
             type: "auto_retry_end",
             payload: {
               runId: input.run.id,
               sessionId: input.session.id,
               success: true,
-              attempt: this.state.retryAttempt,
+              attempt: this.state.recoveryCount,
             },
           });
         }
@@ -387,9 +412,8 @@ export class QueryEngine {
         // Checkpoint: after_tool_batch (before post_tool_merge)
         this.recoveryEngine.saveCheckpoint("after_tool_batch", {
           turnCount: this.state.turnCount,
-          retryAttempt: this.state.retryAttempt,
-          maxOutputRecoveryCount: this.state.maxOutputRecoveryCount,
-          overflowRecovered: this.state.overflowRecovered,
+          recoveryCount: this.state.recoveryCount,
+          compactTracking: this.state.compactTracking,
           partialAssistantText: result.assistantText,
         });
 
@@ -399,9 +423,8 @@ export class QueryEngine {
         // Checkpoint: before_terminal_commit
         this.recoveryEngine.saveCheckpoint("before_terminal_commit", {
           turnCount: this.state.turnCount,
-          retryAttempt: this.state.retryAttempt,
-          maxOutputRecoveryCount: this.state.maxOutputRecoveryCount,
-          overflowRecovered: this.state.overflowRecovered,
+          recoveryCount: this.state.recoveryCount,
+          compactTracking: this.state.compactTracking,
           partialAssistantText: result.assistantText,
         });
 
@@ -438,7 +461,7 @@ export class QueryEngine {
 
     this.emitEvent({
       type: "query_loop.transition",
-      runId: "",
+      runId: this.currentRunId ?? "",
       sessionId: this.deps.sessionId,
       from,
       to,
@@ -461,7 +484,7 @@ export class QueryEngine {
 
     this.emitEvent({
       type: "query_loop.terminal",
-      runId: "",
+      runId: this.currentRunId ?? "",
       sessionId: this.deps.sessionId,
       reason,
       error,
@@ -505,6 +528,9 @@ export class QueryEngine {
         enabledTools: resolvedSkill?.enabledToolNames.length
           ? (resolvedSkill.enabledToolNames as ToolName[])
           : undefined,
+        toolExecutionMode: resolveToolExecutionMode(
+          resolvedSkill?.enabledToolNames as ToolName[] | undefined,
+        ),
         onTextDelta: (delta) => {
           this.emitEvent({
             type: "run.delta",
@@ -1071,6 +1097,7 @@ export class QueryEngine {
 
     const pipeline = new ContextPipeline(pipelineConfig);
     const usageEstimate = estimateContextTokens(messages);
+    this.state.compactTracking.lastContextTokens = usageEstimate.tokens;
 
     const result = await pipeline.execute({
       messages,

@@ -424,7 +424,11 @@ export class AgentSession {
       database: this.options.database,
       sessionId: this.options.sessionId,
       workspaceRoot: this.options.workspaceRoot,
-      emit: (event) => this.emitAndPersist(input.run.id, input.session.id, event as RunnerEventEnvelope),
+      emit: (event) =>
+        this.emitAndPersist(input.run.id, input.session.id, {
+          type: event.type,
+          payload: event as unknown as Record<string, unknown>,
+        }),
       resources: this.options.resources,
       runtime: this.options.runtime,
       provider: this.provider,
@@ -448,8 +452,8 @@ export class AgentSession {
         checkpointDetails: input.checkpointDetails,
       });
 
-      // Handle failure cases
-      if (result.terminalReason === "error" || result.terminalReason === "canceled") {
+      // Handle non-terminal-success cases
+      if (result.terminalReason !== "completed") {
         await this.handleFailedRun(input, new Error(result.error ?? result.terminalReason));
       }
     } catch (error) {

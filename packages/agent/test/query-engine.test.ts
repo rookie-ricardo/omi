@@ -2,13 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ProviderConfig, Run, Session, Task } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
 import type { AppStore } from "@omi/store";
-import type { ProviderRunResult } from "@omi/provider";
+import type { ProviderRunInput, ProviderRunResult } from "@omi/provider";
 
 import {
   QueryEngine,
   type QueryEngineDeps,
   type QueryEngineEvent,
   type QueryEngineRunInput,
+  resolveToolExecutionMode,
   nextSessionStatus,
   nextTaskStatus,
   normalizeHistoryDetails,
@@ -357,6 +358,79 @@ describe("QueryEngine", () => {
       for (const target of allStates) {
         expect(isValidTransition("terminal", target)).toBe(false);
       }
+    });
+  });
+
+  describe("tool execution mode", () => {
+    it("uses parallel mode for the concurrency-safe read-only whitelist", () => {
+      expect(resolveToolExecutionMode(["read", "ls", "grep", "find"])).toBe("parallel");
+    });
+
+    it("falls back to sequential mode when any write tool is enabled", () => {
+      expect(resolveToolExecutionMode(["read", "bash"])).toBe("sequential");
+      expect(resolveToolExecutionMode(undefined)).toBe("sequential");
+    });
+  });
+
+  describe("execute", () => {
+    it("emits auditable query loop events with the current run and session ids", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+      const providerCalls: ProviderRunInput[] = [];
+
+      const provider = {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+          providerCalls.push(input);
+          return { assistantText: "done" };
+        },
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      const result = await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "hello",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(result.terminalReason).toBe("completed");
+      expect(providerCalls).toHaveLength(1);
+      expect(providerCalls[0]?.toolExecutionMode).toBe("sequential");
+
+      const transitionEvent = events.find((event) => event.type === "query_loop.transition");
+      expect(transitionEvent).toMatchObject({
+        type: "query_loop.transition",
+        runId: run.id,
+        sessionId: session.id,
+      });
+
+      const terminalEvent = events.find((event) => event.type === "query_loop.terminal");
+      expect(terminalEvent).toMatchObject({
+        type: "query_loop.terminal",
+        runId: run.id,
+        sessionId: session.id,
+        reason: "completed",
+      });
     });
   });
 

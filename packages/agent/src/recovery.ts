@@ -6,7 +6,7 @@ import {
   extractRetryAfterDelay,
 } from "@omi/memory";
 import type { AppStore } from "@omi/store";
-import type { TerminalReason } from "./query-state";
+import type { QueryLoopMutableState, TerminalReason } from "./query-state";
 
 // ============================================================================
 // Error Classification
@@ -95,11 +95,13 @@ export type RecoveryAction =
 export interface RecoveryDecisionParams {
   error: unknown;
   errorClass: ErrorClass;
-  retryAttempt: number;
+  recoveryCount: number;
   maxRetryAttempts: number;
-  maxOutputRecoveryCount: number;
+  compactTracking: Pick<
+    QueryLoopMutableState["compactTracking"],
+    "maxOutputRecoveryCount" | "overflowRecovered"
+  >;
   maxOutputRecoveryLimit: number;
-  overflowRecovered: boolean;
   baseDelayMs: number;
   maxDelayMs: number;
 }
@@ -108,29 +110,28 @@ export function decideRecoveryAction(params: RecoveryDecisionParams): RecoveryAc
   const {
     error,
     errorClass,
-    retryAttempt,
+    recoveryCount,
     maxRetryAttempts,
-    maxOutputRecoveryCount,
+    compactTracking,
     maxOutputRecoveryLimit,
-    overflowRecovered,
     baseDelayMs,
     maxDelayMs,
   } = params;
 
   switch (errorClass) {
     case "prompt_too_long": {
-      if (overflowRecovered) {
+      if (compactTracking.overflowRecovered) {
         return {
           kind: "fail",
           reason: "overflow_already_attempted",
-          terminalReason: "prompt_too_long",
+          terminalReason: "budget_exceeded",
         };
       }
       return { kind: "overflow_compact", reason: "context_overflow" };
     }
 
     case "max_output": {
-      if (maxOutputRecoveryCount >= maxOutputRecoveryLimit) {
+      if (compactTracking.maxOutputRecoveryCount >= maxOutputRecoveryLimit) {
         return {
           kind: "fail",
           reason: "max_output_recovery_exhausted",
@@ -142,7 +143,7 @@ export function decideRecoveryAction(params: RecoveryDecisionParams): RecoveryAc
 
     case "rate_limit":
     case "network": {
-      if (retryAttempt >= maxRetryAttempts) {
+      if (recoveryCount >= maxRetryAttempts) {
         return {
           kind: "fail",
           reason: "retries_exhausted",
@@ -150,7 +151,7 @@ export function decideRecoveryAction(params: RecoveryDecisionParams): RecoveryAc
         };
       }
 
-      const exponentialDelay = baseDelayMs * Math.pow(2, retryAttempt);
+      const exponentialDelay = baseDelayMs * Math.pow(2, recoveryCount);
       const serverDelay = extractRetryAfterDelay(error);
       // Prefer server-provided delay, but cap it
       const delayMs = serverDelay !== undefined
@@ -192,8 +193,8 @@ export function decideRecoveryAction(params: RecoveryDecisionParams): RecoveryAc
     case "unknown":
     default: {
       // Unknown errors get one retry attempt if budget allows
-      if (isRetryableError(error) && retryAttempt < maxRetryAttempts) {
-        const exponentialDelay = baseDelayMs * Math.pow(2, retryAttempt);
+      if (isRetryableError(error) && recoveryCount < maxRetryAttempts) {
+        const exponentialDelay = baseDelayMs * Math.pow(2, recoveryCount);
         return {
           kind: "retry",
           delayMs: Math.min(exponentialDelay, maxDelayMs),
@@ -217,12 +218,10 @@ export function decideRecoveryAction(params: RecoveryDecisionParams): RecoveryAc
 export interface CheckpointPayload {
   /** Turn count at checkpoint time. */
   turnCount: number;
-  /** Number of retry attempts so far. */
-  retryAttempt: number;
-  /** Number of max output recovery attempts so far. */
-  maxOutputRecoveryCount: number;
-  /** Whether overflow recovery was already attempted. */
-  overflowRecovered: boolean;
+  /** Number of transient recovery attempts so far. */
+  recoveryCount: number;
+  /** Compaction and overflow tracking. */
+  compactTracking: QueryLoopMutableState["compactTracking"];
   /** Tool call IDs that have been executed with write side-effects. */
   executedWriteToolCallIds: string[];
   /** Snapshot of partial assistant text (for max_output recovery). */
@@ -522,18 +521,19 @@ export class RecoveryEngine {
     phase: RunCheckpointPhase,
     state: {
       turnCount: number;
-      retryAttempt: number;
-      maxOutputRecoveryCount: number;
-      overflowRecovered: boolean;
+      recoveryCount: number;
+      compactTracking: Pick<
+        QueryLoopMutableState["compactTracking"],
+        "maxOutputRecoveryCount" | "overflowRecovered"
+      >;
       partialAssistantText: string;
       context?: Record<string, unknown>;
     },
   ): RunCheckpoint {
     const checkpoint = this.checkpointManager.save(phase, {
       turnCount: state.turnCount,
-      retryAttempt: state.retryAttempt,
-      maxOutputRecoveryCount: state.maxOutputRecoveryCount,
-      overflowRecovered: state.overflowRecovered,
+      recoveryCount: state.recoveryCount,
+      compactTracking: state.compactTracking,
       partialAssistantText: state.partialAssistantText,
       context: state.context ?? {},
     });
@@ -555,9 +555,11 @@ export class RecoveryEngine {
   classifyAndDecide(
     error: unknown,
     state: {
-      retryAttempt: number;
-      maxOutputRecoveryCount: number;
-      overflowRecovered: boolean;
+      recoveryCount: number;
+      compactTracking: Pick<
+        QueryLoopMutableState["compactTracking"],
+        "maxOutputRecoveryCount" | "overflowRecovered"
+      >;
     },
     settings = DEFAULT_RECOVERY_SETTINGS,
   ): { errorClass: ErrorClass; action: RecoveryAction } {
@@ -565,11 +567,10 @@ export class RecoveryEngine {
     const action = decideRecoveryAction({
       error,
       errorClass,
-      retryAttempt: state.retryAttempt,
+      recoveryCount: state.recoveryCount,
       maxRetryAttempts: settings.maxRetryAttempts,
-      maxOutputRecoveryCount: state.maxOutputRecoveryCount,
+      compactTracking: state.compactTracking,
       maxOutputRecoveryLimit: settings.maxOutputRecoveryLimit,
-      overflowRecovered: state.overflowRecovered,
       baseDelayMs: settings.baseDelayMs,
       maxDelayMs: settings.maxDelayMs,
     });

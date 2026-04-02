@@ -24,7 +24,7 @@ import type { RuntimeMessage } from "@omi/memory";
  *   executing_tools -> terminal (on cancellation)
  *   executing_tools -> recovering (on tool error)
  *   post_tool_merge -> preprocess_context (continue loop)
- *   post_tool_merge -> terminal (on max_turns / budget / cancel)
+ *   post_tool_merge -> terminal (on max_turns / budget_exceeded / cancel)
  *   recovering -> calling_model (overflow retry)
  *   recovering -> preprocess_context (retry)
  *   recovering -> terminal (on exhausted retries)
@@ -47,12 +47,7 @@ export type TerminalReason =
   | "max_turns"
   | "budget_exceeded"
   | "canceled"
-  | "error"
-  | "blocking_limit"
-  | "aborted_streaming"
-  | "aborted_tools"
-  | "prompt_too_long"
-  | "stop_hook_prevented";
+  | "error";
 
 /**
  * Tool execution mode: sequential for mutations, parallel for read-only.
@@ -74,6 +69,17 @@ export interface QueryLoopBudget {
   maxRetryAttempts: number;
 }
 
+export interface QueryLoopCompactTracking {
+  /** Number of max_output_tokens recovery attempts. */
+  maxOutputRecoveryCount: number;
+  /** Whether overflow recovery has already been attempted. */
+  overflowRecovered: boolean;
+  /** The last stop reason reported by the model. */
+  lastStopReason: string | null;
+  /** Snapshot of context tokens from the latest health check. */
+  lastContextTokens: number;
+}
+
 export interface QueryLoopMutableState {
   /** Current state machine state. */
   currentState: QueryLoopState;
@@ -81,12 +87,12 @@ export interface QueryLoopMutableState {
   messages: RuntimeMessage[];
   /** Number of completed turns (user prompt -> assistant response = 1 turn). */
   turnCount: number;
-  /** Number of transient-error retry attempts in the current run. */
-  retryAttempt: number;
-  /** Number of max_output_tokens recovery attempts. */
-  maxOutputRecoveryCount: number;
-  /** Whether overflow recovery has already been attempted. */
-  overflowRecovered: boolean;
+  /** Number of transient-error recovery attempts in the current run. */
+  recoveryCount: number;
+  /** Compaction and overflow tracking for this run. */
+  compactTracking: QueryLoopCompactTracking;
+  /** Runtime budget for this query loop. */
+  budget: QueryLoopBudget;
   /** Last terminal reason (set when state becomes "terminal"). */
   terminalReason: TerminalReason | null;
   /** Error that caused termination (if any). */
@@ -144,14 +150,20 @@ export const DEFAULT_QUERY_LOOP_BUDGET: QueryLoopBudget = {
 
 export function createInitialMutableState(
   initialMessages: RuntimeMessage[] = [],
+  budget: QueryLoopBudget = DEFAULT_QUERY_LOOP_BUDGET,
 ): QueryLoopMutableState {
   return {
     currentState: "init",
     messages: initialMessages,
     turnCount: 0,
-    retryAttempt: 0,
-    maxOutputRecoveryCount: 0,
-    overflowRecovered: false,
+    recoveryCount: 0,
+    compactTracking: {
+      maxOutputRecoveryCount: 0,
+      overflowRecovered: false,
+      lastStopReason: null,
+      lastContextTokens: 0,
+    },
+    budget: { ...budget },
     terminalReason: null,
     terminalError: null,
     lastStopReason: null,

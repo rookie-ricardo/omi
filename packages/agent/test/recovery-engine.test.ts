@@ -116,11 +116,13 @@ function makeDefaultParams(overrides?: Partial<RecoveryDecisionParams>): Recover
   return {
     error: new Error("test"),
     errorClass: "unknown",
-    retryAttempt: 0,
+    recoveryCount: 0,
     maxRetryAttempts: 3,
-    maxOutputRecoveryCount: 0,
+    compactTracking: {
+      maxOutputRecoveryCount: 0,
+      overflowRecovered: false,
+    },
     maxOutputRecoveryLimit: 3,
-    overflowRecovered: false,
     baseDelayMs: 2000,
     maxDelayMs: 60000,
     ...overrides,
@@ -132,7 +134,10 @@ describe("decideRecoveryAction", () => {
     it("returns overflow_compact on first occurrence", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "prompt_too_long",
-        overflowRecovered: false,
+        compactTracking: {
+          maxOutputRecoveryCount: 0,
+          overflowRecovered: false,
+        },
       }));
       expect(action.kind).toBe("overflow_compact");
     });
@@ -140,11 +145,14 @@ describe("decideRecoveryAction", () => {
     it("returns fail on second occurrence (overflowRecovered = true)", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "prompt_too_long",
-        overflowRecovered: true,
+        compactTracking: {
+          maxOutputRecoveryCount: 0,
+          overflowRecovered: true,
+        },
       }));
       expect(action.kind).toBe("fail");
       if (action.kind === "fail") {
-        expect(action.terminalReason).toBe("prompt_too_long");
+        expect(action.terminalReason).toBe("budget_exceeded");
       }
     });
   });
@@ -153,7 +161,10 @@ describe("decideRecoveryAction", () => {
     it("returns max_output_recovery when under limit", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "max_output",
-        maxOutputRecoveryCount: 0,
+        compactTracking: {
+          maxOutputRecoveryCount: 0,
+          overflowRecovered: false,
+        },
         maxOutputRecoveryLimit: 3,
       }));
       expect(action.kind).toBe("max_output_recovery");
@@ -162,7 +173,10 @@ describe("decideRecoveryAction", () => {
     it("returns fail when at limit", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "max_output",
-        maxOutputRecoveryCount: 3,
+        compactTracking: {
+          maxOutputRecoveryCount: 3,
+          overflowRecovered: false,
+        },
         maxOutputRecoveryLimit: 3,
       }));
       expect(action.kind).toBe("fail");
@@ -174,7 +188,10 @@ describe("decideRecoveryAction", () => {
     it("returns max_output_recovery at count 2 (still under limit)", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "max_output",
-        maxOutputRecoveryCount: 2,
+        compactTracking: {
+          maxOutputRecoveryCount: 2,
+          overflowRecovered: false,
+        },
         maxOutputRecoveryLimit: 3,
       }));
       expect(action.kind).toBe("max_output_recovery");
@@ -186,7 +203,7 @@ describe("decideRecoveryAction", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         error: new Error("rate limit"),
         errorClass: "rate_limit",
-        retryAttempt: 0,
+        recoveryCount: 0,
         baseDelayMs: 2000,
         maxDelayMs: 60000,
       }));
@@ -200,7 +217,7 @@ describe("decideRecoveryAction", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         error: new Error("network error"),
         errorClass: "network",
-        retryAttempt: 1,
+        recoveryCount: 1,
         baseDelayMs: 2000,
         maxDelayMs: 60000,
       }));
@@ -214,7 +231,7 @@ describe("decideRecoveryAction", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         error: new Error("network error"),
         errorClass: "network",
-        retryAttempt: 2,
+        recoveryCount: 2,
         maxRetryAttempts: 5,
         baseDelayMs: 2000,
         maxDelayMs: 3000,
@@ -229,7 +246,7 @@ describe("decideRecoveryAction", () => {
     it("returns fail when retries exhausted", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "rate_limit",
-        retryAttempt: 3,
+        recoveryCount: 3,
         maxRetryAttempts: 3,
       }));
       expect(action.kind).toBe("fail");
@@ -278,7 +295,7 @@ describe("decideRecoveryAction", () => {
       const action = decideRecoveryAction(makeDefaultParams({
         errorClass: "unknown",
         error: new Error("something weird"),
-        retryAttempt: 0,
+        recoveryCount: 0,
         maxRetryAttempts: 3,
       }));
       // "something weird" is not retryable by isRetryableError

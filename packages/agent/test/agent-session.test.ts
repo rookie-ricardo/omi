@@ -153,6 +153,16 @@ describe("agent session", () => {
     expect(events.some((event) => event.type === "run.tool_requested")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_started")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_finished")).toBe(true);
+    const queryLoopEvents = database.listEvents(run.id).filter((event) =>
+      event.type.startsWith("query_loop."),
+    );
+    expect(queryLoopEvents.length).toBeGreaterThan(0);
+    expect(queryLoopEvents[0]?.payload).toMatchObject({
+      type: "query_loop.transition",
+      runId: run.id,
+      sessionId: session.id,
+    });
+    expect(queryLoopEvents.some((event) => event.type === "query_loop.terminal")).toBe(true);
     expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["read"]);
     expect(extensionEvents).toEqual(
       expect.arrayContaining(["run.started", "run.tool_requested", "run.tool_started", "run.tool_finished", "run.completed"]),

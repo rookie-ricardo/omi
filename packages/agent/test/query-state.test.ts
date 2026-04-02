@@ -14,9 +14,17 @@ describe("query-state", () => {
       const state = createInitialMutableState();
       expect(state.currentState).toBe("init");
       expect(state.turnCount).toBe(0);
-      expect(state.retryAttempt).toBe(0);
-      expect(state.maxOutputRecoveryCount).toBe(0);
-      expect(state.overflowRecovered).toBe(false);
+      expect(state.recoveryCount).toBe(0);
+      expect(state.compactTracking.maxOutputRecoveryCount).toBe(0);
+      expect(state.compactTracking.overflowRecovered).toBe(false);
+      expect(state.compactTracking.lastStopReason).toBeNull();
+      expect(state.compactTracking.lastContextTokens).toBe(0);
+      expect(state.budget).toMatchObject({
+        maxTurns: 200,
+        maxBudgetUsd: 0,
+        maxOutputRecoveryAttempts: 3,
+        maxRetryAttempts: 3,
+      });
       expect(state.terminalReason).toBeNull();
       expect(state.terminalError).toBeNull();
       expect(state.lastStopReason).toBeNull();
@@ -194,10 +202,13 @@ describe("query-state", () => {
         "canceled",
         "error",
       ];
-      // Verify they are valid string literals (compile-time check)
-      for (const reason of requiredReasons) {
-        expect(typeof reason).toBe("string");
-      }
+      expect(requiredReasons).toEqual([
+        "completed",
+        "max_turns",
+        "budget_exceeded",
+        "canceled",
+        "error",
+      ]);
     });
   });
 
