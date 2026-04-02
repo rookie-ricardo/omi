@@ -1,600 +1,592 @@
 /**
- * Swarm Mode
+ * Swarm - Emergent multi-agent collaboration pattern
  *
- * Implements task-claiming pattern where multiple agents compete for
- * and collaborate on tasks without central coordination.
+ * Implements a swarm of agents that collaborate through message passing
+ * and emergent task resolution. Unlike the coordinator, swarm agents
+ * self-organize and can spawn additional agents as needed.
  */
 
 import { createId, nowIso } from "@omi/core";
-import { SubAgentManager, type SubAgentConfig, type SubAgentOutput } from "../subagent-manager";
-import { TaskMailbox, type MailboxEvent, type EventFilter, type EventHandler } from "../task-mailbox";
+
+import type { Mailbox, MailboxMessage } from "../task-mailbox.js";
+import { MailboxTopics } from "../task-mailbox.js";
+import type { SubAgentManager, SubAgent } from "../subagent-manager.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type SwarmAgentStatus = "idle" | "working" | "waiting" | "leaving";
-export type SwarmStatus = "idle" | "accepting" | "processing" | "draining" | "completed" | "failed";
+/**
+ * Swarm agent role
+ */
+export type SwarmRole =
+  | "worker"      // Executes tasks
+  | "scout"       // Explores and gathers information
+  | "relay"       // Coordinates communication
+  | "synthesizer" // Combines results from multiple agents
+  | "specialist"; // Expert in a specific domain
 
+/**
+ * Swarm agent in the network
+ */
+export interface SwarmAgent {
+  id: string;
+  name: string;
+  role: SwarmRole;
+  expertise: string[];
+  parentId: string | null;
+  subAgentId?: string;
+  status: "active" | "idle" | "collaborating" | "finished";
+  contribution?: string;
+}
+
+/**
+ * Task in the swarm
+ */
 export interface SwarmTask {
   id: string;
   description: string;
-  priority: number;
-  claimedBy?: string;
-  status: "available" | "claimed" | "in_progress" | "completed" | "failed" | "abandoned";
-  result?: unknown;
+  status: "queued" | "in_progress" | "collaborating" | "completed" | "failed";
+  claimedBy: string[];
+  contributors: string[];
+  result?: string;
   error?: string;
-  claimedAt?: string;
-  completedAt?: string;
-  attempts: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface SwarmAgentInfo {
-  id: string;
-  name: string;
-  status: SwarmAgentStatus;
-  currentTask?: string;
-  completedTasks: number;
-  failedTasks: number;
-  lastHeartbeat: string;
+/**
+ * Collaboration message between agents
+ */
+export interface CollaborationMessage {
+  type: "discovery" | "offer" | "request" | "result" | "delegate" | "synthesize";
+  senderId: string;
+  targetId?: string;
+  payload: unknown;
+  timestamp: string;
 }
 
+/**
+ * Swarm configuration
+ */
 export interface SwarmConfig {
+  mailbox: Mailbox;
+  subAgentManager: SubAgentManager;
   maxAgents?: number;
-  minAgents?: number;
-  taskTimeout?: number;
-  heartbeatInterval?: number;
-  abandonTimeout?: number;
-  maxTaskAttempts?: number;
+  maxDepth?: number; // Maximum spawn depth
+  enableSpontaneousSpawn?: boolean; // Allow agents to spawn others
+  collaborationTopics?: string[];
 }
 
-export interface SwarmResult {
-  success: boolean;
-  totalTasks: number;
-  completedTasks: number;
-  failedTasks: number;
-  abandonedTasks: number;
-  results: Map<string, unknown>;
-  summary: string;
-}
+/**
+ * Swarm event
+ */
+export type SwarmEvent =
+  | { type: "agent_joined"; agent: SwarmAgent }
+  | { type: "agent_left"; agentId: string }
+  | { type: "task_created"; task: SwarmTask }
+  | { type: "task_claimed"; task: SwarmTask; agentId: string }
+  | { type: "task_collaborating"; task: SwarmTask }
+  | { type: "task_completed"; task: SwarmTask }
+  | { type: "collaboration_message"; message: CollaborationMessage }
+  | { type: "swarm_started" }
+  | { type: "swarm_converged"; results: string[] };
 
 // ============================================================================
-// Swarm
+// Swarm Implementation
 // ============================================================================
 
 export class Swarm {
-  private swarmStatus: SwarmStatus = "idle";
-  private tasks: Map<string, SwarmTask> = new Map();
-  private agents: Map<string, SwarmAgentInfo> = new Map();
-  private manager: SubAgentManager;
-  private mailbox: TaskMailbox;
+  private readonly agents = new Map<string, SwarmAgent>();
+  private readonly tasks = new Map<string, SwarmTask>();
   private readonly config: Required<SwarmConfig>;
-  private heartbeatTimers: Map<string, NodeJS.Timeout> = new Map();
-  private drainResolve?: () => void;
+  private readonly listeners = new Set<(event: SwarmEvent) => void>();
+  private readonly taskQueue: string[] = [];
+  private running = false;
+  private currentDepth = 0;
+  private readonly rootAgentId: string;
 
-  constructor(
-    private readonly swarmId: string,
-    private readonly workspaceRoot: string,
-    config: SwarmConfig = {},
-  ) {
-    this.manager = new SubAgentManager(workspaceRoot);
-    this.mailbox = new TaskMailbox();
+  constructor(config: SwarmConfig) {
     this.config = {
       maxAgents: config.maxAgents ?? 10,
-      minAgents: config.minAgents ?? 1,
-      taskTimeout: config.taskTimeout ?? 120000,
-      heartbeatInterval: config.heartbeatInterval ?? 10000,
-      abandonTimeout: config.abandonTimeout ?? 60000,
-      maxTaskAttempts: config.maxTaskAttempts ?? 3,
+      maxDepth: config.maxDepth ?? 3,
+      enableSpontaneousSpawn: config.enableSpontaneousSpawn ?? true,
+      collaborationTopics: config.collaborationTopics ?? [
+        MailboxTopics.TASK_DELEGATE,
+        MailboxTopics.TASK_COMPLETE,
+        MailboxTopics.TASK_FAIL,
+        MailboxTopics.TASK_PROGRESS,
+        "swarm/discover",
+        "swarm/offer",
+        "swarm/request",
+        "swarm/result",
+      ],
+      mailbox: config.mailbox,
+      subAgentManager: config.subAgentManager,
     };
 
-    this.setupMailboxHandlers();
+    this.rootAgentId = createId("swarm");
+
+    // Subscribe to collaboration topics
+    for (const topic of this.config.collaborationTopics) {
+      this.config.mailbox.subscribe(topic, (msg) => this.handleMessage(msg));
+    }
   }
 
-  // ==========================================================================
-  // Task Management
-  // ==========================================================================
-
   /**
-   * Add a task to the swarm.
+   * Start the swarm with the root agent.
    */
-  addTask(description: string, priority = 0): string {
-    const taskId = createId("task");
-    const task: SwarmTask = {
-      id: taskId,
-      description,
-      priority,
-      status: "available",
-      attempts: 0,
-    };
+  async start(initialTask: string): Promise<string> {
+    this.running = true;
 
-    this.tasks.set(taskId, task);
-    this.mailbox.publishTaskNotification("submitted", this.swarmId, taskId, {
-      description,
-      priority,
+    // Create root agent
+    const rootAgent = this.registerAgent({
+      id: this.rootAgentId,
+      name: "swarm-root",
+      role: "synthesizer",
+      expertise: ["general"],
+      parentId: null,
+      status: "active",
     });
 
-    return taskId;
+    this.emit({ type: "swarm_started" });
+
+    // Create initial task
+    const task = this.createTask(initialTask);
+    this.claimTask(task.id, rootAgent.id);
+
+    return rootAgent.id;
   }
 
   /**
-   * Add multiple tasks to the swarm.
+   * Stop the swarm.
    */
-  addTasks(descriptions: string[], basePriority = 0): string[] {
-    return descriptions.map((desc, i) => this.addTask(desc, basePriority - i));
-  }
+  stop(): void {
+    this.running = false;
 
-  /**
-   * Get available tasks for claiming.
-   */
-  getAvailableTasks(): SwarmTask[] {
-    return [...this.tasks.values()]
-      .filter((t) => t.status === "available")
-      .sort((a, b) => b.priority - a.priority);
-  }
-
-  /**
-   * Get task by ID.
-   */
-  getTask(taskId: string): SwarmTask | undefined {
-    return this.tasks.get(taskId);
-  }
-
-  /**
-   * Get all tasks.
-   */
-  getAllTasks(): SwarmTask[] {
-    return [...this.tasks.values()];
-  }
-
-  // ==========================================================================
-  // Agent Management
-  // ==========================================================================
-
-  /**
-   * Register a new agent with the swarm.
-   */
-  registerAgent(agentId: string, name: string): void {
-    if (this.agents.size >= this.config.maxAgents) {
-      throw new Error(`Swarm at capacity: ${this.config.maxAgents} agents`);
-    }
-
-    const agent: SwarmAgentInfo = {
-      id: agentId,
-      name,
-      status: "idle",
-      completedTasks: 0,
-      failedTasks: 0,
-      lastHeartbeat: nowIso(),
-    };
-
-    this.agents.set(agentId, agent);
-    this.startHeartbeat(agentId);
-
-    this.mailbox.publish({
-      type: "agent.status",
-      senderId: agentId,
-      payload: { status: "registered", name },
-    });
-  }
-
-  /**
-   * Unregister an agent from the swarm.
-   */
-  unregisterAgent(agentId: string): void {
-    const agent = this.agents.get(agentId);
-    if (!agent) return;
-
-    // Abandon any current task
-    if (agent.currentTask) {
-      this.abandonTask(agent.currentTask, `Agent ${agentId} leaving`);
-    }
-
-    agent.status = "leaving";
-    this.stopHeartbeat(agentId);
-    this.agents.delete(agentId);
-
-    this.mailbox.publish({
-      type: "agent.status",
-      senderId: agentId,
-      payload: { status: "unregistered", name: agent.name },
-    });
-  }
-
-  /**
-   * Get agents by status.
-   */
-  getAgentsByStatus(status: SwarmAgentStatus): SwarmAgentInfo[] {
-    return [...this.agents.values()].filter((a) => a.status === status);
-  }
-
-  // ==========================================================================
-  // Task Claiming
-  // ==========================================================================
-
-  /**
-   * Claim a task for an agent.
-   */
-  claimTask(agentId: string, taskId?: string): SwarmTask | null {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-
-    if (agent.status === "working") {
-      return null; // Already working
-    }
-
-    // Find task to claim
-    let task: SwarmTask | undefined;
-    if (taskId) {
-      task = this.tasks.get(taskId);
-      if (!task || task.status !== "available") {
-        return null;
-      }
-    } else {
-      // Auto-select highest priority available task
-      const available = this.getAvailableTasks();
-      task = available[0];
-    }
-
-    if (!task) return null;
-
-    // Claim the task
-    task.status = "claimed";
-    task.claimedBy = agentId;
-    task.claimedAt = nowIso();
-
-    agent.status = "working";
-    agent.currentTask = task.id;
-
-    this.mailbox.publishTaskNotification("started", agentId, task.id, {
-      claimedBy: agentId,
-    });
-
-    // Start task execution
-    this.executeTask(agentId, task);
-
-    return task;
-  }
-
-  /**
-   * Execute a claimed task.
-   */
-  private async executeTask(agentId: string, task: SwarmTask): Promise<void> {
-    task.status = "in_progress";
-    const agent = this.agents.get(agentId);
-    if (!agent) return;
-
-    const config: SubAgentConfig = {
-      id: createId("subagent"),
-      ownerId: agentId,
-      task: task.description,
-      writeScope: "shared",
-      deadline: this.config.taskTimeout,
-      background: false,
-    };
-
-    try {
-      const subAgentId = await this.manager.spawn(config);
-      await this.manager.start(subAgentId);
-      const output = await this.manager.wait(subAgentId, this.config.taskTimeout);
-
-      if (output.success) {
-        task.status = "completed";
-        task.result = output.text;
-        task.completedAt = nowIso();
-        agent.completedTasks++;
-      } else {
-        task.status = "failed";
-        task.error = output.error;
-        agent.failedTasks++;
-        task.attempts++;
-
-        // Retry if under max attempts
-        if (task.attempts < this.config.maxTaskAttempts) {
-          task.status = "available";
-          task.claimedBy = undefined;
-          task.claimedAt = undefined;
-          agent.currentTask = undefined;
-          agent.status = "idle";
-
-          this.mailbox.publishTaskNotification("failed", agentId, task.id, {
-            error: task.error,
-            recoverable: true,
-          });
-        } else {
-          this.mailbox.publishTaskNotification("failed", agentId, task.id, {
-            error: task.error,
-            recoverable: false,
-          });
-        }
-      }
-    } catch (error) {
-      task.status = "failed";
-      task.error = error instanceof Error ? error.message : String(error);
-      task.attempts++;
-      agent.failedTasks++;
-      agent.status = "idle";
-      agent.currentTask = undefined;
-
-      this.mailbox.publishTaskNotification("failed", agentId, task.id, {
-        error: task.error,
-        recoverable: task.attempts < this.config.maxTaskAttempts,
-      });
-    }
-
-    if (task.status === "completed") {
-      this.mailbox.publishTaskNotification("completed", agentId, task.id, {
-        result: task.result,
-      });
-      agent.status = "idle";
-      agent.currentTask = undefined;
-    }
-  }
-
-  /**
-   * Abandon a task.
-   */
-  abandonTask(taskId: string, reason?: string): void {
-    const task = this.tasks.get(taskId);
-    if (!task) return;
-
-    if (task.claimedBy) {
-      const agent = this.agents.get(task.claimedBy);
-      if (agent) {
-        agent.status = "idle";
-        agent.currentTask = undefined;
-      }
-    }
-
-    task.status = "abandoned";
-    task.result = undefined;
-    if (reason) task.error = reason;
-
-    this.mailbox.publishTaskNotification("canceled", this.swarmId, taskId, { reason });
-  }
-
-  // ==========================================================================
-  // Execution
-  // ==========================================================================
-
-  /**
-   * Run the swarm until all tasks are complete or timeout.
-   */
-  async run(timeoutMs?: number): Promise<SwarmResult> {
-    this.swarmStatus = "accepting";
-
-    // Wait for minimum agents
-    await this.waitForMinAgents();
-
-    this.swarmStatus = "processing";
-
-    // Run until complete or timeout
-    const startTime = Date.now();
-    while (this.hasActiveTasks() || this.hasIdleAgents()) {
-      // Check timeout
-      if (timeoutMs && Date.now() - startTime > timeoutMs) {
-        break;
-      }
-
-      // Distribute available tasks
-      this.distributeTasks();
-
-      // Brief wait to prevent CPU spinning
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    // Drain remaining tasks
-    this.swarmStatus = "draining";
-    await this.drain();
-
-    this.swarmStatus = "completed";
-    return this.synthesizeResults();
-  }
-
-  /**
-   * Wait for minimum agents to be available.
-   */
-  private async waitForMinAgents(): Promise<void> {
-    while (this.agents.size < this.config.minAgents) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-
-  /**
-   * Check if there are active tasks.
-   */
-  private hasActiveTasks(): boolean {
-    return [...this.tasks.values()].some(
-      (t) => t.status === "claimed" || t.status === "in_progress" || t.status === "available",
-    );
-  }
-
-  /**
-   * Check if there are idle agents.
-   */
-  private hasIdleAgents(): boolean {
-    return this.getAgentsByStatus("idle").length > 0;
-  }
-
-  /**
-   * Distribute available tasks to idle agents.
-   */
-  private distributeTasks(): void {
-    const idleAgents = this.getAgentsByStatus("idle");
-    const availableTasks = this.getAvailableTasks();
-
-    for (let i = 0; i < Math.min(idleAgents.length, availableTasks.length); i++) {
-      this.claimTask(idleAgents[i].id, availableTasks[i].id);
-    }
-  }
-
-  /**
-   * Drain completed tasks.
-   */
-  private drain(): Promise<void> {
-    return new Promise((resolve) => {
-      this.drainResolve = resolve;
-
-      const check = () => {
-        const hasActive = [...this.tasks.values()].some(
-          (t) => t.status === "claimed" || t.status === "in_progress",
-        );
-        if (!hasActive) {
-          resolve();
-        } else {
-          setTimeout(check, 100);
-        }
-      };
-
-      setTimeout(check, 100);
-
-      // Timeout for drain
-      setTimeout(resolve, this.config.taskTimeout);
-    });
-  }
-
-  // ==========================================================================
-  // Heartbeat
-  // ==========================================================================
-
-  private startHeartbeat(agentId: string): void {
-    const timer = setInterval(() => {
-      const agent = this.agents.get(agentId);
-      if (agent) {
-        agent.lastHeartbeat = nowIso();
-
-        // Check for abandoned tasks
-        if (agent.status === "working" && agent.currentTask) {
-          const task = this.tasks.get(agent.currentTask);
-          if (task && task.claimedAt) {
-            const elapsed = Date.now() - new Date(task.claimedAt).getTime();
-            if (elapsed > this.config.abandonTimeout) {
-              this.abandonTask(task.id, "Agent heartbeat timeout");
-            }
-          }
-        }
-      }
-    }, this.config.heartbeatInterval);
-
-    this.heartbeatTimers.set(agentId, timer);
-  }
-
-  private stopHeartbeat(agentId: string): void {
-    const timer = this.heartbeatTimers.get(agentId);
-    if (timer) {
-      clearInterval(timer);
-      this.heartbeatTimers.delete(agentId);
-    }
-  }
-
-  // ==========================================================================
-  // Mailbox
-  // ==========================================================================
-
-  private setupMailboxHandlers(): void {
-    // Subscribe to task events for automatic task distribution
-    this.mailbox.subscribe(
-      { type: ["task.completed", "task.failed"] },
-      () => {
-        this.distributeTasks();
-      },
-    );
-
-    // Subscribe to agent heartbeats
-    this.mailbox.subscribe(
-      { type: "agent.heartbeat" },
-      (event) => {
-        const agent = this.agents.get(event.senderId);
-        if (agent) {
-          agent.lastHeartbeat = event.timestamp;
-        }
-      },
-    );
-  }
-
-  subscribe(filter: EventFilter, handler: EventHandler): string {
-    return this.mailbox.subscribe(filter, handler);
-  }
-
-  unsubscribe(subscriptionId: string): void {
-    this.mailbox.unsubscribe(subscriptionId);
-  }
-
-  // ==========================================================================
-  // Synthesis
-  // ==========================================================================
-
-  private synthesizeResults(): SwarmResult {
-    const results = new Map<string, unknown>();
-    let completed = 0;
-    let failed = 0;
-    let abandoned = 0;
-
-    for (const task of this.tasks.values()) {
-      if (task.status === "completed" && task.result) {
-        results.set(task.id, task.result);
-        completed++;
-      } else if (task.status === "failed") {
-        failed++;
-      } else if (task.status === "abandoned") {
-        abandoned++;
-      }
-    }
-
-    const total = this.tasks.size;
-    const success = failed === 0 && abandoned === 0;
-
-    return {
-      success,
-      totalTasks: total,
-      completedTasks: completed,
-      failedTasks: failed,
-      abandonedTasks: abandoned,
-      results,
-      summary: `Swarm completed: ${completed}/${total} tasks successful. ${failed} failed, ${abandoned} abandoned.`,
-    };
-  }
-
-  // ==========================================================================
-  // State
-  // ==========================================================================
-
-  getStatus(): SwarmStatus {
-    return this.swarmStatus;
-  }
-
-  getAgentCount(): number {
-    return this.agents.size;
-  }
-
-  getTaskStats(): { total: number; available: number; completed: number; failed: number; abandoned: number } {
-    const tasks = [...this.tasks.values()];
-    return {
-      total: tasks.length,
-      available: tasks.filter((t) => t.status === "available").length,
-      completed: tasks.filter((t) => t.status === "completed").length,
-      failed: tasks.filter((t) => t.status === "failed").length,
-      abandoned: tasks.filter((t) => t.status === "abandoned").length,
-    };
-  }
-
-  shutdown(): void {
-    // Stop all heartbeats
-    for (const timer of this.heartbeatTimers.values()) {
-      clearInterval(timer);
-    }
-    this.heartbeatTimers.clear();
-
-    // Cancel all running tasks
+    // Close all agents
     for (const agent of this.agents.values()) {
-      if (agent.currentTask) {
-        this.abandonTask(agent.currentTask, "Swarm shutdown");
+      if (agent.subAgentId) {
+        this.config.subAgentManager.close(agent.subAgentId, true);
       }
     }
 
     this.agents.clear();
     this.tasks.clear();
-    this.mailbox.clearSubscriptions();
-    this.swarmStatus = "failed";
+    this.taskQueue.length = 0;
+  }
+
+  /**
+   * Register an agent in the swarm.
+   */
+  registerAgent(agent: SwarmAgent): SwarmAgent {
+    if (this.agents.size >= this.config.maxAgents) {
+      throw new Error(`Swarm at maximum capacity: ${this.config.maxAgents} agents`);
+    }
+
+    this.agents.set(agent.id, agent);
+    this.emit({ type: "agent_joined", agent });
+    return agent;
+  }
+
+  /**
+   * Unregister an agent.
+   */
+  unregisterAgent(agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      this.agents.delete(agentId);
+      this.emit({ type: "agent_left", agentId });
+    }
+  }
+
+  /**
+   * Create a task in the swarm.
+   */
+  createTask(description: string): SwarmTask {
+    const task: SwarmTask = {
+      id: createId("swarm"),
+      description,
+      status: "queued",
+      claimedBy: [],
+      contributors: [],
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    this.tasks.set(task.id, task);
+    this.taskQueue.push(task.id);
+    this.emit({ type: "task_created", task });
+
+    return task;
+  }
+
+  /**
+   * Claim a task for an agent.
+   */
+  claimTask(taskId: string, agentId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+
+    if (task.claimedBy.includes(agentId)) return true;
+
+    task.claimedBy.push(agentId);
+    task.contributors.push(agentId);
+    task.status = "in_progress";
+    task.updatedAt = nowIso();
+
+    this.emit({ type: "task_claimed", task, agentId });
+    return true;
+  }
+
+  /**
+   * Add a collaborator to a task.
+   */
+  collaborate(taskId: string, agentId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+
+    if (!task.contributors.includes(agentId)) {
+      task.contributors.push(agentId);
+    }
+
+    if (task.claimedBy.length > 1 && task.status !== "collaborating") {
+      task.status = "collaborating";
+      this.emit({ type: "task_collaborating", task });
+    }
+
+    task.updatedAt = nowIso();
+    return true;
+  }
+
+  /**
+   * Complete a task with results.
+   */
+  completeTask(taskId: string, result: string, agentId: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+
+    task.status = "completed";
+    task.result = result;
+    task.updatedAt = nowIso();
+
+    // Update agent contribution
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      agent.contribution = result;
+      agent.status = "finished";
+    }
+
+    this.emit({ type: "task_completed", task });
+
+    // Check for convergence
+    this.checkConvergence();
+
+    return true;
+  }
+
+  /**
+   * Fail a task.
+   */
+  failTask(taskId: string, error: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+
+    task.status = "failed";
+    task.error = error;
+    task.updatedAt = nowIso();
+
+    this.emit({ type: "task_completed", task });
+    return true;
+  }
+
+  /**
+   * Spawn a new agent for a subtask.
+   */
+  spawnForTask(
+    parentTaskId: string,
+    subtask: string,
+    role: SwarmRole = "worker",
+    expertise: string[] = [],
+  ): SwarmAgent | null {
+    if (!this.config.enableSpontaneousSpawn) return null;
+    if (this.currentDepth >= this.config.maxDepth) return null;
+    if (this.agents.size >= this.config.maxAgents) return null;
+
+    const parentTask = this.tasks.get(parentTaskId);
+    const parentAgentId = parentTask?.claimedBy[0] ?? this.rootAgentId;
+    const parentAgent = this.agents.get(parentAgentId);
+
+    if (!parentAgent) return null;
+
+    this.currentDepth++;
+
+    // Spawn SubAgent
+    const subAgent = this.config.subAgentManager.spawn({
+      name: `${role}-${createId("swarm").slice(0, 6)}`,
+      task: subtask,
+    });
+
+    // Register in swarm
+    const swarmAgent = this.registerAgent({
+      id: createId("swarm"),
+      name: subAgent.config.name,
+      role,
+      expertise,
+      parentId: parentAgentId,
+      subAgentId: subAgent.config.id,
+      status: "active",
+    });
+
+    // Create task for the agent
+    const task = this.createTask(subtask);
+    this.claimTask(task.id, swarmAgent.id);
+
+    this.currentDepth--;
+
+    return swarmAgent;
+  }
+
+  /**
+   * Send a collaboration message.
+   */
+  sendCollaborationMessage(
+    type: CollaborationMessage["type"],
+    senderId: string,
+    payload: unknown,
+    targetId?: string,
+  ): void {
+    const message: CollaborationMessage = {
+      type,
+      senderId,
+      targetId,
+      payload,
+      timestamp: nowIso(),
+    };
+
+    const topic = `swarm/${type}`;
+    if (targetId) {
+      this.config.mailbox.sendTo(senderId, targetId, topic, message);
+    } else {
+      this.config.mailbox.broadcast(senderId, topic, message);
+    }
+
+    this.emit({ type: "collaboration_message", message });
+  }
+
+  /**
+   * Request help from other agents.
+   */
+  requestHelp(agentId: string, request: string): string[] {
+    const agent = this.agents.get(agentId);
+    if (!agent) return [];
+
+    this.sendCollaborationMessage("request", agentId, { request, agentRole: agent.role });
+
+    // Find potential helpers
+    const helpers = [...this.agents.values()]
+      .filter((a) => a.id !== agentId && a.status === "idle")
+      .map((a) => a.id);
+
+    return helpers;
+  }
+
+  /**
+   * Get all agents.
+   */
+  getAgents(filter?: {
+    role?: SwarmRole;
+    status?: SwarmAgent["status"];
+    expertise?: string;
+  }): SwarmAgent[] {
+    let agents = [...this.agents.values()];
+
+    if (filter?.role) {
+      agents = agents.filter((a) => a.role === filter.role);
+    }
+    if (filter?.status) {
+      agents = agents.filter((a) => a.status === filter.status);
+    }
+    if (filter?.expertise) {
+      agents = agents.filter((a) => a.expertise.includes(filter.expertise!));
+    }
+
+    return agents;
+  }
+
+  /**
+   * Get all tasks.
+   */
+  getTasks(filter?: {
+    status?: SwarmTask["status"];
+    agentId?: string;
+  }): SwarmTask[] {
+    let tasks = [...this.tasks.values()];
+
+    if (filter?.status) {
+      tasks = tasks.filter((t) => t.status === filter.status);
+    }
+    if (filter?.agentId) {
+      tasks = tasks.filter((t) => t.claimedBy.includes(filter.agentId!) || t.contributors.includes(filter.agentId!));
+    }
+
+    return tasks;
+  }
+
+  /**
+   * Get swarm statistics.
+   */
+  getStats(): {
+    totalAgents: number;
+    activeAgents: number;
+    idleAgents: number;
+    totalTasks: number;
+    pendingTasks: number;
+    completedTasks: number;
+    failedTasks: number;
+    currentDepth: number;
+    maxDepth: number;
+  } {
+    let activeAgents = 0;
+    let idleAgents = 0;
+
+    for (const agent of this.agents.values()) {
+      if (agent.status === "active" || agent.status === "collaborating") {
+        activeAgents++;
+      } else if (agent.status === "idle") {
+        idleAgents++;
+      }
+    }
+
+    let pendingTasks = 0;
+    let completedTasks = 0;
+    let failedTasks = 0;
+
+    for (const task of this.tasks.values()) {
+      if (task.status === "queued" || task.status === "in_progress" || task.status === "collaborating") {
+        pendingTasks++;
+      } else if (task.status === "completed") {
+        completedTasks++;
+      } else if (task.status === "failed") {
+        failedTasks++;
+      }
+    }
+
+    return {
+      totalAgents: this.agents.size,
+      activeAgents,
+      idleAgents,
+      totalTasks: this.tasks.size,
+      pendingTasks,
+      completedTasks,
+      failedTasks,
+      currentDepth: this.currentDepth,
+      maxDepth: this.config.maxDepth,
+    };
+  }
+
+  /**
+   * Subscribe to swarm events.
+   */
+  subscribe(listener: (event: SwarmEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Check if swarm has converged (all tasks completed or failed).
+   */
+  isConverged(): boolean {
+    for (const task of this.tasks.values()) {
+      if (task.status === "queued" || task.status === "in_progress" || task.status === "collaborating") {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Get final results from all completed tasks.
+   */
+  getResults(): string[] {
+    const results: string[] = [];
+
+    for (const task of this.tasks.values()) {
+      if (task.status === "completed" && task.result) {
+        results.push(task.result);
+      }
+    }
+
+    return results;
+  }
+
+  private handleMessage(message: MailboxMessage): void {
+    // Update task status based on SubAgent events
+    const payload = message.payload as { taskId?: string };
+
+    if (message.topic === MailboxTopics.TASK_COMPLETE) {
+      if (payload?.taskId) {
+        const task = this.tasks.get(payload.taskId);
+        if (task) {
+          this.completeTask(task.id, (payload as { result?: string }).result ?? "", message.senderId);
+        }
+      }
+    }
+
+    if (message.topic === MailboxTopics.TASK_FAIL) {
+      if (payload?.taskId) {
+        const task = this.tasks.get(payload.taskId);
+        if (task) {
+          this.failTask(task.id, (payload as { error?: string }).error ?? "Unknown error");
+        }
+      }
+    }
+  }
+
+  private checkConvergence(): void {
+    if (this.isConverged() && this.running) {
+      const results = this.getResults();
+      this.emit({ type: "swarm_converged", results });
+    }
+  }
+
+  private emit(event: SwarmEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Ignore listener errors
+      }
+    }
   }
 }
+
+// ============================================================================
+// Role Helpers
+// ============================================================================
+
+export function getRoleDescription(role: SwarmRole): string {
+  const descriptions: Record<SwarmRole, string> = {
+    worker: "Executes assigned tasks",
+    scout: "Explores and gathers information from various sources",
+    relay: "Coordinates communication between agents",
+    synthesizer: "Combines and integrates results from multiple agents",
+    specialist: "Expert in specific technical domains",
+  };
+  return descriptions[role];
+}
+
+export function getRoleExpertise(role: SwarmRole): string[] {
+  const expertise: Record<SwarmRole, string[]> = {
+    worker: ["implementation", "debugging"],
+    scout: ["research", "analysis", "discovery"],
+    relay: ["communication", "coordination"],
+    synthesizer: ["integration", "summary", "reporting"],
+    specialist: [], // Domain-specific
+  };
+  return expertise[role];
+}
+
+// ============================================================================
+// Exports
+// ============================================================================

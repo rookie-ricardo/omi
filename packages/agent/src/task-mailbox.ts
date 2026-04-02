@@ -1,11 +1,8 @@
 /**
- * Task Mailbox Protocol
+ * Task Mailbox - Message passing protocol for SubAgent communication
  *
- * Implements task-notification style events for sub-agent communication.
- * Supports:
- * - Async task notifications
- * - Event-driven coordination
- * - Message queuing and delivery
+ * Provides an async message queue system for inter-agent communication
+ * using a mailbox pattern with topics for selective message consumption.
  */
 
 import { createId, nowIso } from "@omi/core";
@@ -14,349 +11,364 @@ import { createId, nowIso } from "@omi/core";
 // Types
 // ============================================================================
 
-export type MailboxEventType =
-  | "task.submitted"
-  | "task.started"
-  | "task.progress"
-  | "task.completed"
-  | "task.failed"
-  | "task.canceled"
-  | "task.result"
-  | "message.sent"
-  | "message.received"
-  | "agent.heartbeat"
-  | "agent.status";
-
-export interface MailboxEvent<T = unknown> {
+/**
+ * Mailbox message envelope
+ */
+export interface MailboxMessage<T = unknown> {
   id: string;
-  type: MailboxEventType;
   senderId: string;
-  recipientId?: string;
-  timestamp: string;
+  recipientId: string | null; // null for broadcast
+  topic: string;
   payload: T;
-  correlationId?: string;
-  replyTo?: string;
+  timestamp: string;
+  replyTo?: string; // Message ID to reply to
+  correlationId?: string; // For tracking related messages
 }
-
-export interface TaskSubmittedPayload {
-  taskId: string;
-  task: string;
-  priority?: number;
-  deadline?: number;
-}
-
-export interface TaskProgressPayload {
-  taskId: string;
-  progress: number;
-  message?: string;
-}
-
-export interface TaskCompletedPayload {
-  taskId: string;
-  result: unknown;
-  duration?: number;
-}
-
-export interface TaskFailedPayload {
-  taskId: string;
-  error: string;
-  recoverable?: boolean;
-}
-
-export interface TaskCanceledPayload {
-  taskId: string;
-  reason?: string;
-}
-
-export interface MessagePayload {
-  messageId: string;
-  content: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface HeartbeatPayload {
-  agentId: string;
-  status: string;
-  load?: number;
-}
-
-// ============================================================================
-// Mailbox
-// ============================================================================
-
-export interface MailboxOptions {
-  maxQueueSize?: number;
-  defaultTtl?: number;
-  persistent?: boolean;
-}
-
-export interface MailboxSubscription {
-  id: string;
-  filter: EventFilter;
-  handler: EventHandler;
-}
-
-export interface EventFilter {
-  type?: MailboxEventType | MailboxEventType[];
-  senderId?: string | string[];
-  recipientId?: string | string[];
-  correlationId?: string;
-}
-
-export type EventHandler = (event: MailboxEvent) => void | Promise<void>;
 
 /**
- * Mailbox for task notification style events.
+ * Mailbox subscription handle
  */
-export class TaskMailbox {
-  private queue: MailboxEvent[] = [];
-  private subscriptions: Map<string, MailboxSubscription> = new Map();
-  private handlers: Map<MailboxEventType, Set<EventHandler>> = new Map();
-  private deliveryConfirmations: Map<string, (confirmed: boolean) => void> = new Map();
-  private readonly maxQueueSize: number;
-  private readonly defaultTtl: number;
+export interface MailboxSubscription<T = unknown> {
+  id: string;
+  topic: string | null; // null for all topics
+  callback: (message: MailboxMessage<T>) => void | Promise<void>;
+  filter?: (message: MailboxMessage<T>) => boolean;
+}
 
-  constructor(options: MailboxOptions = {}) {
-    this.maxQueueSize = options.maxQueueSize ?? 1000;
-    this.defaultTtl = options.defaultTtl ?? 3600000;
+/**
+ * Mailbox message status
+ */
+export type MessageStatus = "pending" | "delivered" | "read" | "replied" | "expired";
+
+/**
+ * Message metadata for tracking
+ */
+export interface MailboxMessageMeta {
+  status: MessageStatus;
+  deliveredAt?: string;
+  readAt?: string;
+  replyId?: string;
+}
+
+/**
+ * Mailbox configuration
+ */
+export interface MailboxConfig {
+  /** Maximum messages to retain per recipient */
+  maxMessages?: number;
+  /** Message TTL in milliseconds (default: 1 hour) */
+  messageTtl?: number;
+  /** Whether to retain messages after delivery */
+  retainDelivered?: boolean;
+}
+
+// ============================================================================
+// Mailbox Implementation
+// ============================================================================
+
+/**
+ * Async message mailbox for agent communication.
+ *
+ * Features:
+ * - Topic-based message routing
+ * - Pub/sub subscriptions with filters
+ * - Message tracking and acknowledgment
+ * - Broadcast and direct messaging
+ * - Automatic message expiration
+ */
+export class Mailbox {
+  private readonly messages = new Map<string, MailboxMessage>();
+  private readonly subscriptions = new Map<string, MailboxSubscription>();
+  private readonly recipientInbox = new Map<string, string[]>(); // recipientId -> messageIds
+  private readonly topicIndex = new Map<string, Set<string>>(); // topic -> messageIds
+  private readonly config: Required<MailboxConfig>;
+
+  constructor(config: MailboxConfig = {}) {
+    this.config = {
+      maxMessages: config.maxMessages ?? 1000,
+      messageTtl: config.messageTtl ?? 3600000, // 1 hour
+      retainDelivered: config.retainDelivered ?? true,
+    };
   }
 
-  // ==========================================================================
-  // Event Publishing
-  // ==========================================================================
-
-  publish<T>(event: Omit<MailboxEvent<T>, "id" | "timestamp">): string {
-    const id = createId("event");
-    const fullEvent: MailboxEvent<T> = {
-      ...event,
+  /**
+   * Send a message to a recipient or broadcast.
+   */
+  send<T>(message: Omit<MailboxMessage<T>, "id" | "timestamp">): MailboxMessage<T> {
+    const id = createId("msg");
+    const fullMessage: MailboxMessage<T> = {
+      ...message,
       id,
       timestamp: nowIso(),
     };
 
-    this.queue.push(fullEvent);
-    if (this.queue.length > this.maxQueueSize) {
-      this.queue.shift();
+    // Store message
+    this.messages.set(id, fullMessage as MailboxMessage<unknown> as MailboxMessage);
+
+    // Index by topic
+    if (!this.topicIndex.has(fullMessage.topic)) {
+      this.topicIndex.set(fullMessage.topic, new Set());
+    }
+    this.topicIndex.get(fullMessage.topic)!.add(id);
+
+    // Index by recipient
+    if (fullMessage.recipientId) {
+      if (!this.recipientInbox.has(fullMessage.recipientId)) {
+        this.recipientInbox.set(fullMessage.recipientId, []);
+      }
+      const inbox = this.recipientInbox.get(fullMessage.recipientId)!;
+      inbox.push(id);
+
+      // Enforce max messages
+      while (inbox.length > this.config.maxMessages) {
+        const oldestId = inbox.shift()!;
+        this.deleteMessage(oldestId);
+      }
     }
 
-    this.deliver(fullEvent);
-    return id;
+    // Deliver to matching subscriptions
+    this.deliverToSubscriptions(fullMessage as MailboxMessage);
+
+    // Schedule expiration
+    if (this.config.messageTtl > 0) {
+      setTimeout(() => this.expireMessage(id), this.config.messageTtl);
+    }
+
+    return fullMessage;
   }
 
-  publishTaskNotification(
-    type: "submitted" | "started" | "progress" | "completed" | "failed" | "canceled",
-    senderId: string,
-    taskId: string,
-    payload: Record<string, unknown>,
-  ): string {
-    const eventType = `task.${type}` as MailboxEventType;
-    return this.publish({
-      type: eventType,
+  /**
+   * Broadcast a message to all agents listening on a topic.
+   */
+  broadcast<T>(senderId: string, topic: string, payload: T, correlationId?: string): MailboxMessage<T> {
+    return this.send({
       senderId,
-      payload: { taskId, ...payload } as any,
+      recipientId: null, // broadcast
+      topic,
+      payload,
+      correlationId,
     });
   }
 
-  sendMessage(
+  /**
+   * Send a direct message to a specific recipient.
+   */
+  sendTo<T>(
     senderId: string,
     recipientId: string,
-    content: string,
-    metadata?: Record<string, unknown>,
-  ): string {
-    const messageId = createId("msg");
-    return this.publish({
-      type: "message.sent",
+    topic: string,
+    payload: T,
+    replyTo?: string,
+    correlationId?: string,
+  ): MailboxMessage<T> {
+    return this.send({
       senderId,
       recipientId,
-      payload: { messageId, content, metadata } as MessagePayload,
+      topic,
+      payload,
+      replyTo,
+      correlationId,
     });
   }
 
-  sendHeartbeat(agentId: string, status: string, load?: number): string {
-    return this.publish({
-      type: "agent.heartbeat",
-      senderId: agentId,
-      payload: { agentId, status, load } as HeartbeatPayload,
+  /**
+   * Reply to a message.
+   */
+  reply<T>(
+    originalMessageId: string,
+    senderId: string,
+    payload: T,
+    topic?: string,
+  ): MailboxMessage<T> | null {
+    const original = this.messages.get(originalMessageId);
+    if (!original) {
+      return null;
+    }
+
+    return this.send({
+      senderId,
+      recipientId: original.senderId,
+      topic: topic ?? original.topic,
+      payload,
+      replyTo: originalMessageId,
+      correlationId: original.correlationId,
     });
   }
 
-  // ==========================================================================
-  // Subscription Management
-  // ==========================================================================
+  /**
+   * Subscribe to messages on a topic.
+   */
+  subscribe<T>(
+    topic: string | null,
+    callback: (message: MailboxMessage<T>) => void | Promise<void>,
+    filter?: (message: MailboxMessage<T>) => boolean,
+  ): MailboxSubscription<T> {
+    const id = createId("msg");
+    const subscription: MailboxSubscription<T> = { id, topic, callback, filter };
+    this.subscriptions.set(id, subscription as MailboxSubscription);
+    return subscription;
+  }
 
-  subscribe(filter: EventFilter, handler: EventHandler): string {
-    const id = createId("sub");
-    const subscription: MailboxSubscription = { id, filter, handler };
-    this.subscriptions.set(id, subscription);
+  /**
+   * Unsubscribe from messages.
+   */
+  unsubscribe(subscriptionId: string): boolean {
+    return this.subscriptions.delete(subscriptionId);
+  }
 
-    if (filter.type) {
-      const types = Array.isArray(filter.type) ? filter.type : [filter.type];
-      for (const type of types) {
-        if (!this.handlers.has(type)) {
-          this.handlers.set(type, new Set());
-        }
-        this.handlers.get(type)!.add(handler);
+  /**
+   * Get messages for a recipient.
+   */
+  getMessagesForRecipient(recipientId: string, topic?: string): MailboxMessage[] {
+    const messageIds = this.recipientInbox.get(recipientId) ?? [];
+    const messages: MailboxMessage[] = [];
+
+    for (const id of messageIds) {
+      const message = this.messages.get(id);
+      if (message && (!topic || message.topic === topic)) {
+        messages.push(message);
       }
     }
 
-    return id;
+    return messages.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
-  unsubscribe(subscriptionId: string): void {
-    const subscription = this.subscriptions.get(subscriptionId);
-    if (!subscription) return;
+  /**
+   * Get messages by topic.
+   */
+  getMessagesByTopic(topic: string): MailboxMessage[] {
+    const messageIds = this.topicIndex.get(topic) ?? [];
+    const messages: MailboxMessage[] = [];
 
-    if (subscription.filter.type) {
-      const types = Array.isArray(subscription.filter.type)
-        ? subscription.filter.type
-        : [subscription.filter.type];
-      for (const type of types) {
-        this.handlers.get(type)?.delete(subscription.handler);
+    for (const id of messageIds) {
+      const message = this.messages.get(id);
+      if (message) {
+        messages.push(message);
       }
     }
 
-    this.subscriptions.delete(subscriptionId);
+    return messages.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
-  clearSubscriptions(): void {
-    this.subscriptions.clear();
-    this.handlers.clear();
-  }
-
-  // ==========================================================================
-  // Query
-  // ==========================================================================
-
-  query(filter: EventFilter, limit = 100): MailboxEvent[] {
-    return this.queue
-      .filter((event) => this.matchesFilter(event, filter))
-      .slice(-limit);
-  }
-
-  getMessagesFor(recipientId: string): MailboxEvent<MessagePayload>[] {
-    return this.query({
-      type: "message.received",
-      recipientId,
-    }) as MailboxEvent<MessagePayload>[];
-  }
-
-  getAgentStatus(agentId: string): MailboxEvent[] {
-    return this.query({
-      type: ["agent.status", "agent.heartbeat"],
-      senderId: agentId,
-    }).slice(-10);
-  }
-
-  waitForDelivery(eventId: string, timeoutMs = 5000): Promise<boolean> {
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.deliveryConfirmations.delete(eventId);
-        resolve(false);
-      }, timeoutMs);
-
-      this.deliveryConfirmations.set(eventId, (confirmed) => {
-        clearTimeout(timeout);
-        resolve(confirmed);
-      });
-    });
-  }
-
-  private deliver(event: MailboxEvent): void {
-    const typeHandlers = this.handlers.get(event.type);
-    if (typeHandlers) {
-      for (const handler of typeHandlers) {
-        try {
-          handler(event);
-        } catch {
-          // Ignore handler errors
-        }
-      }
-    }
-
-    for (const subscription of this.subscriptions.values()) {
-      if (this.matchesFilter(event, subscription.filter)) {
-        try {
-          subscription.handler(event);
-        } catch {
-          // Ignore handler errors
-        }
-      }
-    }
-
-    const confirm = this.deliveryConfirmations.get(event.id);
-    if (confirm) {
-      this.deliveryConfirmations.delete(event.id);
-      confirm(true);
-    }
-  }
-
-  private matchesFilter(event: MailboxEvent, filter: EventFilter): boolean {
-    if (filter.type) {
-      const types = Array.isArray(filter.type) ? filter.type : [filter.type];
-      if (!types.includes(event.type)) return false;
-    }
-
-    if (filter.senderId) {
-      const senders = Array.isArray(filter.senderId) ? filter.senderId : [filter.senderId];
-      if (!senders.includes(event.senderId)) return false;
-    }
-
-    if (filter.recipientId) {
-      const recipients = Array.isArray(filter.recipientId)
-        ? filter.recipientId
-        : [filter.recipientId];
-      if (!event.recipientId || !recipients.includes(event.recipientId)) return false;
-    }
-
-    if (filter.correlationId && event.correlationId !== filter.correlationId) {
+  /**
+   * Mark a message as read.
+   */
+  markAsRead(messageId: string): boolean {
+    const message = this.messages.get(messageId);
+    if (!message) {
       return false;
+    }
+    return true;
+  }
+
+  /**
+   * Delete a message.
+   */
+  deleteMessage(messageId: string): boolean {
+    const message = this.messages.get(messageId);
+    if (!message) {
+      return false;
+    }
+
+    this.messages.delete(messageId);
+
+    // Remove from topic index
+    const topicSet = this.topicIndex.get(message.topic);
+    if (topicSet) {
+      topicSet.delete(messageId);
+      if (topicSet.size === 0) {
+        this.topicIndex.delete(message.topic);
+      }
+    }
+
+    // Remove from recipient inbox
+    if (message.recipientId) {
+      const inbox = this.recipientInbox.get(message.recipientId);
+      if (inbox) {
+        const idx = inbox.indexOf(messageId);
+        if (idx !== -1) {
+          inbox.splice(idx, 1);
+        }
+        if (inbox.length === 0) {
+          this.recipientInbox.delete(message.recipientId);
+        }
+      }
     }
 
     return true;
   }
+
+  /**
+   * Get mailbox statistics.
+   */
+  getStats(): { totalMessages: number; totalSubscriptions: number; topics: string[] } {
+    return {
+      totalMessages: this.messages.size,
+      totalSubscriptions: this.subscriptions.size,
+      topics: [...this.topicIndex.keys()],
+    };
+  }
+
+  /**
+   * Clear all messages (for testing or reset).
+   */
+  clear(): void {
+    this.messages.clear();
+    this.recipientInbox.clear();
+    this.topicIndex.clear();
+  }
+
+  private deliverToSubscriptions(message: MailboxMessage): void {
+    for (const subscription of this.subscriptions.values()) {
+      // Check topic match
+      if (subscription.topic !== null && subscription.topic !== message.topic) {
+        continue;
+      }
+
+      // Check filter
+      if (subscription.filter && !subscription.filter(message as MailboxMessage<unknown>)) {
+        continue;
+      }
+
+      // Deliver asynchronously to avoid blocking
+      Promise.resolve().then(() => {
+        subscription.callback(message);
+      });
+    }
+  }
+
+  private expireMessage(messageId: string): void {
+    if (this.messages.has(messageId)) {
+      this.deleteMessage(messageId);
+    }
+  }
 }
 
 // ============================================================================
-// Event Factory
+// Topic Constants
 // ============================================================================
 
-export function createTaskSubmittedEvent(
-  senderId: string,
-  taskId: string,
-  task: string,
-  options?: { priority?: number; deadline?: number },
-): Omit<MailboxEvent<TaskSubmittedPayload>, "id" | "timestamp"> {
-  return {
-    type: "task.submitted",
-    senderId,
-    payload: { taskId, task, priority: options?.priority, deadline: options?.deadline },
-  };
-}
+export const MailboxTopics = {
+  /** Task delegation messages */
+  TASK_DELEGATE: "task/delegate",
+  /** Task completion messages */
+  TASK_COMPLETE: "task/complete",
+  /** Task failure messages */
+  TASK_FAIL: "task/fail",
+  /** Progress updates */
+  TASK_PROGRESS: "task/progress",
+  /** Status updates */
+  STATUS_UPDATE: "status/update",
+  /** Resource requests */
+  RESOURCE_REQUEST: "resource/request",
+  /** Resource responses */
+  RESOURCE_RESPONSE: "resource/response",
+  /** Shutdown signals */
+  SHUTDOWN: "system/shutdown",
+  /** Health checks */
+  HEALTH: "system/health",
+} as const;
 
-export function createTaskCompletedEvent(
-  senderId: string,
-  taskId: string,
-  result: unknown,
-  correlationId?: string,
-): Omit<MailboxEvent<TaskCompletedPayload>, "id" | "timestamp"> {
-  return {
-    type: "task.completed",
-    senderId,
-    correlationId,
-    payload: { taskId, result },
-  };
-}
-
-export function createTaskFailedEvent(
-  senderId: string,
-  taskId: string,
-  error: string,
-  recoverable = false,
-  correlationId?: string,
-): Omit<MailboxEvent<TaskFailedPayload>, "id" | "timestamp"> {
-  return {
-    type: "task.failed",
-    senderId,
-    correlationId,
-    payload: { taskId, error, recoverable },
-  };
-}
+// ============================================================================
+// Exports
+// ============================================================================

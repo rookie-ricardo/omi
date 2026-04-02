@@ -1,24 +1,6 @@
 /**
- * Multi-Agent Module
- *
- * Exports coordinator and swarm implementations for multi-agent orchestration.
+ * Multi-Agent Patterns - Coordinator and Swarm implementations
  */
 
-export { CoordinatorAgent } from "./coordinator";
-export type {
-  CoordinatorStatus,
-  CoordinatorTask,
-  CoordinatorPlan,
-  CoordinatorResult,
-  CoordinatorOptions,
-} from "./coordinator";
-
-export { Swarm } from "./swarm";
-export type {
-  SwarmStatus,
-  SwarmAgentStatus,
-  SwarmTask,
-  SwarmAgentInfo,
-  SwarmConfig,
-  SwarmResult,
-} from "./swarm";
+export * from "./coordinator.js";
+export * from "./swarm.js";

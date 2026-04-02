@@ -1,388 +1,545 @@
 /**
- * Coordinator Mode
+ * Coordinator - Multi-agent coordination pattern
  *
- * Implements central orchestration pattern where a coordinator agent
- * distributes tasks to worker agents and synthesizes results.
+ * Implements a coordinator that manages a team of specialized agents,
+ * delegating tasks based on capabilities and current workload.
  */
 
 import { createId, nowIso } from "@omi/core";
-import { SubAgentManager, type SubAgentConfig, type SubAgentOutput } from "../subagent-manager";
-import { TaskMailbox, createTaskSubmittedEvent, createTaskCompletedEvent, createTaskFailedEvent } from "../task-mailbox";
+
+import type { Mailbox, MailboxMessage } from "../task-mailbox.js";
+import { MailboxTopics } from "../task-mailbox.js";
+import type { SubAgent, SubAgentManager, SubAgentState, TaskResult } from "../subagent-manager.js";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type CoordinatorStatus = "idle" | "planning" | "dispatching" | "waiting" | "synthesizing" | "completed" | "failed";
+/**
+ * Agent capability
+ */
+export interface AgentCapability {
+  type: "coding" | "review" | "testing" | "documentation" | "research" | "planning" | "custom";
+  name: string;
+  description: string;
+  weight?: number; // Relative weight for task distribution
+}
 
+/**
+ * Agent registration in the coordinator
+ */
+export interface CoordinatorAgent {
+  id: string;
+  name: string;
+  capabilities: AgentCapability[];
+  currentLoad: number;
+  maxLoad: number;
+  status: "available" | "busy" | "offline";
+  subAgentId?: string; // If this is a SubAgent
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Task assignment from the coordinator
+ */
 export interface CoordinatorTask {
   id: string;
   description: string;
-  priority: number;
-  assignedTo?: string;
-  status: "pending" | "assigned" | "running" | "completed" | "failed" | "skipped";
-  result?: unknown;
+  requiredCapabilities: AgentCapability["type"][];
+  priority: "low" | "normal" | "high" | "critical";
+  assignedAgentId?: string;
+  status: "pending" | "assigned" | "in_progress" | "completed" | "failed";
+  result?: string;
   error?: string;
-}
-
-export interface CoordinatorPlan {
-  id: string;
-  tasks: CoordinatorTask[];
   createdAt: string;
+  assignedAt?: string;
   completedAt?: string;
+  dependencies?: string[]; // Task IDs that must complete first
 }
 
-export interface CoordinatorResult {
-  success: boolean;
-  planId: string;
-  results: Map<string, unknown>;
-  errors: Map<string, string>;
-  summary: string;
+/**
+ * Coordination strategy
+ */
+export type CoordinationStrategy = "load_balanced" | "capability_based" | "priority_based" | "round_robin";
+
+/**
+ * Coordinator configuration
+ */
+export interface CoordinatorConfig {
+  mailbox: Mailbox;
+  subAgentManager: SubAgentManager;
+  strategy: CoordinationStrategy;
+  maxConcurrentTasks?: number;
+  defaultTimeout?: number;
+  enableProgressTracking?: boolean;
 }
 
-export interface CoordinatorOptions {
-  maxConcurrent?: number;
-  timeout?: number;
-  retryOnFailure?: boolean;
-  maxRetries?: number;
-}
+/**
+ * Coordinator event
+ */
+export type CoordinatorEvent =
+  | { type: "task_assigned"; task: CoordinatorTask; agentId: string }
+  | { type: "task_completed"; task: CoordinatorTask; result: TaskResult }
+  | { type: "task_failed"; task: CoordinatorTask; error: string }
+  | { type: "agent_registered"; agent: CoordinatorAgent }
+  | { type: "agent_unregistered"; agentId: string }
+  | { type: "coordination_started" }
+  | { type: "coordination_stopped" };
 
 // ============================================================================
-// Coordinator
+// Coordinator Implementation
 // ============================================================================
 
-export class CoordinatorAgent {
-  private status: CoordinatorStatus = "idle";
-  private plan?: CoordinatorPlan;
-  private manager: SubAgentManager;
-  private mailbox: TaskMailbox;
-  private results: Map<string, SubAgentOutput> = new Map();
-  private errors: Map<string, string> = new Map();
-  private readonly maxConcurrent: number;
-  private readonly timeout: number;
-  private readonly retryOnFailure: boolean;
-  private readonly maxRetries: number;
+export class Coordinator {
+  private readonly agents = new Map<string, CoordinatorAgent>();
+  private readonly tasks = new Map<string, CoordinatorTask>();
+  private readonly config: CoordinatorConfig;
+  private readonly listeners = new Set<(event: CoordinatorEvent) => void>();
+  private running = false;
+  private roundRobinIndex = 0;
 
-  constructor(
-    private readonly coordinatorId: string,
-    private readonly workspaceRoot: string,
-    options: CoordinatorOptions = {},
-  ) {
-    this.manager = new SubAgentManager(workspaceRoot);
-    this.mailbox = new TaskMailbox();
-    this.maxConcurrent = options.maxConcurrent ?? 3;
-    this.timeout = options.timeout ?? 300000;
-    this.retryOnFailure = options.retryOnFailure ?? true;
-    this.maxRetries = options.maxRetries ?? 2;
+  constructor(config: CoordinatorConfig) {
+    this.config = {
+      maxConcurrentTasks: config.maxConcurrentTasks ?? 10,
+      defaultTimeout: config.defaultTimeout ?? 300000, // 5 minutes
+      enableProgressTracking: config.enableProgressTracking ?? true,
+      ...config,
+    };
 
-    this.setupMailboxHandlers();
+    // Subscribe to SubAgent events
+    this.config.mailbox.subscribe(MailboxTopics.TASK_COMPLETE, (msg) => this.handleTaskComplete(msg));
+    this.config.mailbox.subscribe(MailboxTopics.TASK_FAIL, (msg) => this.handleTaskFail(msg));
+    this.config.mailbox.subscribe(MailboxTopics.TASK_PROGRESS, (msg) => this.handleProgress(msg));
   }
 
-  // ==========================================================================
-  // Planning
-  // ==========================================================================
+  /**
+   * Start the coordinator.
+   */
+  start(): void {
+    this.running = true;
+    this.emit({ type: "coordination_started" });
+  }
 
   /**
-   * Create a plan with tasks to be executed.
+   * Stop the coordinator.
    */
-  createPlan(tasks: string[]): CoordinatorPlan {
-    const planId = createId("plan");
-    const planTasks: CoordinatorTask[] = tasks.map((description, index) => ({
+  stop(): void {
+    this.running = false;
+    this.emit({ type: "coordination_stopped" });
+  }
+
+  /**
+   * Register an agent with the coordinator.
+   */
+  registerAgent(agent: Omit<CoordinatorAgent, "currentLoad" | "status">): void {
+    const fullAgent: CoordinatorAgent = {
+      ...agent,
+      currentLoad: 0,
+      status: "available",
+    };
+    this.agents.set(agent.id, fullAgent);
+    this.emit({ type: "agent_registered", agent: fullAgent });
+  }
+
+  /**
+   * Unregister an agent.
+   */
+  unregisterAgent(agentId: string): void {
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      this.agents.delete(agentId);
+      this.emit({ type: "agent_unregistered", agentId });
+    }
+  }
+
+  /**
+   * Create a task for coordination.
+   */
+  createTask(input: {
+    description: string;
+    requiredCapabilities?: AgentCapability["type"][];
+    priority?: "low" | "normal" | "high" | "critical";
+    dependencies?: string[];
+  }): CoordinatorTask {
+    const task: CoordinatorTask = {
       id: createId("task"),
-      description,
-      priority: tasks.length - index,
-      status: "pending" as const,
-    }));
-
-    this.plan = {
-      id: planId,
-      tasks: planTasks,
+      description: input.description,
+      requiredCapabilities: input.requiredCapabilities ?? [],
+      priority: input.priority ?? "normal",
+      status: "pending",
       createdAt: nowIso(),
+      dependencies: input.dependencies,
     };
 
-    this.status = "planning";
-    return this.plan;
+    this.tasks.set(task.id, task);
+    return task;
   }
 
   /**
-   * Update task priorities.
+   * Submit multiple tasks at once.
    */
-  updatePriorities(priorities: Map<string, number>): void {
-    if (!this.plan) throw new Error("No active plan");
-    for (const [taskId, priority] of priorities) {
-      const task = this.plan.tasks.find((t) => t.id === taskId);
-      if (task) task.priority = priority;
-    }
-    this.plan.tasks.sort((a, b) => b.priority - a.priority);
-  }
-
-  // ==========================================================================
-  // Execution
-  // ==========================================================================
-
-  /**
-   * Execute the plan by dispatching tasks to sub-agents.
-   */
-  async execute(providerConfig?: any): Promise<CoordinatorResult> {
-    if (!this.plan) throw new Error("No plan created");
-    this.status = "dispatching";
-
-    // Dispatch tasks based on priority until max concurrent
-    const pendingTasks = this.plan.tasks.filter((t) => t.status === "pending");
-    const dispatched: string[] = [];
-
-    for (let i = 0; i < Math.min(pendingTasks.length, this.maxConcurrent); i++) {
-      const task = pendingTasks[i];
-      dispatched.push(task.id);
-      await this.dispatchTask(task, providerConfig);
-    }
-
-    this.status = "waiting";
-
-    // Wait for all tasks to complete
-    await this.waitForCompletion();
-
-    this.status = "synthesizing";
-
-    // Synthesize results
-    const result = this.synthesizeResults();
-
-    this.status = result.success ? "completed" : "failed";
-    if (this.status === "completed") {
-      this.plan.completedAt = nowIso();
-    }
-
-    return result;
+  submitTasks(taskInputs: Array<{
+    description: string;
+    requiredCapabilities?: AgentCapability["type"][];
+    priority?: "low" | "normal" | "high" | "critical";
+    dependencies?: string[];
+  }>): CoordinatorTask[] {
+    return taskInputs.map((input) => this.createTask(input));
   }
 
   /**
-   * Dispatch a single task to a sub-agent.
+   * Assign a task to an available agent.
    */
-  private async dispatchTask(task: CoordinatorTask, providerConfig?: any): Promise<void> {
-    if (!this.plan) return;
+  assignTask(taskId: string, agentId?: string): boolean {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== "pending") {
+      return false;
+    }
 
+    // Check dependencies
+    if (task.dependencies && task.dependencies.length > 0) {
+      const pendingDeps = task.dependencies.filter((depId) => {
+        const dep = this.tasks.get(depId);
+        return dep && dep.status !== "completed" && dep.status !== "failed";
+      });
+      if (pendingDeps.length > 0) {
+        return false; // Wait for dependencies
+      }
+    }
+
+    // Find or use specified agent
+    const agent = agentId
+      ? this.agents.get(agentId)
+      : this.findBestAgent(task.requiredCapabilities);
+
+    if (!agent || agent.status !== "available" || agent.currentLoad >= agent.maxLoad) {
+      return false;
+    }
+
+    // Assign task
+    task.assignedAgentId = agent.id;
     task.status = "assigned";
+    task.assignedAt = nowIso();
 
-    // Publish task submission event
-    this.mailbox.publish(createTaskSubmittedEvent(this.coordinatorId, task.id, task.description));
+    agent.currentLoad++;
+    if (agent.currentLoad >= agent.maxLoad) {
+      agent.status = "busy";
+    }
 
-    const config: SubAgentConfig = {
-      id: createId("subagent"),
-      ownerId: this.coordinatorId,
-      task: task.description,
-      writeScope: "shared",
-      deadline: this.timeout,
-      background: true,
-      providerConfig,
-    };
+    // Send task to agent
+    this.config.mailbox.sendTo("coordinator", agent.id, MailboxTopics.TASK_DELEGATE, {
+      taskId: task.id,
+      description: task.description,
+      priority: task.priority,
+    });
 
-    const agentId = await this.manager.spawn(config);
-    task.assignedTo = agentId;
-    task.status = "running";
-
-    // Update pending tasks and dispatch more if capacity available
-    this.processNextPending();
+    this.emit({ type: "task_assigned", task, agentId: agent.id });
+    return true;
   }
 
   /**
-   * Wait for all tasks to complete.
+   * Automatically coordinate all pending tasks.
    */
-  private async waitForCompletion(): Promise<void> {
-    if (!this.plan) return;
+  coordinatePendingTasks(): number {
+    if (!this.running) {
+      return 0;
+    }
 
-    const pendingTasks = this.plan.tasks.filter(
-      (t) => t.status === "assigned" || t.status === "running",
-    );
-
-    await Promise.all(
-      pendingTasks.map(async (task) => {
-        if (!task.assignedTo) return;
-
-        try {
-          const output = await this.manager.wait(task.assignedTo, this.timeout);
-          this.results.set(task.id, output);
-
-          if (output.success) {
-            task.status = "completed";
-            task.result = output.text;
-            this.mailbox.publish(createTaskCompletedEvent(this.coordinatorId, task.id, output.text));
-          } else {
-            task.status = "failed";
-            task.error = output.error;
-            this.errors.set(task.id, output.error ?? "Unknown error");
-            this.mailbox.publish(createTaskFailedEvent(this.coordinatorId, task.id, task.error ?? "Unknown error"));
-
-            // Retry if enabled
-            if (this.retryOnFailure) {
-              await this.retryTask(task);
-            }
-          }
-        } catch (error) {
-          task.status = "failed";
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          task.error = errorMsg;
-          this.errors.set(task.id, errorMsg);
-          this.mailbox.publish(createTaskFailedEvent(this.coordinatorId, task.id, errorMsg));
+    let assigned = 0;
+    for (const task of this.tasks.values()) {
+      if (task.status === "pending") {
+        if (this.assignTask(task.id)) {
+          assigned++;
         }
-      }),
-    );
+      }
+    }
+    return assigned;
   }
 
   /**
-   * Retry a failed task.
+   * Get task status.
    */
-  private async retryTask(task: CoordinatorTask, attempt = 1): Promise<void> {
-    if (attempt > this.maxRetries) return;
-    if (!this.plan) return;
-
-    task.status = "running";
-
-    const config: SubAgentConfig = {
-      id: createId("subagent"),
-      ownerId: this.coordinatorId,
-      task: task.description,
-      writeScope: "shared",
-      deadline: this.timeout,
-      background: true,
-    };
-
-    const agentId = await this.manager.spawn(config);
-    task.assignedTo = agentId;
-
-    try {
-      const output = await this.manager.wait(agentId, this.timeout);
-      this.results.set(task.id, output);
-
-      if (output.success) {
-        task.status = "completed";
-        task.result = output.text;
-      } else {
-        task.status = "failed";
-        task.error = output.error;
-        this.errors.set(task.id, output.error ?? "Unknown error");
-        await this.retryTask(task, attempt + 1);
-      }
-    } catch (error) {
-      task.status = "failed";
-      task.error = error instanceof Error ? error.message : String(error);
-      this.errors.set(task.id, task.error);
-    }
+  getTask(taskId: string): CoordinatorTask | undefined {
+    return this.tasks.get(taskId);
   }
 
   /**
-   * Process next pending task if capacity available.
+   * Get all tasks, optionally filtered.
    */
-  private processNextPending(): void {
-    if (!this.plan) return;
+  getTasks(filter?: {
+    status?: CoordinatorTask["status"];
+    agentId?: string;
+    priority?: CoordinatorTask["priority"];
+  }): CoordinatorTask[] {
+    let tasks = [...this.tasks.values()];
 
-    const running = this.plan.tasks.filter((t) => t.status === "running" || t.status === "assigned").length;
-    if (running >= this.maxConcurrent) return;
+    if (filter?.status) {
+      tasks = tasks.filter((t) => t.status === filter.status);
+    }
+    if (filter?.agentId) {
+      tasks = tasks.filter((t) => t.assignedAgentId === filter.agentId);
+    }
+    if (filter?.priority) {
+      tasks = tasks.filter((t) => t.priority === filter.priority);
+    }
 
-    const pending = this.plan.tasks.filter((t) => t.status === "pending");
-    if (pending.length === 0) return;
-
-    const next = pending[0];
-    this.dispatchTask(next, undefined);
+    return tasks;
   }
 
-  // ==========================================================================
-  // Synthesis
-  // ==========================================================================
+  /**
+   * Get agent status.
+   */
+  getAgent(agentId: string): CoordinatorAgent | undefined {
+    return this.agents.get(agentId);
+  }
 
-  private synthesizeResults(): CoordinatorResult {
-    if (!this.plan) throw new Error("No plan");
+  /**
+   * Get all registered agents.
+   */
+  getAgents(filter?: {
+    status?: CoordinatorAgent["status"];
+    capability?: AgentCapability["type"];
+  }): CoordinatorAgent[] {
+    let agents = [...this.agents.values()];
 
-    const results = new Map<string, unknown>();
-    const errors = new Map<string, string>();
+    if (filter?.status) {
+      agents = agents.filter((a) => a.status === filter.status);
+    }
+    if (filter?.capability) {
+      agents = agents.filter((a) =>
+        a.capabilities.some((c) => c.type === filter.capability)
+      );
+    }
 
-    for (const task of this.plan.tasks) {
-      if (task.status === "completed" && task.result) {
-        results.set(task.id, task.result);
-      } else if (task.status === "failed" && task.error) {
-        errors.set(task.id, task.error);
+    return agents;
+  }
+
+  /**
+   * Get coordination statistics.
+   */
+  getStats(): {
+    totalTasks: number;
+    pendingTasks: number;
+    completedTasks: number;
+    failedTasks: number;
+    totalAgents: number;
+    availableAgents: number;
+    busyAgents: number;
+    totalLoad: number;
+    maxLoad: number;
+  } {
+    let pendingTasks = 0;
+    let completedTasks = 0;
+    let failedTasks = 0;
+    let availableAgents = 0;
+    let busyAgents = 0;
+    let totalLoad = 0;
+    let maxLoad = 0;
+
+    for (const task of this.tasks.values()) {
+      if (task.status === "pending" || task.status === "assigned" || task.status === "in_progress") {
+        pendingTasks++;
+      } else if (task.status === "completed") {
+        completedTasks++;
+      } else if (task.status === "failed") {
+        failedTasks++;
       }
     }
 
-    const success = errors.size === 0;
-    const summary = this.buildSummary();
+    for (const agent of this.agents.values()) {
+      totalLoad += agent.currentLoad;
+      maxLoad += agent.maxLoad;
+      if (agent.status === "available") {
+        availableAgents++;
+      } else if (agent.status === "busy") {
+        busyAgents++;
+      }
+    }
 
     return {
-      success,
-      planId: this.plan.id,
-      results,
-      errors,
-      summary,
+      totalTasks: this.tasks.size,
+      pendingTasks,
+      completedTasks,
+      failedTasks,
+      totalAgents: this.agents.size,
+      availableAgents,
+      busyAgents,
+      totalLoad,
+      maxLoad,
     };
   }
 
-  private buildSummary(): string {
-    if (!this.plan) return "";
-
-    const completed = this.plan.tasks.filter((t) => t.status === "completed").length;
-    const failed = this.plan.tasks.filter((t) => t.status === "failed").length;
-    const total = this.plan.tasks.length;
-
-    if (failed === 0) {
-      return `Successfully completed all ${completed} tasks.`;
-    }
-
-    return `Completed ${completed}/${total} tasks. ${failed} task(s) failed.`;
+  /**
+   * Subscribe to coordinator events.
+   */
+  subscribe(listener: (event: CoordinatorEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
-  // ==========================================================================
-  // Mailbox Setup
-  // ==========================================================================
-
-  private setupMailboxHandlers(): void {
-    // Listen for task completions
-    this.mailbox.subscribe(
-      { type: "task.completed" },
-      (event) => {
-        this.processNextPending();
-      },
+  private findBestAgent(requiredCapabilities: AgentCapability["type"][]): CoordinatorAgent | undefined {
+    const availableAgents = [...this.agents.values()].filter(
+      (a) => a.status === "available" && a.currentLoad < a.maxLoad
     );
 
-    // Listen for task failures
-    this.mailbox.subscribe(
-      { type: "task.failed" },
-      (event) => {
-        this.processNextPending();
-      },
-    );
+    if (availableAgents.length === 0) {
+      return undefined;
+    }
+
+    switch (this.config.strategy) {
+      case "load_balanced":
+        return availableAgents.sort((a, b) => a.currentLoad - b.currentLoad)[0];
+
+      case "capability_based":
+        return this.findByCapability(availableAgents, requiredCapabilities);
+
+      case "priority_based":
+        // Higher load tolerance for agents with needed capabilities
+        return availableAgents
+          .filter((a) => a.currentLoad < a.maxLoad)
+          .sort((a, b) => {
+            const aMatch = this.capabilityMatch(a, requiredCapabilities);
+            const bMatch = this.capabilityMatch(b, requiredCapabilities);
+            if (aMatch !== bMatch) return bMatch - aMatch;
+            return a.currentLoad - b.currentLoad;
+          })[0];
+
+      case "round_robin":
+        const agent = availableAgents[this.roundRobinIndex % availableAgents.length];
+        this.roundRobinIndex++;
+        return agent;
+
+      default:
+        return availableAgents[0];
+    }
   }
 
-  // ==========================================================================
-  // State
-  // ==========================================================================
+  private findByCapability(
+    agents: CoordinatorAgent[],
+    requiredCapabilities: AgentCapability["type"][],
+  ): CoordinatorAgent | undefined {
+    if (requiredCapabilities.length === 0) {
+      return agents[0];
+    }
 
-  getStatus(): CoordinatorStatus {
-    return this.status;
+    return agents
+      .filter((a) => requiredCapabilities.every((cap) => a.capabilities.some((c) => c.type === cap)))
+      .sort((a, b) => {
+        const aScore = a.capabilities
+          .filter((c) => requiredCapabilities.includes(c.type))
+          .reduce((sum, c) => sum + (c.weight ?? 1), 0);
+        const bScore = b.capabilities
+          .filter((c) => requiredCapabilities.includes(c.type))
+          .reduce((sum, c) => sum + (c.weight ?? 1), 0);
+        if (aScore !== bScore) return bScore - aScore;
+        return a.currentLoad - b.currentLoad;
+      })[0];
   }
 
-  getPlan(): CoordinatorPlan | undefined {
-    return this.plan;
+  private capabilityMatch(agent: CoordinatorAgent, required: AgentCapability["type"][]): number {
+    if (required.length === 0) return 1;
+    const matches = agent.capabilities.filter((c) => required.includes(c.type)).length;
+    return matches / required.length;
   }
 
-  getResults(): Map<string, SubAgentOutput> {
-    return new Map(this.results);
-  }
-
-  getErrors(): Map<string, string> {
-    return new Map(this.errors);
-  }
-
-  cancel(): void {
-    if (!this.plan) return;
-
-    for (const task of this.plan.tasks) {
-      if (task.assignedTo) {
-        this.manager.cancel(task.assignedTo);
-      }
-      if (task.status === "pending" || task.status === "assigned" || task.status === "running") {
-        task.status = "skipped";
+  private handleTaskComplete(message: MailboxMessage): void {
+    const agentId = message.senderId;
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      agent.currentLoad = Math.max(0, agent.currentLoad - 1);
+      if (agent.status === "busy" && agent.currentLoad < agent.maxLoad) {
+        agent.status = "available";
       }
     }
 
-    this.status = "failed";
+    // Find and update task
+    const payload = message.payload as { taskId?: string; result?: string };
+    if (payload?.taskId) {
+      const task = this.tasks.get(payload.taskId);
+      if (task) {
+        task.status = "completed";
+        task.completedAt = nowIso();
+        task.result = payload.result;
+
+        this.emit({
+          type: "task_completed",
+          task,
+          result: {
+            subAgentId: agentId,
+            status: "completed",
+            result: payload.result,
+            completedAt: nowIso(),
+            durationMs: 0,
+          },
+        });
+
+        // Try to assign more tasks
+        void this.coordinatePendingTasks();
+      }
+    }
+  }
+
+  private handleTaskFail(message: MailboxMessage): void {
+    const agentId = message.senderId;
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      agent.currentLoad = Math.max(0, agent.currentLoad - 1);
+      if (agent.status === "busy" && agent.currentLoad < agent.maxLoad) {
+        agent.status = "available";
+      }
+    }
+
+    const payload = message.payload as { taskId?: string; error?: string };
+    if (payload?.taskId) {
+      const task = this.tasks.get(payload.taskId);
+      if (task) {
+        task.status = "failed";
+        task.completedAt = nowIso();
+        task.error = payload.error;
+
+        this.emit({ type: "task_failed", task, error: payload.error ?? "Unknown error" });
+      }
+    }
+  }
+
+  private handleProgress(message: MailboxMessage): void {
+    if (!this.config.enableProgressTracking) {
+      return;
+    }
+
+    const payload = message.payload as { taskId?: string; progress?: number };
+    if (payload?.taskId) {
+      const task = this.tasks.get(payload.taskId);
+      if (task && task.status === "assigned") {
+        task.status = "in_progress";
+      }
+    }
+  }
+
+  private emit(event: CoordinatorEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Ignore listener errors
+      }
+    }
   }
 }
+
+// ============================================================================
+// Default Capabilities
+// ============================================================================
+
+export const DefaultCapabilities: AgentCapability[] = [
+  { type: "coding", name: "Code Generation", description: "Write and modify code", weight: 1 },
+  { type: "review", name: "Code Review", description: "Review code for issues", weight: 0.8 },
+  { type: "testing", name: "Testing", description: "Write and run tests", weight: 0.8 },
+  { type: "documentation", name: "Documentation", description: "Write documentation", weight: 0.6 },
+  { type: "research", name: "Research", description: "Research and analysis", weight: 0.7 },
+  { type: "planning", name: "Planning", description: "Plan and coordinate", weight: 0.9 },
+];
+
+// ============================================================================
+// Exports
+// ============================================================================
