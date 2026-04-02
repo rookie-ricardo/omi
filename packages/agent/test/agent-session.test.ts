@@ -25,6 +25,7 @@ import type { ProviderRunInput, ProviderRunResult } from "@omi/provider";
 
 import {
   AgentSession,
+  createDatabaseSessionRuntimeStore,
   SessionManager,
   SessionRuntime,
   type ResourceLoader,
@@ -169,6 +170,86 @@ describe("agent session", () => {
         status: "idle",
       },
     });
+  });
+
+  it("continueFromHistoryEntry writes branch-aware history nodes onto the new branch", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Branch-aware continuation");
+    const mainBranch = database.createBranch({
+      id: createId("branch"),
+      sessionId: session.id,
+      headEntryId: null,
+      title: "main",
+    });
+    const baseEntry = database.addSessionHistoryEntry({
+      id: createId("hist"),
+      sessionId: session.id,
+      parentId: null,
+      kind: "message",
+      messageId: null,
+      summary: null,
+      details: null,
+      branchId: mainBranch.id,
+      lineageDepth: 0,
+      originRunId: null,
+    });
+    const storedProviderConfig = database.upsertProviderConfig(makeProviderConfig());
+    const runtime = new SessionManager(createDatabaseSessionRuntimeStore(database), database).getOrCreate(
+      session.id,
+    );
+    runtime.setSelectedProviderConfig(storedProviderConfig.id);
+    const provider = {
+      async run(): Promise<ProviderRunResult> {
+        return { assistantText: "branch done" };
+      },
+      cancel() {},
+      approveTool() {},
+      rejectTool() {},
+    };
+
+    const agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: () => {},
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+    });
+
+    const run = agentSession.continueFromHistoryEntry({
+      prompt: "follow up",
+      providerConfig: storedProviderConfig,
+      historyEntryId: baseEntry.id,
+      checkpointSummary: "checkpoint summary",
+      checkpointDetails: { stage: "before_follow_up" },
+    });
+
+    await waitFor(() => database.getRun(run.id)?.status === "completed");
+
+    const branches = database.listBranches(session.id);
+    expect(branches).toHaveLength(2);
+    const continueBranch = branches[1];
+    expect(runtime.snapshot().activeBranchId).toBe(continueBranch.id);
+    const historyEntries = database.listSessionHistoryEntries(session.id);
+    const checkpointEntry = historyEntries.find(
+      (entry) => entry.kind === "branch_summary" && entry.summary === "checkpoint summary",
+    );
+
+    expect(checkpointEntry).toMatchObject({
+      parentId: baseEntry.id,
+      branchId: continueBranch.id,
+      originRunId: run.id,
+      lineageDepth: 1,
+    });
+    expect(
+      historyEntries.some(
+        (entry) =>
+          entry.kind === "message" &&
+          entry.branchId === continueBranch.id &&
+          entry.originRunId === run.id,
+      ),
+    ).toBe(true);
   });
 
   it("serializes queued runs within a session", async () => {
@@ -1056,8 +1137,10 @@ function createMemoryDatabase(): AppStore {
     },
     getRun: (runId) => runs.get(runId) ?? null,
     addMessage(input) {
-      const { parentHistoryEntryId, ...messageInput } = input as typeof input & {
+      const { parentHistoryEntryId, branchId, originRunId, ...messageInput } = input as typeof input & {
         parentHistoryEntryId?: string | null;
+        branchId?: string | null;
+        originRunId?: string | null;
       };
       const message: SessionMessage = {
         id: createId("msg"),
@@ -1067,6 +1150,7 @@ function createMemoryDatabase(): AppStore {
       messages.push(message);
       const parentId =
         parentHistoryEntryId ?? historyEntries.filter((entry) => entry.sessionId === message.sessionId).at(-1)?.id ?? null;
+      const parentEntry = parentId ? historyEntries.find((entry) => entry.id === parentId) : null;
       historyEntries.push({
         id: createId("hist"),
         sessionId: message.sessionId,
@@ -1075,6 +1159,9 @@ function createMemoryDatabase(): AppStore {
         messageId: message.id,
         summary: null,
         details: null,
+        branchId: branchId ?? null,
+        lineageDepth: parentEntry ? parentEntry.lineageDepth + 1 : 0,
+        originRunId: originRunId ?? null,
         createdAt: message.createdAt,
         updatedAt: message.createdAt,
       });
@@ -1091,6 +1178,9 @@ function createMemoryDatabase(): AppStore {
         messageId: input.messageId,
         summary: input.summary,
         details: input.details ?? null,
+        branchId: input.branchId ?? null,
+        lineageDepth: input.lineageDepth ?? 0,
+        originRunId: input.originRunId ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -1244,15 +1334,19 @@ function createMemoryDatabase(): AppStore {
     getLatestCheckpoint(runId) {
       return checkpoints.filter((c) => c.runId === runId).at(-1) ?? null;
     },
-    getHistoryEntry() {
-      return null;
+    getHistoryEntry(entryId) {
+      return historyEntries.find((entry) => entry.id === entryId) ?? null;
     },
-    getBranchHistory() {
-      return [];
+    getBranchHistory(sessionId, branchId) {
+      return historyEntries.filter(
+        (entry) => entry.sessionId === sessionId && entry.branchId === branchId,
+      );
     },
-    getActiveBranchId() {
-      return null;
+    getActiveBranchId(sessionId) {
+      return activeBranchIds.get(sessionId) ?? null;
     },
-    setActiveBranchId() {},
+    setActiveBranchId(sessionId, branchId) {
+      activeBranchIds.set(sessionId, branchId);
+    },
   };
 }

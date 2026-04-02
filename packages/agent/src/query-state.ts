@@ -25,6 +25,7 @@ import type { RuntimeMessage } from "@omi/memory";
  *   executing_tools -> recovering (on tool error)
  *   post_tool_merge -> preprocess_context (continue loop)
  *   post_tool_merge -> terminal (on max_turns / budget / cancel)
+ *   recovering -> calling_model (overflow retry)
  *   recovering -> preprocess_context (retry)
  *   recovering -> terminal (on exhausted retries)
  */
@@ -180,7 +181,7 @@ const VALID_TRANSITIONS: Record<QueryLoopState, Set<QueryLoopState>> = {
     "terminal",
   ]),
   terminal: new Set([]),
-  recovering: new Set(["preprocess_context", "terminal"]),
+  recovering: new Set(["calling_model", "preprocess_context", "terminal"]),
 };
 
 export function isValidTransition(

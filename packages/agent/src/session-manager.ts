@@ -264,6 +264,12 @@ export class SessionRuntime {
     });
   }
 
+  setActiveBranchId(branchId: string | null): void {
+    this.touch({
+      activeBranchId: branchId,
+    });
+  }
+
   completeRun(runId: string, assistantResponse: string): void {
     this.finishRun(runId, {
       lastAssistantResponse: assistantResponse,
@@ -411,10 +417,14 @@ export class SessionManager {
 
     const savedState = this.store?.load(sessionId) ?? null;
     if (savedState && this.database) {
-      const branchId = this.database.getActiveBranchId(sessionId);
+      const branchId =
+        this.database.getActiveBranchId(sessionId) ??
+        this.database.listBranches(sessionId).at(-1)?.id ??
+        null;
       this.activeBranchIds.set(sessionId, branchId);
       if (savedState.activeBranchId === undefined || savedState.activeBranchId === null) {
         savedState.activeBranchId = branchId;
+        this.store?.save(savedState);
       }
     }
 
@@ -542,6 +552,10 @@ export class SessionManager {
     });
 
     this.activeBranchIds.set(sessionId, branch.id);
+    if (fromEntryId) {
+      this.leafIds.set(sessionId, fromEntryId);
+    }
+    this.runtimes.get(sessionId)?.setActiveBranchId(branch.id);
     this.database.setActiveBranchId(sessionId, branch.id);
 
     return branch;
@@ -561,6 +575,7 @@ export class SessionManager {
     }
 
     this.activeBranchIds.set(sessionId, branchId);
+    this.runtimes.get(sessionId)?.setActiveBranchId(branchId);
     this.database.setActiveBranchId(sessionId, branchId);
 
     if (branch.headEntryId) {

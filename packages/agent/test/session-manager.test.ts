@@ -139,6 +139,55 @@ describe("session manager", () => {
     expect(database.listMemories("session", session.id)).toEqual([]);
   });
 
+  it("restores a missing activeBranchId from the branch table when loading a versioned snapshot", () => {
+    const database = createMockDatabase();
+    const session = database.createSession("Branch Snapshot Recovery");
+    const mainBranch = database.createBranch({
+      id: createId("branch"),
+      sessionId: session.id,
+      headEntryId: null,
+      title: "main",
+    });
+    const snapshot = {
+      version: 1,
+      sessionId: session.id,
+      activeRunId: null,
+      pendingRunIds: [],
+      queuedRuns: [],
+      blockedRunId: null,
+      blockedToolCallId: null,
+      pendingApprovalToolCallIds: [],
+      interruptedRunIds: [],
+      selectedProviderConfigId: null,
+      lastUserPrompt: null,
+      lastAssistantResponse: null,
+      lastActivityAt: nowIso(),
+      compaction: {
+        status: "idle",
+        reason: null,
+        requestedAt: null,
+        updatedAt: nowIso(),
+        lastSummary: null,
+        lastCompactedAt: null,
+        error: null,
+      },
+    };
+    database.saveSessionRuntimeSnapshot({
+      sessionId: session.id,
+      snapshot: JSON.stringify(snapshot),
+      updatedAt: nowIso(),
+    });
+
+    const runtime = new SessionManager(createDatabaseSessionRuntimeStore(database), database).getOrCreate(
+      session.id,
+    );
+
+    expect(runtime.snapshot().activeBranchId).toBe(mainBranch.id);
+    expect(JSON.parse(database.readSessionRuntime(session.id)?.snapshot ?? "{}")).toMatchObject({
+      activeBranchId: mainBranch.id,
+    });
+  });
+
   it("migrates legacy runtime snapshots out of memories once", () => {
     const database = createMockDatabase();
     const session = database.createSession("Legacy Runtime");

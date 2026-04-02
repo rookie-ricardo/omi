@@ -27,7 +27,11 @@ export interface AppStore {
   getRun(runId: string): Run | null;
   listRuns(sessionId?: string): Run[];
   addMessage(
-    input: Omit<SessionMessage, "id" | "createdAt"> & { parentHistoryEntryId?: string | null },
+    input: Omit<SessionMessage, "id" | "createdAt"> & {
+      parentHistoryEntryId?: string | null;
+      branchId?: string | null;
+      originRunId?: string | null;
+    },
   ): SessionMessage;
   listMessages(sessionId: string): SessionMessage[];
   addSessionHistoryEntry?(

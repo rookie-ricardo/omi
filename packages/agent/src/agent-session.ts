@@ -161,6 +161,7 @@ export class AgentSession {
 
       // Update the active branch in runtime snapshot so future messages
       // are associated with the new branch.
+      this.options.runtime.setActiveBranchId(branchId);
       this.options.database.setActiveBranchId(session.id, branchId);
     }
 
@@ -365,7 +366,6 @@ export class AgentSession {
         const session = this.requireSession();
         const task = run.taskId ? this.options.database.getTask(run.taskId) : null;
         const providerConfig = this.resolveQueuedProviderConfig(queuedRun.providerConfigId);
-
         await this.executeRun({
           session,
           task,
@@ -589,6 +589,10 @@ export class AgentSession {
     });
 
     if (this.options.database.addSessionHistoryEntry) {
+      const branchId =
+        this.options.database.getActiveBranchId(input.session.id) ??
+        this.options.database.listBranches(input.session.id).at(-1)?.id ??
+        null;
       const details = {
         mode: input.mode,
         prompt: input.prompt,
@@ -605,7 +609,7 @@ export class AgentSession {
         messageId: null,
         summary: snapshot.summary.goal,
         details: normalizeHistoryDetails(details),
-        branchId: null,
+        branchId,
         lineageDepth: 0,
         originRunId: null,
       });

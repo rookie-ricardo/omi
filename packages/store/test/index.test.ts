@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyMigrations,
+  revertLastMigration,
+  validateSchemaConsistency,
   weakDecryptStoredProviderApiKey,
   weakEncryptProviderApiKey,
 } from "../src/index";
@@ -61,6 +63,54 @@ describe("database migrations", () => {
     // The session_kernel_branches migration requires session_history_entries
     // which doesn't exist in legacy schemas, so it may not be applied
     expect(migrationIds(sqlite)).toHaveLength(3);
+  });
+
+  it("reverts the session kernel migration and drops WS-01 tables", () => {
+    const sqlite = createMemoryDatabase();
+    createFreshSchema(sqlite);
+
+    applyMigrations(sqlite);
+    expect(migrationIds(sqlite)).toContain("20260402_session_kernel_branches");
+
+    const reverted = revertLastMigration(sqlite);
+
+    expect(reverted).toBe("20260402_session_kernel_branches");
+    expect(tableExists(sqlite, "session_branches")).toBe(false);
+    expect(tableExists(sqlite, "run_checkpoints")).toBe(false);
+  });
+
+  it("reports orphan branch and checkpoint rows in the consistency check", () => {
+    const sqlite = createMemoryDatabase();
+    createFreshSchema(sqlite);
+
+    applyMigrations(sqlite);
+
+    sqlite
+      .prepare(
+        "INSERT INTO session_branches (id, session_id, head_entry_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("branch_orphan", "session_missing", null, "main", "2026-04-02T00:00:00.000Z", "2026-04-02T00:00:00.000Z");
+    sqlite
+      .prepare(
+        "INSERT INTO run_checkpoints (id, run_id, session_id, phase, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "checkpoint_orphan",
+        "run_missing",
+        "session_missing",
+        "before_model_call",
+        "{}",
+        "2026-04-02T00:00:00.000Z",
+      );
+
+    const errors = validateSchemaConsistency(sqlite);
+
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Branch branch_orphan references non-existent session session_missing"),
+        expect.stringContaining("Checkpoint checkpoint_orphan references non-existent run run_missing"),
+      ]),
+    );
   });
 });
 
@@ -217,4 +267,12 @@ function tableColumns(sqlite: BetterSqlite3.Database, tableName: string): string
     .prepare(`PRAGMA table_info(${tableName})`)
     .all()
     .map((row) => (row as { name: string }).name);
+}
+
+function tableExists(sqlite: BetterSqlite3.Database, tableName: string): boolean {
+  return (
+    sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(tableName) !== undefined
+  );
 }

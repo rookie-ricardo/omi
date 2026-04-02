@@ -12,7 +12,6 @@ import {
   buildSessionRuntimeMessageEnvelopes,
   buildSessionRuntimeMessages,
   convertRuntimeMessagesToLlm,
-  generateCompactionSummary,
   renderRuntimeMessagesForPrompt,
   sessionCompactionSnapshotSchema,
   estimateContextTokens,
@@ -239,6 +238,7 @@ export class QueryEngine {
         input.session,
         input.providerConfig,
         currentHistoryMessages,
+        input.run.id,
       );
       if (pipelineResult.didCompact) {
         currentHistoryMessages = pipelineResult.messages;
@@ -309,6 +309,7 @@ export class QueryEngine {
               providerConfig: input.providerConfig,
               mode: "overflow",
               prompt: input.prompt,
+              runId: input.run.id,
               historyEnvelopes: this.buildHistoricalRuntimeMessageEnvelopes(
                 input.session.id,
                 prepared.branchLeafEntryId,
@@ -596,7 +597,6 @@ export class QueryEngine {
           });
         },
       });
-
       if (!result) {
         throw new Error(`Run ${input.run.id} did not produce a result.`);
       }
@@ -638,6 +638,13 @@ export class QueryEngine {
       if (!this.deps.database.addSessionHistoryEntry) {
         throw new Error(`Session history storage is not available for session ${input.session.id}`);
       }
+      const branchId =
+        this.deps.database.getActiveBranchId(input.session.id) ??
+        this.deps.database.listBranches(input.session.id).at(-1)?.id ??
+        null;
+      const parentHistoryEntry = branchLeafEntryId
+        ? this.deps.database.getHistoryEntry(branchLeafEntryId)
+        : null;
       const checkpoint = this.deps.database.addSessionHistoryEntry({
         sessionId: input.session.id,
         parentId: branchLeafEntryId,
@@ -645,9 +652,9 @@ export class QueryEngine {
         messageId: null,
         summary: input.checkpointSummary,
         details: normalizeHistoryDetails(input.checkpointDetails),
-        branchId: null,
-        lineageDepth: 0,
-        originRunId: null,
+        branchId,
+        lineageDepth: parentHistoryEntry ? parentHistoryEntry.lineageDepth + 1 : 0,
+        originRunId: input.run.id,
       });
       branchLeafEntryId = checkpoint.id;
     }
@@ -794,11 +801,18 @@ export class QueryEngine {
       latestAssistantMessage: assistantText,
     });
 
+    const branchId =
+      this.deps.database.getActiveBranchId(sessionId) ??
+      this.deps.database.listBranches(sessionId).at(-1)?.id ??
+      null;
+
     this.deps.database.addMessage({
       sessionId,
       role: "user",
       content: input.prompt,
       parentHistoryEntryId: input.historyEntryId,
+      branchId,
+      originRunId: runId,
     });
 
     if (assistantText) {
@@ -806,6 +820,8 @@ export class QueryEngine {
         sessionId,
         role: "assistant",
         content: assistantText,
+        branchId,
+        originRunId: runId,
       });
     }
 
@@ -936,37 +952,67 @@ export class QueryEngine {
     providerConfig: ProviderConfig;
     mode: CompactionMode;
     prompt: string | null;
+    runId: string | null;
     historyEnvelopes: SessionRuntimeMessageEnvelope[];
   }): Promise<SessionCompactionSnapshot | null> {
     const model = createModelFromConfig(input.providerConfig);
     const plan = buildCompactionPlan(input.historyEnvelopes, model.contextWindow, input.mode);
+    const fallbackTokensBefore = estimateContextTokens(
+      input.historyEnvelopes.map((entry) => entry.message),
+    ).tokens;
+    const summaryInput = plan
+      ? {
+          sessionId: input.session.id,
+          providerConfig: input.providerConfig,
+          mode: input.mode,
+          tokensBefore: plan.tokensBefore,
+          tokensKept: plan.tokensKept,
+          keepRecentTokens: plan.keepRecentTokens,
+          summaryMessages: plan.summaryMessages,
+          keptMessages: plan.keptMessages,
+        }
+      : {
+          sessionId: input.session.id,
+          providerConfig: input.providerConfig,
+          mode: input.mode,
+          tokensBefore: fallbackTokensBefore,
+          tokensKept: 0,
+          keepRecentTokens: 0,
+          summaryMessages: input.historyEnvelopes.map((entry) => entry.message),
+          keptMessages: [] as RuntimeMessage[],
+        };
 
-    if (!plan) {
+    if (!plan && input.mode !== "overflow") {
       return null;
     }
 
-    const summary = await generateCompactionSummary(
-      {
-        sessionId: input.session.id,
-        providerConfig: input.providerConfig,
-        mode: input.mode,
-        tokensBefore: plan.tokensBefore,
-        tokensKept: plan.tokensKept,
-        keepRecentTokens: plan.keepRecentTokens,
-        summaryMessages: plan.summaryMessages,
-        keptMessages: plan.keptMessages,
-      },
-      this.deps.compactionSummarizer,
-    );
+    const summary = this.deps.compactionSummarizer
+      ? await this.deps.compactionSummarizer.summarize(summaryInput)
+      : {
+          version: 1 as const,
+          goal: `Compacted ${input.mode} context for ${input.session.id}`,
+          constraints: [`prompt:${input.prompt ?? "n/a"}`],
+          progress: {
+            done: [`summarized:${summaryInput.summaryMessages.length}`],
+            inProgress: [`kept:${summaryInput.keptMessages.length}`],
+            blocked: [],
+          },
+          keyDecisions: [`tokensBefore:${summaryInput.tokensBefore}`],
+          nextSteps: [`resume:${input.mode}`],
+          criticalContext: [
+            `provider:${input.providerConfig.type}`,
+            `tokensKept:${summaryInput.tokensKept}`,
+          ],
+        };
 
     const snapshot = sessionCompactionSnapshotSchema.parse({
       version: 1,
       summary,
       compactedAt: nowIso(),
-      firstKeptHistoryEntryId: plan.firstKeptHistoryEntryId,
-      firstKeptTimestamp: plan.firstKeptTimestamp,
-      tokensBefore: plan.tokensBefore,
-      tokensKept: plan.tokensKept,
+      firstKeptHistoryEntryId: plan?.firstKeptHistoryEntryId ?? null,
+      firstKeptTimestamp: plan?.firstKeptTimestamp ?? nowIso(),
+      tokensBefore: plan?.tokensBefore ?? summaryInput.tokensBefore,
+      tokensKept: plan?.tokensKept ?? summaryInput.tokensKept,
     });
 
     this.deps.runtime.completeCompaction({
@@ -975,13 +1021,17 @@ export class QueryEngine {
     });
 
     if (this.deps.database.addSessionHistoryEntry) {
+      const branchId =
+        this.deps.database.getActiveBranchId(input.session.id) ??
+        this.deps.database.listBranches(input.session.id).at(-1)?.id ??
+        null;
       const details = {
         mode: input.mode,
         prompt: input.prompt,
-        cutoffIndex: plan.cutoffIndex,
-        tokensBefore: plan.tokensBefore,
-        tokensKept: plan.tokensKept,
-        keepRecentTokens: plan.keepRecentTokens,
+        cutoffIndex: plan?.cutoffIndex ?? 0,
+        tokensBefore: plan?.tokensBefore ?? summaryInput.tokensBefore,
+        tokensKept: plan?.tokensKept ?? summaryInput.tokensKept,
+        keepRecentTokens: plan?.keepRecentTokens ?? summaryInput.keepRecentTokens,
       };
 
       this.deps.database.addSessionHistoryEntry!({
@@ -991,9 +1041,9 @@ export class QueryEngine {
         messageId: null,
         summary: snapshot.summary.goal,
         details: normalizeHistoryDetails(details),
-        branchId: null,
+        branchId,
         lineageDepth: 0,
-        originRunId: null,
+        originRunId: input.runId,
       });
     }
 
@@ -1008,6 +1058,7 @@ export class QueryEngine {
     session: Session,
     providerConfig: ProviderConfig,
     messages: RuntimeMessage[],
+    runId: string,
   ): Promise<{ messages: RuntimeMessage[]; didCompact: boolean; snapshot?: SessionCompactionSnapshot }> {
     const pipelineConfig: ContextPipelineConfig = {
       providerConfig,
@@ -1035,6 +1086,10 @@ export class QueryEngine {
       });
 
       if (this.deps.database.addSessionHistoryEntry) {
+        const branchId =
+          this.deps.database.getActiveBranchId(session.id) ??
+          this.deps.database.listBranches(session.id).at(-1)?.id ??
+          null;
         const details = {
           mode: "pipeline",
           tokensBefore: result.usageEstimate.tokens,
@@ -1049,9 +1104,9 @@ export class QueryEngine {
           messageId: null,
           summary: result.compactionSnapshot.summary.goal,
           details: normalizeHistoryDetails(details),
-          branchId: null,
+          branchId,
           lineageDepth: 0,
-          originRunId: null,
+          originRunId: runId,
         });
       }
     }

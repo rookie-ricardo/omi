@@ -204,6 +204,7 @@ function createMockRuntime(sessionId: string): SessionRuntime {
     completeCompaction: vi.fn(),
     failCompaction: vi.fn(),
     setSelectedProviderConfig: vi.fn(),
+    setActiveBranchId: vi.fn(),
   } as unknown as SessionRuntime;
 }
 
@@ -260,9 +261,9 @@ describe("QueryEngine", () => {
   });
 
   describe("state machine validation", () => {
-    it("all 18 valid transitions are defined in the state machine", () => {
+    it("all 19 valid transitions are defined in the state machine", () => {
       const transitions = getAllValidTransitions();
-      expect(transitions).toHaveLength(18);
+      expect(transitions).toHaveLength(19);
     });
 
     it("state machine covers the full lifecycle with tools: init -> preprocess -> model -> stream -> tools -> merge -> terminal", () => {
@@ -311,6 +312,7 @@ describe("QueryEngine", () => {
     it("state machine supports recovery transitions", () => {
       const recoveryPath: Array<{ from: QueryLoopState; to: QueryLoopState }> = [
         { from: "calling_model", to: "recovering" },
+        { from: "recovering", to: "calling_model" },
         { from: "recovering", to: "preprocess_context" },
         { from: "streaming_response", to: "recovering" },
         { from: "executing_tools", to: "recovering" },

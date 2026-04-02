@@ -115,6 +115,10 @@ describe("query-state", () => {
       expect(isValidTransition("recovering", "preprocess_context")).toBe(true);
     });
 
+    it("allows recovering -> calling_model", () => {
+      expect(isValidTransition("recovering", "calling_model")).toBe(true);
+    });
+
     it("allows recovering -> terminal", () => {
       expect(isValidTransition("recovering", "terminal")).toBe(true);
     });
@@ -167,10 +171,10 @@ describe("query-state", () => {
       // streaming_response -> executing_tools, terminal, recovering, preprocess_context, post_tool_merge (5)
       // executing_tools -> post_tool_merge, terminal, recovering (3)
       // post_tool_merge -> preprocess_context, terminal (2)
-      // recovering -> preprocess_context, terminal (2)
+      // recovering -> calling_model, preprocess_context, terminal (3)
       // terminal -> (none) (0)
-      // Total: 1+2+3+5+3+2+2+0 = 18
-      expect(transitions).toHaveLength(18);
+      // Total: 1+2+3+5+3+2+3+0 = 19
+      expect(transitions).toHaveLength(19);
     });
 
     it("every returned transition passes isValidTransition", () => {
