@@ -6,7 +6,7 @@
  */
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Static, TSchema } from "@mariozechner/pi-ai";
+import type { TextContent, Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import type { McpRegistry } from "@omi/provider";
 
@@ -24,6 +24,14 @@ export interface McpResourceToolsConfig {
   includeContentInList?: boolean;
   /** Maximum content length to return */
   maxContentLength?: number;
+}
+
+/**
+ * Details for MCP resource tools.
+ */
+export interface McpResourceToolDetails {
+  serverId?: string;
+  uri?: string;
 }
 
 // ============================================================================
@@ -75,13 +83,16 @@ const DEFAULT_MAX_CONTENT_LENGTH = 50000;
  */
 export function createMcpResourceListTool(
   config: McpResourceToolsConfig
-): AgentTool<typeof mcpResourceListSchema> {
+): AgentTool<typeof mcpResourceListSchema, McpResourceToolDetails> {
   return {
     name: MCP_RESOURCE_LIST_TOOL,
     label: MCP_RESOURCE_LIST_TOOL,
     description: "List available MCP resources. MCP resources are provided by MCP servers and can contain data, files, or API responses.",
     parameters: mcpResourceListSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (
+      _toolCallId: string,
+      params: unknown,
+    ) => {
       const { pattern, serverId } = params as McpResourceListInput;
 
       try {
@@ -92,6 +103,7 @@ export function createMcpResourceListTool(
           resources = config.registry.getResources(serverId).map((r) => ({
             ...r,
             serverId,
+            serverName: config.registry.getServer(serverId)?.config.name ?? serverId,
           }));
         } else {
           // List from all servers
@@ -126,16 +138,16 @@ export function createMcpResourceListTool(
 
         const output = lines.join("\n");
         return {
-          content: [{ type: "text", text: output || "No resources found." }],
+          content: [{ type: "text", text: output || "No resources found." } as TextContent],
+          details: {},
         };
       } catch (error) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error listing MCP resources: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: `Error listing MCP resources: ${error instanceof Error ? error.message : String(error)}`,
+          } as TextContent],
+          details: { },
           isError: true,
         };
       }
@@ -148,18 +160,21 @@ export function createMcpResourceListTool(
  */
 export function createMcpResourceReadTool(
   config: McpResourceToolsConfig
-): AgentTool<typeof mcpResourceReadSchema> {
+): AgentTool<typeof mcpResourceReadSchema, McpResourceToolDetails> {
   return {
     name: MCP_RESOURCE_READ_TOOL,
     label: MCP_RESOURCE_READ_TOOL,
     description: "Read the content of an MCP resource by its URI.",
     parameters: mcpResourceReadSchema,
-    execute: async (_toolCallId, params) => {
+    execute: async (
+      _toolCallId: string,
+      params: unknown,
+    ) => {
       const { uri, maxLength } = params as McpResourceReadInput;
       const limit = maxLength ?? config.maxContentLength ?? DEFAULT_MAX_CONTENT_LENGTH;
 
       try {
-        const { content } = await config.registry.readResourceByUri(uri);
+        const { serverId, content } = await config.registry.readResourceByUri(uri);
 
         // Format content
         let text: string;
@@ -178,16 +193,16 @@ export function createMcpResourceReadTool(
         }
 
         return {
-          content: [{ type: "text", text }],
+          content: [{ type: "text", text } as TextContent],
+          details: { serverId, uri },
         };
       } catch (error) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Error reading MCP resource ${uri}: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
+          content: [{
+            type: "text",
+            text: `Error reading MCP resource ${uri}: ${error instanceof Error ? error.message : String(error)}`,
+          } as TextContent],
+          details: { uri },
           isError: true,
         };
       }
@@ -200,7 +215,7 @@ export function createMcpResourceReadTool(
  */
 export function createMcpResourceTools(
   config: McpResourceToolsConfig
-): AgentTool<typeof mcpResourceListSchema | typeof mcpResourceReadSchema>[] {
+): AgentTool<typeof mcpResourceListSchema | typeof mcpResourceReadSchema, McpResourceToolDetails>[] {
   return [
     createMcpResourceListTool(config),
     createMcpResourceReadTool(config),
