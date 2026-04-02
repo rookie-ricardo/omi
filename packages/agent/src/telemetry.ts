@@ -1,638 +1,655 @@
 /**
- * Telemetry Module
+ * Telemetry - 运行生命周期事件标准化
  *
- * Provides observability for the agent system:
- * - Run lifecycle events
- * - Tool call metrics
- * - Compaction metrics
- * - Subagent metrics
- * - MCP connection metrics
+ * 提供统一的事件发射接口，用于追踪：
+ * - Run 生命周期（start, complete, fail, cancel）
+ * - Compaction 观测（触发原因、释放 token、失败次数）
+ * - SubAgent 观测（spawn/finish/fail/background）
+ * - MCP 连接观测（状态变化、重连次数、认证失败）
  */
 
-import { createId, nowIso } from "@omi/core";
+import { EventEmitter } from "node:events";
+import { createEventBus, type EventBusController } from "./event-bus.js";
 
 // ============================================================================
 // Event Types
 // ============================================================================
 
-export type TelemetryEventType =
-  | "run.started"
-  | "run.state_changed"
-  | "run.completed"
-  | "run.failed"
-  | "run.recovered"
-  | "tool.called"
-  | "tool.approved"
-  | "tool.rejected"
-  | "compaction.triggered"
-  | "compaction.completed"
-  | "compaction.failed"
-  | "subagent.spawned"
-  | "subagent.completed"
-  | "subagent.failed"
-  | "mcp.connected"
-  | "mcp.disconnected"
-  | "mcp.error"
-  | "mcp.reconnected";
+/**
+ * Run 生命周期事件
+ */
+export type RunEvent =
+	| RunStartedEvent
+	| RunCompletedEvent
+	| RunFailedEvent
+	| RunCancelledEvent
+	| RunBlockedEvent;
 
-// ============================================================================
-// Event Payloads
-// ============================================================================
-
-export interface RunStartedPayload {
-  runId: string;
-  sessionId: string;
-  taskId?: string;
-  trigger: "user" | "retry" | "resume" | "continue";
+/**
+ * Run 开始事件
+ */
+export interface RunStartedEvent {
+	type: "run:started";
+	sessionId: string;
+	runId: string;
+	prompt: string;
+	model?: string;
+	provider?: string;
+	timestamp: string;
 }
 
-export interface RunStateChangedPayload {
-  runId: string;
-  sessionId: string;
-  previousState: string;
-  currentState: string;
-  reason?: string;
+/**
+ * Run 完成事件
+ */
+export interface RunCompletedEvent {
+	type: "run:completed";
+	sessionId: string;
+	runId: string;
+	responseLength: number;
+	durationMs: number;
+	tokenUsage?: TokenUsage;
+	timestamp: string;
 }
 
-export interface RunCompletedPayload {
-  runId: string;
-  sessionId: string;
-  durationMs: number;
-  toolCallCount: number;
-  tokensUsed?: number;
-  success: boolean;
+/**
+ * Run 失败事件
+ */
+export interface RunFailedEvent {
+	type: "run:failed";
+	sessionId: string;
+	runId: string;
+	error: string;
+	errorCode?: string;
+	durationMs: number;
+	timestamp: string;
 }
 
-export interface RunFailedPayload {
-  runId: string;
-  sessionId: string;
-  error: string;
-  errorCode?: string;
-  recoverable: boolean;
+/**
+ * Run 取消事件
+ */
+export interface RunCancelledEvent {
+	type: "run:cancelled";
+	sessionId: string;
+	runId: string;
+	reason?: string;
+	durationMs: number;
+	timestamp: string;
 }
 
-export interface ToolCalledPayload {
-  runId: string;
-  sessionId: string;
-  toolCallId: string;
-  toolName: string;
-  durationMs?: number;
-  inputSize?: number;
+/**
+ * Run 阻塞事件
+ */
+export interface RunBlockedEvent {
+	type: "run:blocked";
+	sessionId: string;
+	runId: string;
+	toolCallId: string;
+	toolName: string;
+	timestamp: string;
 }
 
-export interface ToolDecidedPayload {
-  runId: string;
-  sessionId: string;
-  toolCallId: string;
-  toolName: string;
-  decision: "approved" | "rejected";
-  reason?: string;
-  ruleId?: string;
-  ruleSource?: "explicit" | "policy" | "default";
+/**
+ * Token 使用量
+ */
+export interface TokenUsage {
+	inputTokens: number;
+	outputTokens: number;
+	totalTokens: number;
+	cacheCreationTokens?: number;
+	cacheReadTokens?: number;
 }
 
-export interface CompactionTriggeredPayload {
-  sessionId: string;
-  reason: "budget_exceeded" | "user_requested" | "scheduled" | "error_recovery";
-  tokensBefore: number;
-  historyEntryCount: number;
+/**
+ * Compaction 事件
+ */
+export type CompactionEvent =
+	| CompactionRequestedEvent
+	| CompactionStartedEvent
+	| CompactionCompletedEvent
+	| CompactionFailedEvent;
+
+export interface CompactionRequestedEvent {
+	type: "compaction:requested";
+	sessionId: string;
+	reason: string;
+	currentMessageCount: number;
+	currentTokenCount: number;
+	timestamp: string;
 }
 
-export interface CompactionCompletedPayload {
-  sessionId: string;
-  tokensBefore: number;
-  tokensAfter: number;
-  tokensSaved: number;
-  durationMs: number;
-  entriesRemoved: number;
-  success: boolean;
-  error?: string;
+export interface CompactionStartedEvent {
+	type: "compaction:started";
+	sessionId: string;
+	timestamp: string;
 }
 
-export interface CompactionFailedPayload {
-  sessionId: string;
-  error: string;
-  tokensBefore: number;
-  attempts: number;
+export interface CompactionCompletedEvent {
+	type: "compaction:completed";
+	sessionId: string;
+	tokensFreed: number;
+	messagesBefore: number;
+	messagesAfter: number;
+	durationMs: number;
+	timestamp: string;
 }
 
-export interface SubagentSpawnedPayload {
-  taskId: string;
-  ownerId: string;
-  writeScope: "shared" | "isolated" | "worktree";
-  background: boolean;
-  deadline?: number;
+export interface CompactionFailedEvent {
+	type: "compaction:failed";
+	sessionId: string;
+	error: string;
+	durationMs: number;
+	timestamp: string;
 }
 
-export interface SubagentCompletedPayload {
-  taskId: string;
-  ownerId: string;
-  durationMs: number;
-  success: boolean;
-  outputSize?: number;
+/**
+ * SubAgent 事件
+ */
+export type SubAgentEvent =
+	| SubAgentSpawnedEvent
+	| SubAgentStartedEvent
+	| SubAgentCompletedEvent
+	| SubAgentFailedEvent
+	| SubAgentBackgroundEvent
+	| SubAgentForegroundEvent;
+
+export interface SubAgentSpawnedEvent {
+	type: "subagent:spawned";
+	sessionId: string;
+	subAgentId: string;
+	name: string;
+	isolated: boolean;
+	timestamp: string;
 }
 
-export interface SubagentFailedPayload {
-  taskId: string;
-  ownerId: string;
-  error: string;
-  recoverable: boolean;
+export interface SubAgentStartedEvent {
+	type: "subagent:started";
+	sessionId: string;
+	subAgentId: string;
+	timestamp: string;
 }
 
-export interface McpConnectedPayload {
-  serverId: string;
-  serverName: string;
-  transport: "stdio" | "http" | "sse" | "websocket";
-  durationMs?: number;
+export interface SubAgentCompletedEvent {
+	type: "subagent:completed";
+	sessionId: string;
+	subAgentId: string;
+	durationMs: number;
+	resultLength?: number;
+	timestamp: string;
 }
 
-export interface McpDisconnectedPayload {
-  serverId: string;
-  serverName: string;
-  reason: "user_requested" | "error" | "timeout" | "protocol_error";
-  durationMs: number;
+export interface SubAgentFailedEvent {
+	type: "subagent:failed";
+	sessionId: string;
+	subAgentId: string;
+	error: string;
+	durationMs: number;
+	timestamp: string;
 }
 
-export interface McpErrorPayload {
-  serverId: string;
-  serverName: string;
-  error: string;
-  errorCode?: string;
-  recoverable: boolean;
+export interface SubAgentBackgroundEvent {
+	type: "subagent:background";
+	sessionId: string;
+	subAgentId: string;
+	timestamp: string;
 }
 
-export interface McpReconnectedPayload {
-  serverId: string;
-  serverName: string;
-  attemptNumber: number;
-  durationMs: number;
-  success: boolean;
+export interface SubAgentForegroundEvent {
+	type: "subagent:foreground";
+	sessionId: string;
+	subAgentId: string;
+	timestamp: string;
 }
 
-// ============================================================================
-// Telemetry Event
-// ============================================================================
+/**
+ * MCP 连接事件
+ */
+export type McpConnectionEvent =
+	| McpConnectedEvent
+	| McpDisconnectedEvent
+	| McpReconnectingEvent
+	| McpAuthFailedEvent
+	| McpErrorEvent;
 
-export interface TelemetryEvent<T = unknown> {
-  id: string;
-  type: TelemetryEventType;
-  timestamp: string;
-  payload: T;
-  metadata?: Record<string, unknown>;
+export interface McpConnectedEvent {
+	type: "mcp:connected";
+	serverName: string;
+	serverType: string;
+	transport: string;
+	latencyMs?: number;
+	timestamp: string;
 }
 
-// ============================================================================
-// Metrics
-// ============================================================================
-
-export interface RunMetrics {
-  runId: string;
-  sessionId: string;
-  startedAt: string;
-  completedAt?: string;
-  durationMs?: number;
-  toolCallCount: number;
-  toolApprovalCount: number;
-  toolRejectionCount: number;
-  compactionCount: number;
-  errorCount: number;
-  finalState?: string;
+export interface McpDisconnectedEvent {
+	type: "mcp:disconnected";
+	serverName: string;
+	serverType: string;
+	reason?: string;
+	timestamp: string;
 }
 
-export interface SessionMetrics {
-  sessionId: string;
-  startedAt: string;
-  runCount: number;
-  totalDurationMs: number;
-  totalToolCalls: number;
-  totalCompactions: number;
-  currentHistoryTokens: number;
-  compactionRatio: number;
+export interface McpReconnectingEvent {
+	type: "mcp:reconnecting";
+	serverName: string;
+	attemptNumber: number;
+	maxAttempts: number;
+	timestamp: string;
 }
 
-export interface ToolMetrics {
-  toolName: string;
-  callCount: number;
-  approvalRate: number;
-  rejectionRate: number;
-  averageDurationMs: number;
-  totalDurationMs: number;
-  lastCalledAt?: string;
+export interface McpAuthFailedEvent {
+	type: "mcp:auth_failed";
+	serverName: string;
+	authType: string;
+	error: string;
+	timestamp: string;
 }
 
-export interface McpMetrics {
-  serverId: string;
-  serverName: string;
-  connectCount: number;
-  disconnectCount: number;
-  errorCount: number;
-  reconnectCount: number;
-  totalDurationMs: number;
-  averageLatencyMs?: number;
-  lastConnectedAt?: string;
-  lastErrorAt?: string;
-}
-
-// ============================================================================
-// Telemetry Collector
-// ============================================================================
-
-export interface TelemetryCollectorConfig {
-  /** Maximum events to keep in memory */
-  maxEvents?: number;
-  /** Whether to enable metrics aggregation */
-  enableMetrics?: boolean;
-  /** Custom event sink */
-  sink?: TelemetrySink;
-}
-
-export interface TelemetrySink {
-  emit(event: TelemetryEvent): void | Promise<void>;
-  flush(): void | Promise<void>;
-}
-
-export class TelemetryCollector {
-  private events: TelemetryEvent[] = [];
-  private runMetrics: Map<string, RunMetrics> = new Map();
-  private toolMetrics: Map<string, ToolMetrics> = new Map();
-  private mcpMetrics: Map<string, McpMetrics> = new Map();
-  private sessionMetrics: Map<string, SessionMetrics> = new Map();
-  private sink?: TelemetrySink;
-  private readonly maxEvents: number;
-  private readonly enableMetrics: boolean;
-
-  constructor(config: TelemetryCollectorConfig = {}) {
-    this.maxEvents = config.maxEvents ?? 10000;
-    this.enableMetrics = config.enableMetrics ?? true;
-    this.sink = config.sink;
-  }
-
-  // ==========================================================================
-  // Event Recording
-  // ==========================================================================
-
-  /**
-   * Record a telemetry event.
-   */
-  record<T>(type: TelemetryEventType, payload: T, metadata?: Record<string, unknown>): TelemetryEvent<T> {
-    const event: TelemetryEvent<T> = {
-      id: createId("telemetry"),
-      type,
-      timestamp: nowIso(),
-      payload,
-      metadata,
-    };
-
-    this.events.push(event as TelemetryEvent);
-    if (this.events.length > this.maxEvents) {
-      this.events.shift();
-    }
-
-    this.sink?.emit(event as TelemetryEvent);
-
-    if (this.enableMetrics) {
-      this.updateMetrics(event);
-    }
-
-    return event;
-  }
-
-  /**
-   * Record run started.
-   */
-  recordRunStarted(payload: RunStartedPayload): TelemetryEvent<RunStartedPayload> {
-    return this.record("run.started", payload);
-  }
-
-  /**
-   * Record run state changed.
-   */
-  recordRunStateChanged(payload: RunStateChangedPayload): TelemetryEvent<RunStateChangedPayload> {
-    return this.record("run.state_changed", payload);
-  }
-
-  /**
-   * Record run completed.
-   */
-  recordRunCompleted(payload: RunCompletedPayload): TelemetryEvent<RunCompletedPayload> {
-    return this.record("run.completed", payload);
-  }
-
-  /**
-   * Record run failed.
-   */
-  recordRunFailed(payload: RunFailedPayload): TelemetryEvent<RunFailedPayload> {
-    return this.record("run.failed", payload);
-  }
-
-  /**
-   * Record tool called.
-   */
-  recordToolCalled(payload: ToolCalledPayload): TelemetryEvent<ToolCalledPayload> {
-    return this.record("tool.called", payload);
-  }
-
-  /**
-   * Record tool approved.
-   */
-  recordToolApproved(payload: ToolDecidedPayload): TelemetryEvent<ToolDecidedPayload> {
-    return this.record("tool.approved", payload);
-  }
-
-  /**
-   * Record tool rejected.
-   */
-  recordToolRejected(payload: ToolDecidedPayload): TelemetryEvent<ToolDecidedPayload> {
-    return this.record("tool.rejected", payload);
-  }
-
-  /**
-   * Record compaction triggered.
-   */
-  recordCompactionTriggered(payload: CompactionTriggeredPayload): TelemetryEvent<CompactionTriggeredPayload> {
-    return this.record("compaction.triggered", payload);
-  }
-
-  /**
-   * Record compaction completed.
-   */
-  recordCompactionCompleted(payload: CompactionCompletedPayload): TelemetryEvent<CompactionCompletedPayload> {
-    return this.record("compaction.completed", payload);
-  }
-
-  /**
-   * Record compaction failed.
-   */
-  recordCompactionFailed(payload: CompactionFailedPayload): TelemetryEvent<CompactionFailedPayload> {
-    return this.record("compaction.failed", payload);
-  }
-
-  /**
-   * Record subagent spawned.
-   */
-  recordSubagentSpawned(payload: SubagentSpawnedPayload): TelemetryEvent<SubagentSpawnedPayload> {
-    return this.record("subagent.spawned", payload);
-  }
-
-  /**
-   * Record subagent completed.
-   */
-  recordSubagentCompleted(payload: SubagentCompletedPayload): TelemetryEvent<SubagentCompletedPayload> {
-    return this.record("subagent.completed", payload);
-  }
-
-  /**
-   * Record subagent failed.
-   */
-  recordSubagentFailed(payload: SubagentFailedPayload): TelemetryEvent<SubagentFailedPayload> {
-    return this.record("subagent.failed", payload);
-  }
-
-  /**
-   * Record MCP connected.
-   */
-  recordMcpConnected(payload: McpConnectedPayload): TelemetryEvent<McpConnectedPayload> {
-    return this.record("mcp.connected", payload);
-  }
-
-  /**
-   * Record MCP disconnected.
-   */
-  recordMcpDisconnected(payload: McpDisconnectedPayload): TelemetryEvent<McpDisconnectedPayload> {
-    return this.record("mcp.disconnected", payload);
-  }
-
-  /**
-   * Record MCP error.
-   */
-  recordMcpError(payload: McpErrorPayload): TelemetryEvent<McpErrorPayload> {
-    return this.record("mcp.error", payload);
-  }
-
-  /**
-   * Record MCP reconnected.
-   */
-  recordMcpReconnected(payload: McpReconnectedPayload): TelemetryEvent<McpReconnectedPayload> {
-    return this.record("mcp.reconnected", payload);
-  }
-
-  // ==========================================================================
-  // Metrics
-  // ==========================================================================
-
-  private updateMetrics(event: TelemetryEvent): void {
-    switch (event.type) {
-      case "run.started": {
-        const payload = event.payload as RunStartedPayload;
-        this.runMetrics.set(payload.runId, {
-          runId: payload.runId,
-          sessionId: payload.sessionId,
-          startedAt: event.timestamp,
-          toolCallCount: 0,
-          toolApprovalCount: 0,
-          toolRejectionCount: 0,
-          compactionCount: 0,
-          errorCount: 0,
-        });
-        break;
-      }
-
-      case "run.completed": {
-        const payload = event.payload as RunCompletedPayload;
-        const metrics = this.runMetrics.get(payload.runId);
-        if (metrics) {
-          metrics.completedAt = event.timestamp;
-          metrics.durationMs = payload.durationMs;
-          metrics.finalState = "completed";
-        }
-        break;
-      }
-
-      case "run.failed": {
-        const payload = event.payload as RunFailedPayload;
-        const metrics = this.runMetrics.get(payload.runId);
-        if (metrics) {
-          metrics.completedAt = event.timestamp;
-          metrics.finalState = "failed";
-          metrics.errorCount++;
-        }
-        break;
-      }
-
-      case "tool.called": {
-        const payload = event.payload as ToolCalledPayload;
-        const runMetrics = this.runMetrics.get(payload.runId);
-        if (runMetrics) {
-          runMetrics.toolCallCount++;
-        }
-        this.updateToolMetrics(payload.toolName, "call");
-        break;
-      }
-
-      case "tool.approved": {
-        const payload = event.payload as ToolDecidedPayload;
-        const runMetrics = this.runMetrics.get(payload.runId);
-        if (runMetrics) {
-          runMetrics.toolApprovalCount++;
-        }
-        this.updateToolMetrics(payload.toolName, "approve");
-        break;
-      }
-
-      case "tool.rejected": {
-        const payload = event.payload as ToolDecidedPayload;
-        const runMetrics = this.runMetrics.get(payload.runId);
-        if (runMetrics) {
-          runMetrics.toolRejectionCount++;
-        }
-        this.updateToolMetrics(payload.toolName, "reject");
-        break;
-      }
-
-      case "compaction.completed": {
-        const payload = event.payload as CompactionCompletedPayload;
-        for (const metrics of this.runMetrics.values()) {
-          if (metrics.sessionId === payload.sessionId) {
-            metrics.compactionCount++;
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  private updateToolMetrics(toolName: string, action: "call" | "approve" | "reject"): void {
-    let metrics = this.toolMetrics.get(toolName);
-    if (!metrics) {
-      metrics = {
-        toolName,
-        callCount: 0,
-        approvalRate: 0,
-        rejectionRate: 0,
-        averageDurationMs: 0,
-        totalDurationMs: 0,
-      };
-      this.toolMetrics.set(toolName, metrics);
-    }
-
-    if (action === "call") {
-      metrics.callCount++;
-      metrics.lastCalledAt = nowIso();
-    } else if (action === "approve") {
-      const total = metrics.callCount;
-      metrics.approvalRate = total > 0 ? (metrics.callCount - metrics.rejectionCount) / total : 0;
-    } else if (action === "reject") {
-      const total = metrics.callCount;
-      metrics.rejectionRate = total > 0 ? metrics.rejectionCount / total : 0;
-    }
-  }
-
-  // ==========================================================================
-  // Queries
-  // ==========================================================================
-
-  /**
-   * Get events by type.
-   */
-  getEvents(type?: TelemetryEventType, limit = 100): TelemetryEvent[] {
-    if (type) {
-      return this.events.filter((e) => e.type === type).slice(-limit);
-    }
-    return this.events.slice(-limit);
-  }
-
-  /**
-   * Get events for a run.
-   */
-  getRunEvents(runId: string): TelemetryEvent[] {
-    return this.events.filter((e) => {
-      const payload = e.payload as Record<string, unknown>;
-      return payload.runId === runId;
-    });
-  }
-
-  /**
-   * Get events for a session.
-   */
-  getSessionEvents(sessionId: string): TelemetryEvent[] {
-    return this.events.filter((e) => {
-      const payload = e.payload as Record<string, unknown>;
-      return payload.sessionId === sessionId;
-    });
-  }
-
-  /**
-   * Get run metrics.
-   */
-  getRunMetrics(runId: string): RunMetrics | undefined {
-    return this.runMetrics.get(runId);
-  }
-
-  /**
-   * Get all run metrics.
-   */
-  getAllRunMetrics(): RunMetrics[] {
-    return Array.from(this.runMetrics.values());
-  }
-
-  /**
-   * Get tool metrics.
-   */
-  getToolMetrics(toolName?: string): ToolMetrics | ToolMetrics[] {
-    if (toolName) {
-      return this.toolMetrics.get(toolName)!;
-    }
-    return Array.from(this.toolMetrics.values());
-  }
-
-  /**
-   * Get MCP metrics.
-   */
-  getMcpMetrics(serverId?: string): McpMetrics | McpMetrics[] {
-    if (serverId) {
-      return this.mcpMetrics.get(serverId)!;
-    }
-    return Array.from(this.mcpMetrics.values());
-  }
-
-  // ==========================================================================
-  // Maintenance
-  // ==========================================================================
-
-  /**
-   * Clear old events.
-   */
-  clearOlderThan(maxAgeMs: number): number {
-    const cutoff = Date.now() - maxAgeMs;
-    const cutoffDate = new Date(cutoff).toISOString();
-    const initialLength = this.events.length;
-
-    this.events = this.events.filter((e) => e.timestamp > cutoffDate);
-
-    return initialLength - this.events.length;
-  }
-
-  /**
-   * Flush the sink.
-   */
-  async flush(): Promise<void> {
-    await this.sink?.flush();
-  }
+export interface McpErrorEvent {
+	type: "mcp:error";
+	serverName: string;
+	error: string;
+	errorCode?: string;
+	timestamp: string;
 }
 
 // ============================================================================
-// Singleton Instance
+// Telemetry Service
 // ============================================================================
 
-let globalCollector: TelemetryCollector | undefined;
-
-export function getTelemetryCollector(): TelemetryCollector {
-  if (!globalCollector) {
-    globalCollector = new TelemetryCollector();
-  }
-  return globalCollector;
+/**
+ * Telemetry 配置
+ */
+export interface TelemetryConfig {
+	/** 是否启用遥测 */
+	enabled?: boolean;
+	/** 最大事件队列大小 */
+	maxQueueSize?: number;
+	/** 事件采样率 (0-1) */
+	sampleRate?: number;
 }
 
-export function setTelemetryCollector(collector: TelemetryCollector): void {
-  globalCollector = collector;
+/**
+ * Telemetry 服务
+ * 统一的事件发射和收集服务
+ */
+export class TelemetryService {
+	private readonly eventBus: EventBusController;
+	private readonly config: Required<TelemetryConfig>;
+	private readonly eventCounters = new Map<string, number>();
+
+	constructor(config: TelemetryConfig = {}) {
+		this.eventBus = createEventBus();
+		this.config = {
+			enabled: config.enabled ?? true,
+			maxQueueSize: config.maxQueueSize ?? 10000,
+			sampleRate: config.sampleRate ?? 1.0,
+		};
+	}
+
+	/**
+	 * 发射 Run 事件
+	 */
+	emitRunEvent(event: RunEvent): void {
+		if (!this.config.enabled) return;
+		this.incrementCounter(`run:${event.type}`);
+		this.eventBus.emit("run", event);
+		this.eventBus.emit(event.type, event);
+	}
+
+	/**
+	 * 发射 Compaction 事件
+	 */
+	emitCompactionEvent(event: CompactionEvent): void {
+		if (!this.config.enabled) return;
+		this.incrementCounter(`compaction:${event.type}`);
+		this.eventBus.emit("compaction", event);
+		this.eventBus.emit(event.type, event);
+	}
+
+	/**
+	 * 发射 SubAgent 事件
+	 */
+	emitSubAgentEvent(event: SubAgentEvent): void {
+		if (!this.config.enabled) return;
+		this.incrementCounter(`subagent:${event.type}`);
+		this.eventBus.emit("subagent", event);
+		this.eventBus.emit(event.type, event);
+	}
+
+	/**
+	 * 发射 MCP 连接事件
+	 */
+	emitMcpConnectionEvent(event: McpConnectionEvent): void {
+		if (!this.config.enabled) return;
+		this.incrementCounter(`mcp:${event.type}`);
+		this.eventBus.emit("mcp", event);
+		this.eventBus.emit(event.type, event);
+	}
+
+	/**
+	 * 订阅事件
+	 */
+	on(channel: "run" | "compaction" | "subagent" | "mcp" | string, handler: (event: unknown) => void): () => void {
+		return this.eventBus.on(channel, handler);
+	}
+
+	/**
+	 * 获取事件计数器
+	 */
+	getCounter(eventType: string): number {
+		return this.eventCounters.get(eventType) ?? 0;
+	}
+
+	/**
+	 * 获取所有计数器
+	 */
+	getAllCounters(): Record<string, number> {
+		return Object.fromEntries(this.eventCounters);
+	}
+
+	/**
+	 * 重置计数器
+	 */
+	resetCounters(): void {
+		this.eventCounters.clear();
+	}
+
+	/**
+	 * 清空事件总线
+	 */
+	clear(): void {
+		this.eventBus.clear();
+		this.eventCounters.clear();
+	}
+
+	private incrementCounter(eventType: string): void {
+		const count = this.eventCounters.get(eventType) ?? 0;
+		this.eventCounters.set(eventType, count + 1);
+	}
+}
+
+// ============================================================================
+// Run 事件发射辅助函数
+// ============================================================================
+
+/**
+ * 发射 Run 开始事件
+ */
+export function emitRunStarted(
+	sessionId: string,
+	runId: string,
+	prompt: string,
+	options?: { model?: string; provider?: string },
+): void {
+	getGlobalTelemetry().emitRunEvent({
+		type: "run:started",
+		sessionId,
+		runId,
+		prompt,
+		model: options?.model,
+		provider: options?.provider,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 Run 完成事件
+ */
+export function emitRunCompleted(
+	sessionId: string,
+	runId: string,
+	responseLength: number,
+	durationMs: number,
+	tokenUsage?: TokenUsage,
+): void {
+	getGlobalTelemetry().emitRunEvent({
+		type: "run:completed",
+		sessionId,
+		runId,
+		responseLength,
+		durationMs,
+		tokenUsage,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 Run 失败事件
+ */
+export function emitRunFailed(
+	sessionId: string,
+	runId: string,
+	error: string,
+	durationMs: number,
+	errorCode?: string,
+): void {
+	getGlobalTelemetry().emitRunEvent({
+		type: "run:failed",
+		sessionId,
+		runId,
+		error,
+		errorCode,
+		durationMs,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+// ============================================================================
+// Compaction 事件发射辅助函数
+// ============================================================================
+
+/**
+ * 发射 Compaction 请求事件
+ */
+export function emitCompactionRequested(
+	sessionId: string,
+	reason: string,
+	currentMessageCount: number,
+	currentTokenCount: number,
+): void {
+	getGlobalTelemetry().emitCompactionEvent({
+		type: "compaction:requested",
+		sessionId,
+		reason,
+		currentMessageCount,
+		currentTokenCount,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 Compaction 开始事件
+ */
+export function emitCompactionStarted(sessionId: string): void {
+	getGlobalTelemetry().emitCompactionEvent({
+		type: "compaction:started",
+		sessionId,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 Compaction 完成事件
+ */
+export function emitCompactionCompleted(
+	sessionId: string,
+	tokensFreed: number,
+	messagesBefore: number,
+	messagesAfter: number,
+	durationMs: number,
+): void {
+	getGlobalTelemetry().emitCompactionEvent({
+		type: "compaction:completed",
+		sessionId,
+		tokensFreed,
+		messagesBefore,
+		messagesAfter,
+		durationMs,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 Compaction 失败事件
+ */
+export function emitCompactionFailed(sessionId: string, error: string, durationMs: number): void {
+	getGlobalTelemetry().emitCompactionEvent({
+		type: "compaction:failed",
+		sessionId,
+		error,
+		durationMs,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+// ============================================================================
+// SubAgent 事件发射辅助函数
+// ============================================================================
+
+/**
+ * 发射 SubAgent spawn 事件
+ */
+export function emitSubAgentSpawned(
+	sessionId: string,
+	subAgentId: string,
+	name: string,
+	isolated: boolean,
+): void {
+	getGlobalTelemetry().emitSubAgentEvent({
+		type: "subagent:spawned",
+		sessionId,
+		subAgentId,
+		name,
+		isolated,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 SubAgent 完成事件
+ */
+export function emitSubAgentCompleted(
+	sessionId: string,
+	subAgentId: string,
+	durationMs: number,
+	resultLength?: number,
+): void {
+	getGlobalTelemetry().emitSubAgentEvent({
+		type: "subagent:completed",
+		sessionId,
+		subAgentId,
+		durationMs,
+		resultLength,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 SubAgent 失败事件
+ */
+export function emitSubAgentFailed(
+	sessionId: string,
+	subAgentId: string,
+	error: string,
+	durationMs: number,
+): void {
+	getGlobalTelemetry().emitSubAgentEvent({
+		type: "subagent:failed",
+		sessionId,
+		subAgentId,
+		error,
+		durationMs,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+// ============================================================================
+// MCP 连接事件发射辅助函数
+// ============================================================================
+
+/**
+ * 发射 MCP 连接事件
+ */
+export function emitMcpConnected(
+	serverName: string,
+	serverType: string,
+	transport: string,
+	latencyMs?: number,
+): void {
+	getGlobalTelemetry().emitMcpConnectionEvent({
+		type: "mcp:connected",
+		serverName,
+		serverType,
+		transport,
+		latencyMs,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 MCP 断开连接事件
+ */
+export function emitMcpDisconnected(serverName: string, serverType: string, reason?: string): void {
+	getGlobalTelemetry().emitMcpConnectionEvent({
+		type: "mcp:disconnected",
+		serverName,
+		serverType,
+		reason,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 MCP 重连事件
+ */
+export function emitMcpReconnecting(serverName: string, attemptNumber: number, maxAttempts: number): void {
+	getGlobalTelemetry().emitMcpConnectionEvent({
+		type: "mcp:reconnecting",
+		serverName,
+		attemptNumber,
+		maxAttempts,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+/**
+ * 发射 MCP 认证失败事件
+ */
+export function emitMcpAuthFailed(serverName: string, authType: string, error: string): void {
+	getGlobalTelemetry().emitMcpConnectionEvent({
+		type: "mcp:auth_failed",
+		serverName,
+		authType,
+		error,
+		timestamp: new Date().toISOString(),
+	});
+}
+
+// ============================================================================
+// Global Telemetry Instance
+// ============================================================================
+
+let globalTelemetry: TelemetryService | null = null;
+
+/**
+ * 获取全局 Telemetry 服务实例
+ */
+export function getGlobalTelemetry(): TelemetryService {
+	if (!globalTelemetry) {
+		globalTelemetry = new TelemetryService();
+	}
+	return globalTelemetry;
+}
+
+/**
+ * 设置全局 Telemetry 服务实例
+ */
+export function setGlobalTelemetry(telemetry: TelemetryService): void {
+	globalTelemetry = telemetry;
+}
+
+/**
+ * 创建新的 Telemetry 服务
+ */
+export function createTelemetry(config?: TelemetryConfig): TelemetryService {
+	return new TelemetryService(config);
 }
