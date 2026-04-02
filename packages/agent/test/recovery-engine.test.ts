@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyError,
+  CheckpointManager,
   decideRecoveryAction,
   isWriteTool,
   shouldSkipToolCall,
@@ -410,6 +411,12 @@ describe("createRetryLineage", () => {
     const lineage = createRetryLineage(run, null);
     expect(lineage.resumeFromCheckpoint).toBeNull();
   });
+
+  it("preserves the root originRunId across chained retries", () => {
+    const run = { id: "run-2", originRunId: "run-1" } as any;
+    const lineage = createRetryLineage(run, "checkpoint-2");
+    expect(lineage.originRunId).toBe("run-1");
+  });
 });
 
 describe("createResumeLineage", () => {
@@ -426,5 +433,50 @@ describe("createResumeLineage", () => {
     const run = { id: "run-1", originRunId: null } as any;
     const lineage = createResumeLineage(run, null);
     expect(lineage.originRunId).toBe("run-1");
+  });
+});
+
+describe("CheckpointManager", () => {
+  it("chooses the latest checkpoint in the highest-priority phase", () => {
+    const checkpoints = [
+      {
+        id: "cp-1",
+        runId: "run-1",
+        sessionId: "session-1",
+        phase: "before_model_call",
+        payload: {},
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "cp-2",
+        runId: "run-1",
+        sessionId: "session-1",
+        phase: "after_model_stream",
+        payload: {},
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      {
+        id: "cp-3",
+        runId: "run-1",
+        sessionId: "session-1",
+        phase: "after_model_stream",
+        payload: {},
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+    ] as any[];
+
+    const store = {
+      createCheckpoint: (input: any) => input,
+      getLatestCheckpoint: () => checkpoints.at(-1) ?? null,
+      listCheckpoints: () => checkpoints,
+    } as any;
+
+    const manager = new (class extends CheckpointManager {
+      constructor() {
+        super(store, "run-1", "session-1");
+      }
+    })();
+
+    expect(manager.findResumeCheckpoint()?.id).toBe("cp-3");
   });
 });

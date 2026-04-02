@@ -745,6 +745,10 @@ describe("agent session", () => {
     expect(database.getRun(retryRun.id)?.prompt).toBe("retry me");
     expect(database.getRun(retryRun.id)?.sourceRunId).toBe(firstRun.id);
     expect(database.getRun(retryRun.id)?.recoveryMode).toBe("retry");
+    expect(database.getRun(retryRun.id)?.originRunId).toBe(firstRun.id);
+    expect(database.getRun(retryRun.id)?.resumeFromCheckpoint).toBe(
+      database.getLatestCheckpoint(firstRun.id)?.id ?? null,
+    );
     expect(database.getRun(firstRun.id)?.status).toBe("failed");
     expect(database.getRun(retryRun.id)?.status).toBe("completed");
     expect(runtime.snapshot().pendingRunIds).toEqual([]);
@@ -800,6 +804,8 @@ describe("agent session", () => {
     expect(database.getRun(resumedRun.id)?.prompt).toBe("resume source prompt");
     expect(database.getRun(resumedRun.id)?.sourceRunId).toBe(originalRun.id);
     expect(database.getRun(resumedRun.id)?.recoveryMode).toBe("resume");
+    expect(database.getRun(resumedRun.id)?.originRunId).toBe(originalRun.id);
+    expect(database.getRun(resumedRun.id)?.resumeFromCheckpoint).toBeNull();
     expect(runtime.snapshot().interruptedRunIds).toEqual([originalRun.id]);
     expect(database.getRun(originalRun.id)?.status).toBe("running");
     expect(database.getRun(resumedRun.id)?.status).toBe("completed");

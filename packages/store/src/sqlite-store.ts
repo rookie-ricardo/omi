@@ -311,6 +311,9 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
       prompt: input.prompt ?? null,
       sourceRunId: input.sourceRunId ?? null,
       recoveryMode: input.recoveryMode ?? "start",
+      originRunId: input.originRunId ?? null,
+      resumeFromCheckpoint: input.resumeFromCheckpoint ?? null,
+      terminalReason: input.terminalReason ?? null,
     });
     db.insert(runsTable).values(run).run();
     return run;

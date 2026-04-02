@@ -221,7 +221,10 @@ export interface CheckpointPayload {
   /** Number of transient recovery attempts so far. */
   recoveryCount: number;
   /** Compaction and overflow tracking. */
-  compactTracking: QueryLoopMutableState["compactTracking"];
+  compactTracking: Pick<
+    QueryLoopMutableState["compactTracking"],
+    "maxOutputRecoveryCount" | "overflowRecovered"
+  >;
   /** Tool call IDs that have been executed with write side-effects. */
   executedWriteToolCallIds: string[];
   /** Snapshot of partial assistant text (for max_output recovery). */
@@ -301,7 +304,7 @@ export class CheckpointManager {
     ];
 
     for (const phase of resumeOrder) {
-      const checkpoint = checkpoints.find((cp) => cp.phase === phase);
+      const checkpoint = [...checkpoints].reverse().find((cp) => cp.phase === phase);
       if (checkpoint) {
         return checkpoint;
       }
@@ -405,16 +408,16 @@ export interface RunLineageInfo {
   resumeFromCheckpoint: string | null;
 }
 
-/**
- * Create lineage info for a retry/recovery run.
- */
+  /**
+   * Create lineage info for a retry/recovery run.
+   */
 export function createRetryLineage(
   originalRun: Run,
   checkpointId: string | null,
 ): RunLineageInfo {
   return {
     runId: originalRun.id,
-    originRunId: originalRun.id,
+    originRunId: originalRun.originRunId ?? originalRun.id,
     recoveryMode: "retry",
     resumeFromCheckpoint: checkpointId,
   };
@@ -592,8 +595,11 @@ export class RecoveryEngine {
    */
   recordWriteTool(toolCallId: string, toolName: string): void {
     const isWrite = isWriteTool(toolName);
+    const alreadyExecuted = isWrite && this.checkpointManager.isWriteToolExecuted(toolCallId);
     if (isWrite) {
-      this.checkpointManager.recordWriteToolExecution(toolCallId);
+      if (!alreadyExecuted) {
+        this.checkpointManager.recordWriteToolExecution(toolCallId);
+      }
     }
 
     this.deps.emit({
@@ -602,7 +608,7 @@ export class RecoveryEngine {
       sessionId: this.deps.sessionId,
       toolCallId,
       toolName,
-      skipped: false,
+      skipped: alreadyExecuted,
     });
   }
 

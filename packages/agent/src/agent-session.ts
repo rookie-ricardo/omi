@@ -52,6 +52,10 @@ import {
   nextSessionStatus as queryNextSessionStatus,
   nextTaskStatus as queryNextTaskStatus,
 } from "./query-engine";
+import {
+  createResumeLineage,
+  createRetryLineage,
+} from "./recovery";
 
 export interface RunnerEventEnvelope {
   type: string;
@@ -110,6 +114,9 @@ export class AgentSession {
       prompt: input.prompt,
       sourceRunId: null,
       recoveryMode: "start",
+      originRunId: null,
+      resumeFromCheckpoint: null,
+      terminalReason: null,
     });
     this.options.runtime.enqueueRun({
       runId: run.id,
@@ -174,6 +181,9 @@ export class AgentSession {
       prompt: input.prompt,
       sourceRunId: null,
       recoveryMode: "start",
+      originRunId: null,
+      resumeFromCheckpoint: null,
+      terminalReason: null,
     });
     this.options.runtime.enqueueRun({
       runId: run.id,
@@ -207,6 +217,10 @@ export class AgentSession {
 
     const task = originalRun.taskId ? this.options.database.getTask(originalRun.taskId) : null;
     const providerConfig = this.resolveProviderConfig();
+    const retryLineage = createRetryLineage(
+      originalRun,
+      this.options.database.getLatestCheckpoint(originalRun.id)?.id ?? null,
+    );
     const nextRun = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
@@ -215,6 +229,9 @@ export class AgentSession {
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "retry",
+      originRunId: retryLineage.originRunId,
+      resumeFromCheckpoint: retryLineage.resumeFromCheckpoint,
+      terminalReason: null,
     });
 
     this.options.runtime.enqueueRun({
@@ -245,6 +262,10 @@ export class AgentSession {
 
     const task = originalRun.taskId ? this.options.database.getTask(originalRun.taskId) : null;
     const providerConfig = this.resolveProviderConfig();
+    const resumeLineage = createResumeLineage(
+      originalRun,
+      this.options.database.getLatestCheckpoint(originalRun.id)?.id ?? null,
+    );
     const resumedRun = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
@@ -253,6 +274,9 @@ export class AgentSession {
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "resume",
+      originRunId: resumeLineage.originRunId,
+      resumeFromCheckpoint: resumeLineage.resumeFromCheckpoint,
+      terminalReason: null,
     });
 
     this.options.runtime.enqueueRun({
