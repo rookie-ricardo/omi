@@ -10,11 +10,7 @@
       "out",
       "workspace-data",
       "pnpm-lock.yaml",
-      "apps/desktop/electron.vite.config.*.mjs",
-      "packages/craft-agent-core",
-      "packages/craft-agent-shared",
-      "packages/design-react",
-      "packages/design-tokens"
+      "apps/desktop/electron.vite.config.*.mjs"
     ]
   },
   "formatter": {

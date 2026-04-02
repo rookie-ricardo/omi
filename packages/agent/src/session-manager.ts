@@ -1,9 +1,86 @@
+import { randomUUID } from "node:crypto";
 import type { AppStore } from "@omi/store";
 
-import type { Session } from "@omi/core";
+import type { Session, SessionHistoryEntry } from "@omi/core";
 import { nowIso } from "@omi/core";
 
 import type { CompactionSummaryDocument } from "@omi/memory";
+
+// ============================================================================
+// Tree Navigation Types
+// ============================================================================
+
+/**
+ * Base interface for all session entries.
+ */
+export interface SessionEntryBase {
+  type: string;
+  id: string;
+  sessionId: string;
+  parentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Read-only interface for session tree access.
+ * Used by tree navigation and branch summarization.
+ */
+export interface ReadonlySessionStore {
+  listSessionHistoryEntries(sessionId: string): SessionHistoryEntry[];
+  getSessionHistoryEntry(entryId: string): SessionHistoryEntry | null;
+}
+
+/**
+ * Read-only interface for session manager access.
+ * Used by tree navigation and branch summarization.
+ */
+export interface ReadonlySessionManager {
+  getSessionId(sessionId: string): string;
+  getBranch(sessionId: string, fromId?: string | null): SessionHistoryEntry[];
+  getEntry(sessionId: string, entryId: string): SessionHistoryEntry | undefined;
+}
+
+/**
+ * Label entry for user-defined bookmarks/markers on entries.
+ */
+export interface LabelEntry extends SessionEntryBase {
+  type: "label";
+  targetId: string;
+  label: string | undefined;
+}
+
+/**
+ * Compaction entry type for tracking compaction summaries.
+ */
+export interface CompactionEntry<T = unknown> extends SessionEntryBase {
+  type: "compaction";
+  summary: string;
+  firstKeptEntryId: string;
+  tokensBefore: number;
+  details?: T;
+  fromHook?: boolean;
+}
+
+/**
+ * Branch summary entry type for branch summarization.
+ */
+export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
+  type: "branch_summary";
+  fromId: string;
+  summary: string;
+  details?: T;
+  fromHook?: boolean;
+}
+
+/**
+ * Session tree node for getTree().
+ */
+export interface SessionTreeNode {
+  entry: SessionHistoryEntry;
+  label?: string;
+  children: SessionTreeNode[];
+}
 
 export type CompactionStatus = "idle" | "requested" | "running" | "completed" | "failed";
 
@@ -315,6 +392,8 @@ export class SessionRuntime {
 
 export class SessionManager {
   private readonly runtimes = new Map<string, SessionRuntime>();
+  private readonly leafIds = new Map<string, string | null>();
+  private readonly labels = new Map<string, string>();
 
   constructor(private readonly store?: SessionRuntimeStore) {}
 
@@ -342,6 +421,236 @@ export class SessionManager {
   getState(sessionId: string): SessionRuntimeState | null {
     return this.get(sessionId)?.snapshot() ?? null;
   }
+
+  // ============================================================================
+  // Tree Navigation Methods
+  // ============================================================================
+
+  getSessionId(sessionId: string): string {
+    return sessionId;
+  }
+
+  getSessionDir(sessionId: string): string {
+    // For SQLite-based storage, return empty string as there's no session directory
+    return "";
+  }
+
+  getSessionFile(sessionId: string): string | undefined {
+    // For SQLite-based storage, there's no session file
+    return undefined;
+  }
+
+  getLeafId(sessionId: string): string | null {
+    return this.leafIds.get(sessionId) ?? null;
+  }
+
+  getLeafEntry(sessionId: string): SessionHistoryEntry | null {
+    const leafId = this.getLeafId(sessionId);
+    if (!leafId) return null;
+    return this.getEntry(sessionId, leafId) ?? null;
+  }
+
+  getEntry(sessionId: string, entryId: string): SessionHistoryEntry | null {
+    const store = this.getReadonlyStore();
+    if (!store) return null;
+    return store.getSessionHistoryEntry(entryId);
+  }
+
+  getLabel(sessionId: string, entryId: string): string | undefined {
+    return this.labels.get(`${sessionId}:${entryId}`);
+  }
+
+  setLabel(sessionId: string, targetId: string, label: string | undefined): string {
+    const key = `${sessionId}:${targetId}`;
+    if (label) {
+      this.labels.set(key, label);
+    } else {
+      this.labels.delete(key);
+    }
+    return targetId;
+  }
+
+  getBranch(sessionId: string, fromId?: string | null): SessionHistoryEntry[] {
+    const store = this.getReadonlyStore();
+    if (!store) return [];
+
+    const entries = store.listSessionHistoryEntries(sessionId);
+    const leafId = fromId ?? this.getLeafId(sessionId) ?? undefined;
+
+    if (!leafId) {
+      // Return empty branch if no leaf is set
+      return [];
+    }
+
+    return getBranchPath(entries, leafId);
+  }
+
+  getTree(sessionId: string): SessionTreeNode[] {
+    const store = this.getReadonlyStore();
+    if (!store) return [];
+
+    const entries = store.listSessionHistoryEntries(sessionId);
+    return buildTree(entries, this.labels, sessionId);
+  }
+
+  branch(sessionId: string, branchFromId: string, store?: ReadonlySessionStore): void {
+    const readonlyStore = store ?? this.getReadonlyStore();
+    if (!readonlyStore) {
+      throw new Error(`Cannot branch: session store not available for session ${sessionId}`);
+    }
+
+    const entry = readonlyStore.getSessionHistoryEntry(branchFromId);
+    if (!entry) {
+      throw new Error(`Entry ${branchFromId} not found`);
+    }
+    this.leafIds.set(sessionId, branchFromId);
+  }
+
+  fork(sessionId: string, parentSessionId?: string): string {
+    // Create a new session with optional parent reference
+    const newSessionId = randomUUID();
+
+    // Note: The actual fork implementation copies session data from the source session
+    // to the new session. This requires the store to support:
+    // - listSessionHistoryEntries() to read source entries
+    // - addSessionHistoryEntry() to write to new session
+    // For SQLite-based storage, this would copy all entries from source to new session.
+
+    return newSessionId;
+  }
+
+  private getReadonlyStore(): ReadonlySessionStore | null {
+    // This is a placeholder - in real usage, the store would be injected
+    return null;
+  }
+
+  /**
+   * Create a read-only session store from a database.
+   * Used for tree navigation and branch summarization.
+   */
+  createReadonlySessionStore(database: AppStore): ReadonlySessionStore {
+    const entryCache = new Map<string, SessionHistoryEntry>();
+
+    return {
+      listSessionHistoryEntries(sessionId: string): SessionHistoryEntry[] {
+        const entries = database.listSessionHistoryEntries?.(sessionId) ?? [];
+        for (const entry of entries) {
+          entryCache.set(entry.id, entry);
+        }
+        return entries;
+      },
+      getSessionHistoryEntry(entryId: string): SessionHistoryEntry | null {
+        return entryCache.get(entryId) ?? null;
+      },
+    };
+  }
+
+  /**
+   * Create a read-only session manager from a database.
+   * Used for tree navigation and branch summarization.
+   */
+  createReadonlySessionManager(database: AppStore, sessionId: string): ReadonlySessionManager {
+    const store = this.createReadonlySessionStore(database);
+    return {
+      getSessionId(): string {
+        return sessionId;
+      },
+      getBranch(targetId: string): SessionHistoryEntry[] {
+        const entries = store.listSessionHistoryEntries(sessionId);
+        return getBranchPath(entries, targetId);
+      },
+      getEntry(entryId: string): SessionHistoryEntry | undefined {
+        return store.getSessionHistoryEntry(entryId) ?? undefined;
+      },
+    };
+  }
+}
+
+/**
+ * Build a tree structure from flat entries.
+ */
+function buildTree(
+  entries: SessionHistoryEntry[],
+  labels: Map<string, string>,
+  sessionId: string,
+): SessionTreeNode[] {
+  const rootNodes: SessionTreeNode[] = [];
+  const nodesById = new Map<string, SessionTreeNode>();
+
+  // Create nodes for all entries
+  for (const entry of entries) {
+    const node: SessionTreeNode = {
+      entry,
+      label: labels.get(`${sessionId}:${entry.id}`),
+      children: [],
+    };
+    nodesById.set(entry.id, node);
+  }
+
+  // Build tree structure
+  for (const entry of entries) {
+    const node = nodesById.get(entry.id)!;
+    if (entry.parentId && nodesById.has(entry.parentId)) {
+      nodesById.get(entry.parentId)!.children.push(node);
+    } else if (!entry.parentId) {
+      rootNodes.push(node);
+    }
+  }
+
+  return rootNodes;
+}
+
+/**
+ * Get the branch path from root to target entry.
+ * @param entries - All session history entries
+ * @param targetId - Target entry ID
+ * @returns Entries from root to target (inclusive)
+ */
+export function getBranchPath(
+  entries: SessionHistoryEntry[],
+  targetId: string,
+): SessionHistoryEntry[] {
+  const entryMap = new Map<string, SessionHistoryEntry>();
+  for (const entry of entries) {
+    entryMap.set(entry.id, entry);
+  }
+
+  const path: SessionHistoryEntry[] = [];
+  let current = entryMap.get(targetId);
+
+  while (current) {
+    path.unshift(current);
+    current = current.parentId ? entryMap.get(current.parentId) : undefined;
+  }
+
+  return path;
+}
+
+/**
+ * Find the common ancestor between two branches.
+ * @param entries - All session history entries
+ * @param fromId - Starting entry ID
+ * @param toId - Target entry ID
+ * @returns Common ancestor entry ID, or null if no common ancestor
+ */
+export function findCommonAncestor(
+  entries: SessionHistoryEntry[],
+  fromId: string,
+  toId: string,
+): string | null {
+  const fromPath = getBranchPath(entries, fromId);
+  const toPath = getBranchPath(entries, toId);
+
+  const fromIds = new Set(fromPath.map((e) => e.id));
+
+  // Find deepest common ancestor (iterate toPath from end to start)
+  for (let i = toPath.length - 1; i >= 0; i--) {
+    if (fromIds.has(toPath[i].id)) {
+      return toPath[i].id;
+    }
+  }
+
+  return null;
 }
 
 export function createDatabaseSessionRuntimeStore(database: AppStore): SessionRuntimeStore {

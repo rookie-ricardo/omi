@@ -1,10 +1,10 @@
-import { Agent, type AgentEvent, type AgentTool } from "@mariozechner/pi-agent-core";
+import { Agent, type AgentEvent, type AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
 
 import type { ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
-import { type ToolName, executeTool, requiresApproval, toolRegistry } from "@omi/tools";
+import { type ToolName, requiresApproval, isBuiltInTool, createAllTools, createToolArray } from "@omi/tools";
 
 export interface ProviderAdapter {
   run(input: ProviderRunInput): Promise<ProviderRunResult>;
@@ -22,10 +22,14 @@ export interface ProviderRunInput {
   systemPrompt?: string;
   providerConfig: ProviderConfig;
   enabledTools?: ToolName[];
+  thinkingLevel?: ThinkingLevel;
+  toolExecutionMode?: "sequential" | "parallel";
+  convertToLlm?: (messages: Message[]) => Message[];
   onTextDelta?: (delta: string) => void;
   onToolRequested?: (event: ProviderToolRequestedEvent) => Promise<string>;
   onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void;
   onToolStarted?: (toolCallId: string, toolName: string) => void;
+  onToolUpdate?: (toolCallId: string, delta: string) => void;
   onToolFinished?: (
     toolCallId: string,
     toolName: string,
@@ -46,6 +50,19 @@ export interface ProviderToolRequestedEvent {
   requiresApproval: boolean;
 }
 
+// Standard thinking levels
+export const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
+
+// Thinking levels including xhigh (for supported models)
+export const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
 export { createModelFromConfig } from "./model-registry";
 
 export function buildAgentInitialState(input: ProviderRunInput) {
@@ -54,6 +71,7 @@ export function buildAgentInitialState(input: ProviderRunInput) {
     model: createModelFromConfig(input.providerConfig),
     tools: buildAgentTools(input.workspaceRoot, input.enabledTools),
     messages: input.historyMessages,
+    thinkingLevel: input.thinkingLevel ?? "off",
   };
 }
 
@@ -80,11 +98,11 @@ export class PiAiProvider implements ProviderAdapter {
 
     const agent = new Agent({
       initialState: buildAgentInitialState(input) as never,
-      convertToLlm: passthroughMessages as never,
+      convertToLlm: (input.convertToLlm || passthroughMessages) as never,
       transformContext: async (messages) => messages as never,
       sessionId: input.sessionId,
       getApiKey: () => input.providerConfig.apiKey,
-      toolExecution: "sequential",
+      toolExecution: input.toolExecutionMode ?? "sequential",
       beforeToolCall: async ({ toolCall, args }) => {
         const toolName = toolCall.name;
         const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
@@ -221,6 +239,16 @@ export class PiAiProvider implements ProviderAdapter {
       return;
     }
 
+    if (event.type === "tool_execution_update") {
+      const toolCall = findToolCall(toolCalls, event.toolName, ["started"]);
+      if (!toolCall) {
+        return;
+      }
+
+      input.onToolUpdate?.(toolCall.toolCallId, JSON.stringify(event.partialResult ?? ""));
+      return;
+    }
+
     if (event.type === "tool_execution_end") {
       const toolCall = findToolCall(toolCalls, event.toolName, ["started", "requested"]);
       if (!toolCall) {
@@ -250,48 +278,14 @@ function buildAgentTools(
   workspaceRoot: string,
   enabledTools?: ToolName[],
 ): AgentTool[] {
-  const allowedToolNames = enabledTools && enabledTools.length > 0 ? new Set(enabledTools) : null;
-  const builtIns = toolRegistry
-    .list()
-    .filter((tool) => !allowedToolNames || allowedToolNames.has(tool.name))
-    .map((tool) => {
-      return {
-        name: tool.name,
-        label: formatToolLabel(tool.name),
-        description: tool.description,
-        parameters: tool.parameters,
-        async execute(_toolCallId, params) {
-          return toAgentToolResult(await executeTool(tool.name, params, { workspaceRoot }));
-        },
-      } satisfies AgentTool;
-    });
+  const allTools = createToolArray(workspaceRoot);
 
-  return builtIns;
-}
-
-function formatToolLabel(toolName: ToolName): string {
-  return toolName
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function toAgentToolResult(result: Awaited<ReturnType<typeof executeTool>>) {
-  if (result.ok) {
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result.output, null, 2) }],
-      details: result.output ?? {},
-    };
+  if (!enabledTools || enabledTools.length === 0) {
+    return allTools;
   }
 
-  return {
-    content: [{ type: "text" as const, text: result.error?.message ?? "Tool execution failed." }],
-    details: result.error ?? {},
-  };
-}
-
-function isBuiltInTool(toolName: string): toolName is ToolName {
-  return toolRegistry.has(toolName);
+  const allowed = new Set(enabledTools);
+  return allTools.filter((tool) => allowed.has(tool.name));
 }
 
 function passthroughMessages(messages: Message[]): Message[] {

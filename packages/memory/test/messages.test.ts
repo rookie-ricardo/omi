@@ -20,7 +20,7 @@ describe("messages", () => {
   it("passes through llm-compatible runtime messages", () => {
     const messages: RuntimeMessage[] = [
       makeUserMessage("hello"),
-      makeToolResultMessage("tool_1", "read_file"),
+      makeToolResultMessage("tool_1", "read"),
     ];
 
     expect(convertRuntimeMessagesToLlm(messages)).toEqual(messages);
@@ -59,7 +59,7 @@ describe("messages", () => {
   it("normalizes runtime tool output into toolResult messages", () => {
     const toolOutput = createRuntimeToolOutputMessage(
       "tool_1",
-      "run_shell",
+      "bash",
       [{ type: "text", text: "ok" }],
       false,
       { exitCode: 0 },
@@ -70,7 +70,7 @@ describe("messages", () => {
       {
         role: "toolResult",
         toolCallId: "tool_1",
-        toolName: "run_shell",
+        toolName: "bash",
         content: [{ type: "text", text: "ok" }],
         details: { exitCode: 0 },
         isError: false,
@@ -87,8 +87,8 @@ describe("messages", () => {
       makeSessionMessage("msg_4", "assistant", "recent assistant", "2025-03-30T00:00:05.000Z"),
     ];
     const toolCalls: ToolCall[] = [
-      makeToolCall("tool_1", "read_file", "2025-03-30T00:00:02.000Z", { path: "src/old.ts" }, null),
-      makeToolCall("tool_2", "write_file", "2025-03-30T00:00:06.000Z", { path: "src/new.ts" }, { ok: true }),
+      makeToolCall("tool_1", "read", "2025-03-30T00:00:02.000Z", { path: "src/old.ts" }, null),
+      makeToolCall("tool_2", "write", "2025-03-30T00:00:06.000Z", { path: "src/new.ts" }, { ok: true }),
     ];
 
     const runtime = buildSessionRuntimeMessages({
@@ -144,7 +144,7 @@ describe("messages", () => {
   });
 
   it("creates a branch summary runtime message", () => {
-    const summary = createRuntimeBranchSummaryMessage("Branch checkpoint", 321);
+    const summary = createRuntimeBranchSummaryMessage("Branch checkpoint", undefined, 321);
 
     expect(convertRuntimeMessagesToLlm([summary])).toEqual([
       {

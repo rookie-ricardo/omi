@@ -160,6 +160,8 @@ export const skillDescriptorSchema = z.object({
   references: z.array(z.string()).default([]),
   assets: z.array(z.string()).default([]),
   scripts: z.array(z.string()).default([]),
+  /** When true, this skill is excluded from the LLM prompt */
+  disableModelInvocation: z.boolean().default(false),
 });
 
 export const skillMatchSchema = skillDescriptorSchema.extend({

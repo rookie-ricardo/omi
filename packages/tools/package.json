@@ -21,6 +21,13 @@
     "@mariozechner/pi-agent-core": "^0.58.4",
     "@mariozechner/pi-ai": "^0.58.4",
     "@omi/core": "workspace:*",
+    "@omi/settings": "workspace:*",
+    "@silvia-odwyer/photon-node": "^0.3.4",
+    "diff": "^8.0.3",
+    "extract-zip": "^2.0.1",
+    "file-type": "^22.0.0",
+    "glob": "^13.0.6",
+    "yaml": "^2.8.2",
     "zod": "^3.24.2"
   },
   "devDependencies": {

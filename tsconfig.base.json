@@ -13,14 +13,6 @@
     "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
-      "@craft-design/tokens": ["packages/design-tokens/src/index.ts"],
-      "@craft-design/tokens/*": ["packages/design-tokens/src/*"],
-      "@craft-design/react": ["packages/design-react/src/index.ts"],
-      "@craft-design/react/theme": ["packages/design-react/src/theme/index.ts"],
-      "@craft-design/react/primitives": [
-        "packages/design-react/src/components/primitives/index.ts"
-      ],
-      "@craft-design/react/*": ["packages/design-react/src/*"],
       "@omi/agent": ["packages/agent/src/index.ts"],
       "@omi/core": ["packages/core/src/index.ts"],
       "@omi/protocol": ["packages/protocol/src/index.ts"],

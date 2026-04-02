@@ -30,6 +30,22 @@ export const BRANCH_SUMMARY_PREFIX = `The branch history before this point was s
 export const BRANCH_SUMMARY_SUFFIX = `
 </summary>`;
 
+/**
+ * Message type for bash executions via the ! command.
+ */
+export interface BashExecutionMessage {
+  role: "bashExecution";
+  command: string;
+  output: string;
+  exitCode: number | undefined;
+  cancelled: boolean;
+  truncated: boolean;
+  fullOutputPath?: string;
+  timestamp: number;
+  /** If true, this message is excluded from LLM context (!! prefix) */
+  excludeFromContext?: boolean;
+}
+
 export interface RuntimeUserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
@@ -54,6 +70,7 @@ export interface RuntimeCompactionSummaryMessage {
 export interface RuntimeBranchSummaryMessage {
   role: "branchSummary";
   summary: string;
+  fromId?: string;
   timestamp: number;
 }
 
@@ -83,7 +100,8 @@ export type RuntimeMessage =
   | RuntimeCompactionSummaryMessage
   | RuntimeBranchSummaryMessage
   | RuntimeCustomMessage
-  | RuntimeToolOutputMessage;
+  | RuntimeToolOutputMessage
+  | BashExecutionMessage;
 
 export interface SessionCompactionSnapshot {
   version: 1;
@@ -137,13 +155,62 @@ export function createRuntimeCompactionSummaryMessage(
 
 export function createRuntimeBranchSummaryMessage(
   summary: string,
+  fromId?: string,
   timestamp = Date.now(),
 ): RuntimeBranchSummaryMessage {
   return {
     role: "branchSummary",
     summary,
+    fromId,
     timestamp,
   };
+}
+
+/**
+ * Create a bash execution message.
+ */
+export function createBashExecutionMessage(
+  command: string,
+  output: string,
+  exitCode: number | undefined,
+  cancelled: boolean,
+  truncated: boolean,
+  fullOutputPath?: string,
+  excludeFromContext?: boolean,
+  timestamp = Date.now(),
+): BashExecutionMessage {
+  return {
+    role: "bashExecution",
+    command,
+    output,
+    exitCode,
+    cancelled,
+    truncated,
+    fullOutputPath,
+    excludeFromContext,
+    timestamp,
+  };
+}
+
+/**
+ * Convert a BashExecutionMessage to user message text for LLM context.
+ */
+export function bashExecutionToText(msg: BashExecutionMessage): string {
+  let text = `Ran \`${msg.command}\`\n`;
+  if (msg.output) {
+    text += `\`\`\`\n${msg.output}\n\`\`\``;
+  } else {
+    text += "(no output)";
+  }
+  if (msg.cancelled) {
+    text += "\n\n(command cancelled)";
+  } else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
+    text += `\n\nCommand exited with code ${msg.exitCode}`;
+  }
+  if (msg.truncated && msg.fullOutputPath) {
+    text += `\n\n[Output truncated. Full output: ${msg.fullOutputPath}]`;
+  }
+  return text;
 }
 
 export function createRuntimeCustomMessage(
@@ -323,7 +390,7 @@ function buildBranchRuntimeMessageEnvelopes(
       entries.push({
         timestamp,
         order: order += 1,
-        message: createRuntimeBranchSummaryMessage(entry.summary, timestamp),
+        message: createRuntimeBranchSummaryMessage(entry.summary, entry.id, timestamp),
         sourceHistoryEntryId: entry.id,
       });
     }
@@ -413,6 +480,8 @@ export function renderRuntimeMessageForPrompt(message: RuntimeMessage): string {
       return `${message.customType}: ${contentToText(message.content)}`;
     case "runtimeToolOutput":
       return `${message.role}:${message.toolName}: ${contentToText(message.content)}`;
+    case "bashExecution":
+      return bashExecutionToText(message);
   }
 }
 
@@ -525,6 +594,17 @@ export function convertRuntimeMessagesToLlm(messages: RuntimeMessage[]): Message
           content: normalizeContent(message.content),
           details: message.details,
           isError: message.isError,
+          timestamp: message.timestamp,
+        });
+        break;
+      case "bashExecution":
+        // Skip messages excluded from context (!! prefix)
+        if (message.excludeFromContext) {
+          continue;
+        }
+        llmMessages.push({
+          role: "user",
+          content: [{ type: "text", text: bashExecutionToText(message) }],
           timestamp: message.timestamp,
         });
         break;

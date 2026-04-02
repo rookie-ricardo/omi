@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { type Message } from "@mariozechner/pi-ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type Message, ThinkingLevel } from "@mariozechner/pi-ai";
 
 import type { ProviderConfig } from "@omi/core";
 
-import { buildAgentInitialState, createModelFromConfig } from "../src/providers";
+import {
+  buildAgentInitialState,
+  createModelFromConfig,
+  PiAiProvider,
+  THINKING_LEVELS,
+  THINKING_LEVELS_WITH_XHIGH,
+  type ProviderRunInput,
+  type ProviderAdapter,
+} from "../src/providers";
 
 describe("providers", () => {
   it("builds a built-in OpenAI model from pi-ai", () => {
@@ -62,7 +70,304 @@ describe("providers", () => {
   });
 });
 
-function makeConfig(overrides: Partial<ProviderConfig>): ProviderConfig {
+describe("THINKING_LEVELS 常量", () => {
+  it("应该包含 5 个标准思考级别", () => {
+    expect(THINKING_LEVELS).toHaveLength(5);
+  });
+
+  it("应该包含正确的标准级别", () => {
+    expect(THINKING_LEVELS).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+});
+
+describe("THINKING_LEVELS_WITH_XHIGH 常量", () => {
+  it("应该包含 6 个思考级别（包含 xhigh）", () => {
+    expect(THINKING_LEVELS_WITH_XHIGH).toHaveLength(6);
+  });
+
+  it("应该包含 xhigh 级别", () => {
+    expect(THINKING_LEVELS_WITH_XHIGH).toContain("xhigh");
+  });
+
+  it("应该包含所有标准级别", () => {
+    expect(THINKING_LEVELS_WITH_XHIGH).toContain("off");
+    expect(THINKING_LEVELS_WITH_XHIGH).toContain("minimal");
+    expect(THINKING_LEVELS_WITH_XHIGH).toContain("low");
+    expect(THINKING_LEVELS_WITH_XHIGH).toContain("medium");
+    expect(THINKING_LEVELS_WITH_XHIGH).toContain("high");
+  });
+});
+
+describe("buildAgentInitialState", () => {
+  it("应该使用传入的 systemPrompt", () => {
+    const initialState = buildAgentInitialState({
+      runId: "run_1",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "anthropic" }),
+      systemPrompt: "Custom system prompt",
+    });
+
+    expect(initialState.systemPrompt).toBe("Custom system prompt");
+  });
+
+  it("应该默认使用空 systemPrompt", () => {
+    const initialState = buildAgentInitialState({
+      runId: "run_1",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "anthropic" }),
+    });
+
+    expect(initialState.systemPrompt).toBe("");
+  });
+
+  it("应该使用传入的 thinkingLevel", () => {
+    const initialState = buildAgentInitialState({
+      runId: "run_1",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "anthropic" }),
+      thinkingLevel: "high",
+    });
+
+    expect(initialState.thinkingLevel).toBe("high");
+  });
+
+  it("应该默认 thinkingLevel 为 off", () => {
+    const initialState = buildAgentInitialState({
+      runId: "run_1",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "anthropic" }),
+    });
+
+    expect(initialState.thinkingLevel).toBe("off");
+  });
+
+  it("应该创建模型配置", () => {
+    const initialState = buildAgentInitialState({
+      runId: "run_1",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "openai", model: "gpt-4o" }),
+    });
+
+    expect(initialState.model.provider).toBe("openai");
+  });
+
+  describe("工具配置", () => {
+    it("应该包含启用的工具", () => {
+      const initialState = buildAgentInitialState({
+        runId: "run_1",
+        sessionId: "session_1",
+        workspaceRoot: "/workspace",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: makeConfig({ type: "anthropic" }),
+        enabledTools: ["bash"],
+      });
+
+      expect(initialState.tools).toBeInstanceOf(Array);
+    });
+
+    it("应该处理空的 enabledTools", () => {
+      const initialState = buildAgentInitialState({
+        runId: "run_1",
+        sessionId: "session_1",
+        workspaceRoot: "/workspace",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: makeConfig({ type: "anthropic" }),
+        enabledTools: [],
+      });
+
+      expect(initialState.tools).toBeDefined();
+    });
+  });
+});
+
+describe("PiAiProvider", () => {
+  let provider: PiAiProvider;
+  let mockInput: ProviderRunInput;
+
+  beforeEach(() => {
+    provider = new PiAiProvider();
+    mockInput = {
+      runId: "test-run",
+      sessionId: "test-session",
+      workspaceRoot: "/test/workspace",
+      prompt: "Test prompt",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "anthropic" }),
+      enabledTools: [],
+      thinkingLevel: "off",
+      toolExecutionMode: "sequential",
+    };
+  });
+
+  describe("工具审批", () => {
+    it("应该批准工具执行", () => {
+      expect(() => provider.approveTool("tool-call-1")).not.toThrow();
+    });
+
+    it("应该拒绝工具执行", () => {
+      expect(() => provider.rejectTool("tool-call-1")).not.toThrow();
+    });
+  });
+
+  describe("取消运行", () => {
+    it("应该能够取消活动运行", () => {
+      expect(() => provider.cancel("test-run")).not.toThrow();
+    });
+
+    it("应该能够取消不存在的运行", () => {
+      expect(() => provider.cancel("nonexistent-run")).not.toThrow();
+    });
+  });
+
+  describe("ProviderAdapter 接口", () => {
+    it("应该实现 run 方法", () => {
+      expect(provider).toHaveProperty("run");
+      expect(typeof provider.run).toBe("function");
+    });
+
+    it("应该实现 cancel 方法", () => {
+      expect(provider).toHaveProperty("cancel");
+      expect(typeof provider.cancel).toBe("function");
+    });
+
+    it("应该实现 approveTool 方法", () => {
+      expect(provider).toHaveProperty("approveTool");
+      expect(typeof provider.approveTool).toBe("function");
+    });
+
+    it("应该实现 rejectTool 方法", () => {
+      expect(provider).toHaveProperty("rejectTool");
+      expect(typeof provider.rejectTool).toBe("function");
+    });
+  });
+});
+
+describe("ProviderRunInput 接口", () => {
+  it("应该接受所有必需属性", () => {
+    const input: ProviderRunInput = {
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig(),
+    };
+
+    expect(input.runId).toBe("run-1");
+    expect(input.sessionId).toBe("session-1");
+  });
+
+  it("应该接受可选属性", () => {
+    const input: ProviderRunInput = {
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig(),
+      systemPrompt: "System prompt",
+      enabledTools: ["bash", "read"],
+      thinkingLevel: "medium",
+      toolExecutionMode: "parallel",
+    };
+
+    expect(input.systemPrompt).toBe("System prompt");
+    expect(input.thinkingLevel).toBe("medium");
+    expect(input.toolExecutionMode).toBe("parallel");
+  });
+
+  it("应该接受回调函数", () => {
+    const input: ProviderRunInput = {
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig(),
+      onTextDelta: (delta) => {},
+      onToolRequested: async (event) => "tool-id",
+      onToolDecision: (id, decision) => {},
+      onToolStarted: (id, name) => {},
+      onToolUpdate: (id, delta) => {},
+      onToolFinished: (id, name, output, isError) => {},
+    };
+
+    expect(typeof input.onTextDelta).toBe("function");
+    expect(typeof input.onToolRequested).toBe("function");
+  });
+});
+
+describe("ProviderRunResult 接口", () => {
+  it("应该包含 assistantText", () => {
+    const result = { assistantText: "Response text" };
+    expect(result.assistantText).toBe("Response text");
+  });
+});
+
+describe("ProviderToolRequestedEvent 接口", () => {
+  it("应该包含所有必需字段", () => {
+    const event = {
+      runId: "run-1",
+      sessionId: "session-1",
+      toolName: "bash",
+      input: { command: "ls" },
+      requiresApproval: true,
+    };
+
+    expect(event.runId).toBe("run-1");
+    expect(event.toolName).toBe("bash");
+    expect(event.requiresApproval).toBe(true);
+  });
+});
+
+describe("工具执行模式", () => {
+  it("应该支持 sequential 模式", () => {
+    const input: ProviderRunInput = {
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig(),
+      toolExecutionMode: "sequential",
+    };
+
+    expect(input.toolExecutionMode).toBe("sequential");
+  });
+
+  it("应该支持 parallel 模式", () => {
+    const input: ProviderRunInput = {
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceRoot: "/workspace",
+      prompt: "test",
+      historyMessages: [],
+      providerConfig: makeConfig(),
+      toolExecutionMode: "parallel",
+    };
+
+    expect(input.toolExecutionMode).toBe("parallel");
+  });
+});
+
+function makeConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     id: "provider_1",
     name: "Test Provider",

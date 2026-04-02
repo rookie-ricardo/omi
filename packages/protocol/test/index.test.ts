@@ -59,7 +59,7 @@ describe("protocol", () => {
         {
           id: "skill_1",
           name: "Git Inspector",
-          tools: ["read_file"],
+          tools: ["read"],
           references: [],
           diagnostics: [],
         },

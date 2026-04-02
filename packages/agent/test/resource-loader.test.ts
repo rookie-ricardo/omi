@@ -43,19 +43,19 @@ describe("resource loader", () => {
       join(homeRoot, ".agent", "skills", "review"),
       "Repo Review",
       "Review repositories carefully.",
-      "allowed-tools: read_file search_workspace",
+      "allowed-tools: read grep",
     );
     writeSkill(
       join(workspaceRoot, ".agent", "skills", "review"),
       "Repo Review",
       "Review this workspace with stronger instructions.",
-      "allowed-tools: read_file run_shell",
+      "allowed-tools: read bash",
     );
     writeSkill(
       join(workspaceRoot, ".claude", "skills", "git-inspector"),
       "Git Inspector",
       "Inspect git changes and diff previews.",
-      "allowed-tools: read_file run_shell",
+      "allowed-tools: read bash",
     );
 
     const loader = new DefaultResourceLoader(workspaceRoot);

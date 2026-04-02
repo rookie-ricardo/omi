@@ -1,5 +1,3 @@
-@import "../../../../packages/design-tokens/src/styles.css";
-
 @source "./**/*.{ts,tsx}";
 @source "../../../packages/**/*.{ts,tsx}";
 

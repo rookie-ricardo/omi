@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 
 import type {
   MemoryRecord,
@@ -7,6 +7,7 @@ import type {
   Run,
   Session,
   SessionMessage,
+  SessionHistoryEntry,
   Task,
   ToolCall,
 } from "@omi/core";
@@ -14,8 +15,14 @@ import { createId, nowIso } from "@omi/core";
 import type { AppStore } from "@omi/store";
 import type { CompactionSummaryDocument } from "@omi/memory";
 
-import { createDatabaseSessionRuntimeStore, SessionManager } from "../src/session-manager";
-import type { SessionRuntimeState } from "../src/session-manager";
+import {
+  createDatabaseSessionRuntimeStore,
+  SessionManager,
+  getBranchPath,
+  findCommonAncestor,
+  type SessionTreeNode,
+} from "../src/session-manager";
+import type { SessionRuntimeState, LabelEntry, CompactionEntry } from "../src/session-manager";
 
 describe("session manager", () => {
   it("tracks runtime state transitions and compaction hooks separately from persistence", () => {
@@ -266,6 +273,223 @@ describe("session manager", () => {
   });
 });
 
+describe("session manager - tree navigation", () => {
+  describe("LabelEntry type", () => {
+    it("should have correct structure", () => {
+      const labelEntry: LabelEntry = {
+        type: "label",
+        id: "label_1",
+        sessionId: "session_1",
+        parentId: null,
+        targetId: "entry_1",
+        label: "important",
+        createdAt: "2025-03-30T00:00:00.000Z",
+        updatedAt: "2025-03-30T00:00:00.000Z",
+      };
+      expect(labelEntry.type).toBe("label");
+      expect(labelEntry.label).toBe("important");
+    });
+
+    it("should support undefined label", () => {
+      const labelEntry: LabelEntry = {
+        type: "label",
+        id: "label_2",
+        sessionId: "session_1",
+        parentId: null,
+        targetId: "entry_2",
+        label: undefined,
+        createdAt: "2025-03-30T00:00:00.000Z",
+        updatedAt: "2025-03-30T00:00:00.000Z",
+      };
+      expect(labelEntry.label).toBeUndefined();
+    });
+  });
+
+  describe("CompactionEntry type", () => {
+    it("should have correct structure", () => {
+      const entry: CompactionEntry = {
+        type: "compaction",
+        id: "compaction_1",
+        sessionId: "session_1",
+        parentId: null,
+        summary: "Compacted summary",
+        firstKeptEntryId: "entry_5",
+        tokensBefore: 1000,
+        details: { reason: "token limit" },
+        createdAt: "2025-03-30T00:00:00.000Z",
+        updatedAt: "2025-03-30T00:00:00.000Z",
+      };
+      expect(entry.type).toBe("compaction");
+      expect(entry.summary).toBe("Compacted summary");
+      expect(entry.firstKeptEntryId).toBe("entry_5");
+      expect(entry.tokensBefore).toBe(1000);
+    });
+  });
+
+  describe("SessionTreeNode type", () => {
+    it("should have correct structure", () => {
+      const node: SessionTreeNode = {
+        entry: makeHistoryEntry("entry_1", null, "message", "msg_1", null, "2025-03-30T00:00:00.000Z"),
+        label: "checkpoint",
+        children: [],
+      };
+      expect(node.entry.id).toBe("entry_1");
+      expect(node.label).toBe("checkpoint");
+      expect(node.children).toEqual([]);
+    });
+
+    it("should support nested children", () => {
+      const childNode: SessionTreeNode = {
+        entry: makeHistoryEntry("entry_2", "entry_1", "message", "msg_2", null, "2025-03-30T00:00:01.000Z"),
+        children: [],
+      };
+      const parentNode: SessionTreeNode = {
+        entry: makeHistoryEntry("entry_1", null, "message", "msg_1", null, "2025-03-30T00:00:00.000Z"),
+        children: [childNode],
+      };
+      expect(parentNode.children).toHaveLength(1);
+      expect(parentNode.children[0].entry.id).toBe("entry_2");
+    });
+  });
+
+  describe("getBranchPath utility function", () => {
+    it("should return path from root to target", () => {
+      const entries: SessionHistoryEntry[] = [
+        makeHistoryEntry("root", null, "message", "msg_root", null, "2025-03-30T00:00:00.000Z"),
+        makeHistoryEntry("child1", "root", "message", "msg_child1", null, "2025-03-30T00:00:01.000Z"),
+        makeHistoryEntry("child2", "child1", "message", "msg_child2", null, "2025-03-30T00:00:02.000Z"),
+      ];
+
+      const path = getBranchPath(entries, "child2");
+      expect(path).toHaveLength(3);
+      expect(path[0].id).toBe("root");
+      expect(path[1].id).toBe("child1");
+      expect(path[2].id).toBe("child2");
+    });
+
+    it("should return single entry for root", () => {
+      const entries: SessionHistoryEntry[] = [
+        makeHistoryEntry("root", null, "message", "msg_root", null, "2025-03-30T00:00:00.000Z"),
+      ];
+
+      const path = getBranchPath(entries, "root");
+      expect(path).toHaveLength(1);
+      expect(path[0].id).toBe("root");
+    });
+
+    it("should return empty array for missing entry", () => {
+      const entries: SessionHistoryEntry[] = [
+        makeHistoryEntry("root", null, "message", "msg_root", null, "2025-03-30T00:00:00.000Z"),
+      ];
+
+      const path = getBranchPath(entries, "nonexistent");
+      expect(path).toHaveLength(0);
+    });
+  });
+
+  describe("findCommonAncestor utility function", () => {
+    it("should find common ancestor between two branches", () => {
+      const entries: SessionHistoryEntry[] = [
+        makeHistoryEntry("root", null, "message", "msg_root", null, "2025-03-30T00:00:00.000Z"),
+        makeHistoryEntry("branch_a", "root", "message", "msg_a", null, "2025-03-30T00:00:01.000Z"),
+        makeHistoryEntry("branch_b", "root", "message", "msg_b", null, "2025-03-30T00:00:02.000Z"),
+      ];
+
+      const ancestor = findCommonAncestor(entries, "branch_a", "branch_b");
+      expect(ancestor).toBe("root");
+    });
+
+    it("should return null for entries with no common ancestor", () => {
+      const entries: SessionHistoryEntry[] = [
+        makeHistoryEntry("root1", null, "message", "msg_root1", null, "2025-03-30T00:00:00.000Z"),
+        makeHistoryEntry("root2", null, "message", "msg_root2", null, "2025-03-30T00:00:01.000Z"),
+      ];
+
+      const ancestor = findCommonAncestor(entries, "root1", "root2");
+      expect(ancestor).toBeNull();
+    });
+
+    it("should return the entry itself when same entry is provided", () => {
+      const entries: SessionHistoryEntry[] = [
+        makeHistoryEntry("root", null, "message", "msg_root", null, "2025-03-30T00:00:00.000Z"),
+        makeHistoryEntry("child", "root", "message", "msg_child", null, "2025-03-30T00:00:01.000Z"),
+      ];
+
+      const ancestor = findCommonAncestor(entries, "child", "child");
+      expect(ancestor).toBe("child");
+    });
+  });
+
+  describe("SessionManager - leaf tracking", () => {
+    it("should return null for unset leafId", () => {
+      const manager = new SessionManager();
+      expect(manager.getLeafId("session_1")).toBeNull();
+    });
+
+    it("should have branch method", () => {
+      const manager = new SessionManager();
+      expect(typeof manager.branch).toBe("function");
+    });
+
+    it("should have fork method", () => {
+      const manager = new SessionManager();
+      expect(typeof manager.fork).toBe("function");
+    });
+  });
+
+  describe("SessionManager - labels", () => {
+    it("should set and get labels", () => {
+      const manager = new SessionManager();
+
+      const targetId = manager.setLabel("session_1", "entry_1", "important checkpoint");
+      expect(targetId).toBe("entry_1");
+      expect(manager.getLabel("session_1", "entry_1")).toBe("important checkpoint");
+    });
+
+    it("should return undefined for unset labels", () => {
+      const manager = new SessionManager();
+      expect(manager.getLabel("session_1", "entry_1")).toBeUndefined();
+    });
+
+    it("should delete label when set to undefined", () => {
+      const manager = new SessionManager();
+
+      manager.setLabel("session_1", "entry_1", "checkpoint");
+      expect(manager.getLabel("session_1", "entry_1")).toBe("checkpoint");
+
+      manager.setLabel("session_1", "entry_1", undefined);
+      expect(manager.getLabel("session_1", "entry_1")).toBeUndefined();
+    });
+  });
+
+  describe("SessionManager - session metadata", () => {
+    it("should return session ID", () => {
+      const manager = new SessionManager();
+      expect(manager.getSessionId("session_1")).toBe("session_1");
+    });
+
+    it("should return empty string for session dir", () => {
+      const manager = new SessionManager();
+      expect(manager.getSessionDir("session_1")).toBe("");
+    });
+
+    it("should return undefined for session file", () => {
+      const manager = new SessionManager();
+      expect(manager.getSessionFile("session_1")).toBeUndefined();
+    });
+  });
+
+  describe("SessionManager - fork", () => {
+    it("should return a new session ID", () => {
+      const manager = new SessionManager();
+      const newSessionId = manager.fork("session_1");
+      expect(newSessionId).toBeDefined();
+      expect(typeof newSessionId).toBe("string");
+      expect(newSessionId.length).toBeGreaterThan(0);
+    });
+  });
+});
+
 function createMockDatabase(): AppStore & {
   readSessionRuntime(sessionId: string): { sessionId: string; snapshot: string; updatedAt: string } | null;
 } {
@@ -429,5 +653,26 @@ function makeCompactionSummaryDocument(goal: string): CompactionSummaryDocument 
     keyDecisions: [],
     nextSteps: [],
     criticalContext: [],
+  };
+}
+
+function makeHistoryEntry(
+  id: string,
+  parentId: string | null,
+  kind: SessionHistoryEntry["kind"],
+  messageId: string | null,
+  summary: string | null,
+  createdAt: string,
+): SessionHistoryEntry {
+  return {
+    id,
+    sessionId: "session_1",
+    parentId,
+    kind,
+    messageId,
+    summary,
+    details: null,
+    createdAt,
+    updatedAt: createdAt,
   };
 }

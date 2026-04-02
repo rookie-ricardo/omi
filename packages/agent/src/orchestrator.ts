@@ -18,7 +18,7 @@ import {
   type RunnerEventEnvelope,
 } from "./agent-session";
 import { listBuiltInModels, listBuiltInProviders } from "@omi/provider";
-import { getProviderDefaults } from "@omi/settings";
+import { getProviderDefaults, type SettingsManager } from "@omi/settings";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader";
 import type { SessionCompactionSnapshot } from "@omi/memory";
 import {
@@ -92,6 +92,7 @@ export class AppOrchestrator {
   private readonly resources: ResourceLoader;
   private readonly sessionManager: SessionManager;
   private readonly agentSessions = new Map<string, AgentSession>();
+  private readonly settingsManager?: SettingsManager;
 
   constructor(
     private readonly database: AppStore,
@@ -99,6 +100,7 @@ export class AppOrchestrator {
     private readonly emit: (event: RunnerEventEnvelope) => void,
     resourceLoader?: ResourceLoader,
     sessionManager?: SessionManager,
+    settingsManager?: SettingsManager,
     private readonly createAgentSession: (options: AgentSessionOptions) => AgentSession = (
       options,
     ) => new AgentSession(options),
@@ -106,6 +108,7 @@ export class AppOrchestrator {
     this.resources = resourceLoader ?? new DefaultResourceLoader(workspaceRoot);
     this.sessionManager =
       sessionManager ?? new SessionManager(createDatabaseSessionRuntimeStore(database));
+    this.settingsManager = settingsManager;
   }
 
   createSession(title: string): Session {
@@ -411,6 +414,7 @@ export class AppOrchestrator {
       emit: this.emit,
       resources: this.resources,
       runtime: this.sessionManager.getOrCreate(sessionId),
+      settingsManager: this.settingsManager,
     });
     this.agentSessions.set(sessionId, agentSession);
     return agentSession;

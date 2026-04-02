@@ -2,15 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ProviderConfig } from "@omi/core";
 
-import { createModelFromConfig, isBuiltInProvider, listBuiltInModels } from "../src/model-registry";
+import { createModelFromConfig } from "../src/model-registry";
 
 describe("model registry", () => {
-  it("recognizes built-in pi-ai providers", () => {
-    expect(isBuiltInProvider("openai")).toBe(true);
-    expect(isBuiltInProvider("openrouter")).toBe(true);
-    expect(isBuiltInProvider("not-a-provider")).toBe(false);
-  });
-
   it("builds a built-in OpenAI model from pi-ai", () => {
     const model = createModelFromConfig(makeConfig({ type: "openai", model: "gpt-4.1-mini" }));
     expect(model.provider).toBe("openai");
@@ -62,11 +56,6 @@ describe("model registry", () => {
     expect(() =>
       createModelFromConfig(makeConfig({ type: "made-up-provider", model: "x" })),
     ).toThrowError(/Unsupported provider type: made-up-provider/);
-  });
-
-  it("lists models for built-in providers", () => {
-    const models = listBuiltInModels("openai");
-    expect(models.length).toBeGreaterThan(0);
   });
 });
 

@@ -11,7 +11,7 @@ import {
   skillMatchSchema,
 } from "@omi/core";
 
-import { toolRegistry } from "@omi/tools";
+import { isBuiltInTool } from "@omi/tools";
 import YAML from "yaml";
 
 interface SkillRoot {
@@ -86,8 +86,8 @@ export async function resolveSkillForPrompt(
     return null;
   }
 
-  const enabledToolNames = bestMatch.allowedTools.filter((toolName) => toolRegistry.has(toolName));
-  const ignoredToolNames = bestMatch.allowedTools.filter((toolName) => !toolRegistry.has(toolName));
+  const enabledToolNames = bestMatch.allowedTools.filter((toolName) => isBuiltInTool(toolName));
+  const ignoredToolNames = bestMatch.allowedTools.filter((toolName) => !isBuiltInTool(toolName));
   const diagnostics =
     ignoredToolNames.length > 0
       ? [`Ignored unsupported skill tools: ${ignoredToolNames.join(", ")}`]

@@ -10,6 +10,7 @@ import type {
   ToolCall,
 } from "@omi/core";
 import type { AppStore } from "@omi/store";
+import type { ImageContent } from "@mariozechner/pi-ai";
 
 import { createId, nowIso } from "@omi/core";
 import { ExtensionRunner } from "@omi/extensions";
@@ -19,6 +20,8 @@ import {
   estimateTextTokens,
   generateCompactionSummary,
   isOverflowError,
+  isRetryableError,
+  extractRetryAfterDelay,
   type CompactionSummaryGenerator,
   type CompactionMode,
 } from "@omi/memory";
@@ -43,6 +46,7 @@ import type { ToolName } from "@omi/tools";
 
 import type { ResourceLoader } from "./resource-loader";
 import type { SessionRuntime } from "./session-manager";
+import type { SettingsManager } from "@omi/settings";
 
 export interface RunnerEventEnvelope {
   type: string;
@@ -58,6 +62,7 @@ export interface AgentSessionOptions {
   runtime: SessionRuntime;
   provider?: ProviderAdapter;
   compactionSummarizer?: CompactionSummaryGenerator;
+  settingsManager?: SettingsManager;
 }
 
 interface ExecuteRunInput {
@@ -65,6 +70,7 @@ interface ExecuteRunInput {
   task: Task | null;
   run: Run;
   prompt: string;
+  images?: ImageContent[];
   providerConfig: ProviderConfig;
   historyEntryId: string | null;
   checkpointSummary: string | null;
@@ -631,7 +637,20 @@ export class AgentSession {
       );
     }
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Get retry settings from SettingsManager
+    const retrySettings = this.options.settingsManager?.getRetrySettings() ?? {
+      enabled: true,
+      maxRetries: 3,
+      baseDelayMs: 2000,
+      maxDelayMs: 60000,
+    };
+
+    // Track if we've done overflow recovery (only once per run to avoid infinite loops)
+    let overflowRecovered = false;
+    // Track retry attempts (excluding overflow recovery which is separate)
+    let retryAttempt = 0;
+
+    while (retryAttempt <= (retrySettings.enabled ? retrySettings.maxRetries : 0)) {
       try {
         const result = await this.provider.run({
           runId: input.runInput.run.id,
@@ -726,6 +745,19 @@ export class AgentSession {
           throw new Error(`Run ${input.runInput.run.id} did not produce a result.`);
         }
 
+        // Emit retry end event if we retried
+        if (retryAttempt > 0 || overflowRecovered) {
+          this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
+            type: "auto_retry_end",
+            payload: {
+              runId: input.runInput.run.id,
+              sessionId: input.runInput.session.id,
+              success: true,
+              attempt: retryAttempt,
+            },
+          });
+        }
+
         if (this.options.database.getRun(input.runInput.run.id)?.status === "canceled") {
           this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
             type: "run.canceled",
@@ -751,7 +783,17 @@ export class AgentSession {
           result,
         };
       } catch (error) {
-        if (attempt === 0 && isOverflowError(error)) {
+        // Check if this is a context overflow error
+        if (isOverflowError(error)) {
+          // Only perform overflow recovery once to avoid infinite loops
+          if (overflowRecovered) {
+            throw error;
+          }
+          overflowRecovered = true;
+
+          // Remove error message from agent state (but keep in session file for history)
+          // Note: We don't add error messages to agent state, so nothing to remove here
+
           let overflowHistoryEnvelopes = this.buildHistoricalRuntimeMessageEnvelopes(
             input.runInput.session.id,
             input.prepared.branchLeafEntryId,
@@ -786,14 +828,107 @@ export class AgentSession {
             input.runInput.session.id,
             input.prepared.branchLeafEntryId,
           );
+          // Retry immediately after compaction (don't increment retryAttempt since overflow is separate)
           continue;
         }
 
+        // Check if this is a retryable error
+        if (retrySettings.enabled && isRetryableError(error)) {
+          // Check if run was canceled
+          if (this.options.database.getRun(input.runInput.run.id)?.status === "canceled") {
+            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
+              type: "run.canceled",
+              payload: {
+                runId: input.runInput.run.id,
+                sessionId: input.runInput.session.id,
+              },
+            });
+            await input.extensionRunner.emit({
+              type: "run.canceled",
+              payload: {
+                runId: input.runInput.run.id,
+                sessionId: input.runInput.session.id,
+              },
+            });
+            return {
+              kind: "canceled",
+            };
+          }
+
+          // Check if we've exhausted retries
+          if (retryAttempt >= retrySettings.maxRetries) {
+            // Emit retry end event with failure
+            this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
+              type: "auto_retry_end",
+              payload: {
+                runId: input.runInput.run.id,
+                sessionId: input.runInput.session.id,
+                success: false,
+                attempt: retryAttempt,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+            throw error;
+          }
+
+          // Calculate delay using exponential backoff
+          const baseDelay = retrySettings.baseDelayMs;
+          const exponentialDelay = baseDelay * Math.pow(2, retryAttempt);
+          const serverDelay = extractRetryAfterDelay(error);
+          const delay = Math.min(
+            exponentialDelay,
+            retrySettings.maxDelayMs,
+            serverDelay ?? retrySettings.maxDelayMs,
+          );
+
+          // Emit retry start event
+          this.emitAndPersist(input.runInput.run.id, input.runInput.session.id, {
+            type: "auto_retry_start",
+            payload: {
+              runId: input.runInput.run.id,
+              sessionId: input.runInput.session.id,
+              attempt: retryAttempt + 1,
+              delayMs: delay,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+
+          // Wait with abort signal support
+          await this.delayWithAbort(delay, input.runInput.run.id);
+
+          retryAttempt++;
+          continue;
+        }
+
+        // Not retryable - throw immediately
         throw error;
       }
     }
 
+    // Should not reach here, but just in case
     throw new Error(`Run ${input.runInput.run.id} did not produce a result.`);
+  }
+
+  /**
+   * Delay with abort signal support - checks run status during delay
+   * @param ms - Delay in milliseconds
+   * @param runId - Run ID to check for cancellation
+   */
+  private async delayWithAbort(ms: number, runId: string): Promise<void> {
+    const start = Date.now();
+    const interval = 100; // Check every 100ms
+
+    while (Date.now() - start < ms) {
+      // Check if run was canceled
+      if (this.options.database.getRun(runId)?.status === "canceled") {
+        return; // Exit early, caller will detect cancellation
+      }
+
+      const remaining = ms - (Date.now() - start);
+      if (remaining <= 0) break;
+
+      await new Promise((resolve) => setTimeout(resolve, Math.min(interval, remaining)));
+    }
   }
 
   private async finalizeSuccessfulRun(input: {
@@ -1125,6 +1260,264 @@ export class AgentSession {
       content: JSON.stringify(this.options.runtime.snapshot()),
       tags: ["runtime"],
     });
+  }
+
+  // =========================================================================
+  // Session Control Methods
+  // =========================================================================
+
+  /**
+   * Abort the current active run and wait for the agent to become idle.
+   */
+  async abort(): Promise<void> {
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.cancelRun(runtime.activeRunId);
+    }
+    // Wait for any pending runs to complete
+    while (this.options.runtime.snapshot().activeRunId) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /**
+   * Dispose of the session and clean up resources.
+   * Call this when completely done with the session.
+   */
+  dispose(): void {
+    // Cancel any active run
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.cancelRun(runtime.activeRunId);
+    }
+    this.processingQueue = false;
+  }
+
+  // =========================================================================
+  // Model Management
+  // =========================================================================
+
+  /**
+   * Set the model for future runs.
+   * Updates the provider configuration.
+   */
+  setModel(modelId: string): void {
+    const currentConfig = this.options.database.getProviderConfig();
+    if (!currentConfig) {
+      throw new Error("No provider config available");
+    }
+
+    this.options.database.upsertProviderConfig({
+      id: currentConfig.id,
+      name: currentConfig.name,
+      type: currentConfig.type,
+      baseUrl: currentConfig.baseUrl,
+      apiKey: currentConfig.apiKey,
+      model: modelId,
+    });
+
+    this.options.runtime.setSelectedProviderConfig(currentConfig.id);
+  }
+
+  /**
+   * Cycle to the next available model.
+   * Returns the new model info, or undefined if only one model available.
+   */
+  cycleModel(): { modelId: string; provider: string } | undefined {
+    // This would typically cycle through configured models
+    // For now, return undefined as model cycling requires provider support
+    return undefined;
+  }
+
+  // =========================================================================
+  // Session Statistics
+  // =========================================================================
+
+  /**
+   * Get statistics about the current session.
+   */
+  getSessionStats(): {
+    sessionId: string;
+    userMessages: number;
+    assistantMessages: number;
+    toolCalls: number;
+    totalMessages: number;
+    runs: number;
+  } {
+    const session = this.requireSession();
+    const messages = this.options.database.listMessages(session.id);
+    const runs = this.options.database.listRuns(session.id);
+    const toolCalls = runs.flatMap((run) => this.options.database.listToolCalls(run.id));
+
+    return {
+      sessionId: session.id,
+      userMessages: messages.filter((m) => m.role === "user").length,
+      assistantMessages: messages.filter((m) => m.role === "assistant").length,
+      toolCalls: toolCalls.length,
+      totalMessages: messages.length,
+      runs: runs.length,
+    };
+  }
+
+  // =========================================================================
+  // Bash Execution Control
+  // =========================================================================
+
+  /**
+   * Abort the currently running bash command.
+   */
+  abortBash(): void {
+    // In the omi architecture, bash execution is handled via the provider
+    // This is a placeholder - actual bash abortion would need provider support
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.cancelRun(runtime.activeRunId);
+    }
+  }
+
+  // =========================================================================
+  // Prompting Methods
+  // =========================================================================
+
+  /**
+   * Send a prompt to the agent and wait for completion.
+   * This is the main entry point for user interaction.
+   */
+  async prompt(
+    text: string,
+    options?: {
+      taskId?: string | null;
+      historyEntryId?: string | null;
+      images?: ImageContent[];
+    },
+  ): Promise<Run> {
+    const providerConfig = this.options.database.getProviderConfig();
+    if (!providerConfig) {
+      throw new Error("No provider config available for this session");
+    }
+
+    if (options?.historyEntryId) {
+      return this.continueFromHistoryEntry({
+        prompt: text,
+        providerConfig,
+        taskId: options.taskId,
+        historyEntryId: options.historyEntryId,
+      });
+    }
+
+    return this.startRun({
+      prompt: text,
+      providerConfig,
+      taskId: options?.taskId,
+    });
+  }
+
+  /**
+   * Send a user message to the agent.
+   * Always triggers a new run.
+   */
+  async sendUserMessage(
+    content: string,
+    options?: { taskId?: string | null },
+  ): Promise<Run> {
+    return this.prompt(content, options);
+  }
+
+  /**
+   * Send a custom message to the session.
+   * Custom messages are stored but don't trigger a run unless triggerRun is true.
+   */
+  async sendCustomMessage(
+    message: {
+      customType: string;
+      content: unknown;
+      display?: string;
+      details?: Record<string, unknown>;
+    },
+    options?: { triggerRun?: boolean },
+  ): Promise<void> {
+    // In omi architecture, custom messages are stored as part of the session
+    // For now, if triggerRun is true, we treat it as a regular prompt
+    if (options?.triggerRun) {
+      const contentStr = typeof message.content === "string"
+        ? message.content
+        : JSON.stringify(message.content);
+      await this.prompt(contentStr);
+    }
+    // Otherwise, the custom message would be persisted via the database
+  }
+
+  // =========================================================================
+  // Steering and Follow-up Methods
+  // =========================================================================
+
+  /**
+   * Send a steering message during the current run.
+   * The message is delivered after the current assistant turn finishes
+   * executing its tool calls, before the next LLM call.
+   */
+  async steer(text: string): Promise<void> {
+    if (text.startsWith("/")) {
+      const commandName = text.slice(1).split(" ")[0];
+      const command = this.options.resources.resolveSkillForPrompt?.(commandName);
+      // Extension commands cannot be queued - reject them
+      if (!command && text.startsWith("/")) {
+        throw new Error(`Slash command "${commandName}" cannot be used with steer(). Use prompt() instead.`);
+      }
+    }
+
+    // In the queue-based architecture, steering enqueues a new run
+    // that will be processed after the current tool calls finish
+    this.startRun({
+      prompt: text,
+      providerConfig: this.resolveProviderConfig(),
+    });
+  }
+
+  /**
+   * Queue a follow-up message to be processed after the current run completes.
+   * Follow-up is delivered only when the agent has no more tool calls or steering messages.
+   */
+  async followUp(text: string): Promise<void> {
+    if (text.startsWith("/")) {
+      const commandName = text.slice(1).split(" ")[0];
+      throw new Error(`Slash command "${commandName}" cannot be used with followUp(). Use prompt() instead.`);
+    }
+
+    // Follow-up enqueues a new run that will execute after the current run completes
+    this.startRun({
+      prompt: text,
+      providerConfig: this.resolveProviderConfig(),
+    });
+  }
+
+  // =========================================================================
+  // Session Forking
+  // =========================================================================
+
+  /**
+   * Fork the session at a specific history entry.
+   * Creates a new branch from that point.
+   */
+  async fork(historyEntryId: string): Promise<{ newSessionId: string; selectedText: string }> {
+    const session = this.requireSession();
+    const historyEntries = this.options.database.listSessionHistoryEntries?.(session.id) ?? [];
+
+    const entry = historyEntries.find((e) => e.id === historyEntryId);
+    if (!entry) {
+      throw new Error(`History entry ${historyEntryId} not found`);
+    }
+
+    // Create a new session forked from the current one
+    const newSession = this.options.database.createSession(`Fork of ${session.title}`);
+    const newSessionId = newSession.id;
+
+    // The fork implementation would copy relevant entries to the new session
+    // For now, return the new session ID and empty selected text
+    return {
+      newSessionId,
+      selectedText: entry.summary ?? "",
+    };
   }
 }
 

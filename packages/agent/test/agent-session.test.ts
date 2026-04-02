@@ -58,12 +58,12 @@ describe("agent session", () => {
           (await input.onToolRequested?.({
             runId: input.runId,
             sessionId: input.sessionId,
-            toolName: "read_file",
+            toolName: "read",
             input: { path: "README.md" },
             requiresApproval: false,
           })) ?? "tool-call-1";
-        input.onToolStarted?.(toolCallId, "read_file");
-        input.onToolFinished?.(toolCallId, "read_file", { ok: true }, false);
+        input.onToolStarted?.(toolCallId, "read");
+        input.onToolFinished?.(toolCallId, "read", { ok: true }, false);
         return { assistantText: "done" };
       },
       cancel() {},
@@ -90,7 +90,7 @@ describe("agent session", () => {
           skill: makeSkill("Git Inspector"),
           score: 9,
           injectedPrompt: "Activated skill: Git Inspector",
-          enabledToolNames: ["run_shell"],
+          enabledToolNames: ["bash"],
           referencedFiles: [],
           diagnostics: [],
         }) satisfies ResolvedSkill,
@@ -137,7 +137,7 @@ describe("agent session", () => {
     expect(providerCalls[0]?.systemPrompt).toContain(`Extension prompt for ${session.id}`);
     expect(providerCalls[0]?.prompt).toContain("extension-note: Extension runtime note");
     expect(providerCalls[0]?.prompt).toContain("show me git diff");
-    expect(providerCalls[0]?.enabledTools).toEqual(["run_shell"]);
+    expect(providerCalls[0]?.enabledTools).toEqual(["bash"]);
     expect(database.getSession(session.id)?.latestUserMessage).toBe("show me git diff");
     expect(database.getSession(session.id)?.latestAssistantMessage).toBe("done");
     expect(database.listMessages(session.id).map((message) => message.role)).toEqual([
@@ -150,7 +150,7 @@ describe("agent session", () => {
     expect(events.some((event) => event.type === "run.tool_requested")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_started")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_finished")).toBe(true);
-    expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["read_file"]);
+    expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["read"]);
     expect(extensionEvents).toEqual(
       expect.arrayContaining(["run.started", "run.tool_requested", "run.tool_started", "run.tool_finished", "run.completed"]),
     );
@@ -733,14 +733,14 @@ describe("agent session", () => {
           (await input.onToolRequested?.({
             runId: input.runId,
             sessionId: input.sessionId,
-            toolName: "run_shell",
+            toolName: "bash",
             input: { command: "echo", args: ["approve"] },
             requiresApproval: true,
           })) ?? "tool-call-approve";
         latestToolCallId = toolCallId;
         await approvalGate;
-        input.onToolStarted?.(toolCallId, "run_shell");
-        input.onToolFinished?.(toolCallId, "run_shell", { ok: true }, false);
+        input.onToolStarted?.(toolCallId, "bash");
+        input.onToolFinished?.(toolCallId, "bash", { ok: true }, false);
         return { assistantText: "approved" };
       },
       cancel() {},
@@ -806,7 +806,7 @@ describe("agent session", () => {
           (await input.onToolRequested?.({
             runId: input.runId,
             sessionId: input.sessionId,
-            toolName: "run_shell",
+            toolName: "bash",
             input: { command: "echo", args: ["reject"] },
             requiresApproval: true,
           })) ?? "tool-call-reject";
@@ -873,7 +873,7 @@ function makeSkill(name: string): SkillDescriptor {
     license: null,
     compatibility: null,
     metadata: {},
-    allowedTools: ["run_shell"],
+    allowedTools: ["bash"],
     body: "Inspect the git diff.",
     source: {
       scope: "workspace",
@@ -884,6 +884,7 @@ function makeSkill(name: string): SkillDescriptor {
     references: [],
     assets: [],
     scripts: [],
+    disableModelInvocation: false,
   };
 }
 

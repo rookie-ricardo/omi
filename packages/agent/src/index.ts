@@ -4,3 +4,8 @@ export * from "./session-manager";
 export * from "./resource-loader";
 export * from "./skills";
 export * from "./vcs";
+export * from "./event-bus";
+export * from "./bash-executor";
+export * from "./slash-commands";
+export * from "./prompt-templates";
+export * from "./modes";

@@ -18,9 +18,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@omi/core": "workspace:*"
+    "@mariozechner/pi-ai": "^0.58.4",
+    "@omi/core": "workspace:*",
+    "proper-lockfile": "^4.1.2"
   },
   "devDependencies": {
+    "@types/proper-lockfile": "^4.1.2",
     "tsup": "^8.4.0",
     "vitest": "^3.1.1"
   }

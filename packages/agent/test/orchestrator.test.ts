@@ -115,6 +115,7 @@ describe("orchestrator", () => {
       (event) => events.push(event),
       undefined,
       sessionManager,
+      undefined,
       () => fakeAgentSession,
     );
 
@@ -260,7 +261,7 @@ describe("orchestrator", () => {
       runId: run.id,
       sessionId: session.id,
       taskId: null,
-      toolName: "read_file",
+      toolName: "read",
       approvalState: "pending",
       input: { path: "src/index.ts" },
       output: null,
@@ -284,7 +285,7 @@ describe("orchestrator", () => {
     expect(orchestrator.listToolCalls(session.id)).toMatchObject({
       sessionId: session.id,
       toolCalls: [
-        expect.objectContaining({ id: pendingCall.id, toolName: "read_file" }),
+        expect.objectContaining({ id: pendingCall.id, toolName: "read" }),
         expect.objectContaining({ id: approvedCall.id, toolName: "search" }),
       ],
     });
@@ -354,6 +355,7 @@ describe("orchestrator", () => {
       () => {},
       undefined,
       new SessionManager(),
+      undefined,
       () => fakeAgentSession,
     );
 
@@ -490,6 +492,7 @@ describe("orchestrator", () => {
       () => {},
       undefined,
       sessionManager,
+      undefined,
       () => fakeAgentSession,
     );
 
