@@ -11,6 +11,10 @@ import {
   type RuntimeMessage,
   type SessionRuntimeMessageEnvelope,
 } from "./messages";
+import { ContextPipelineCoordinator } from "./context-pipeline";
+import { getLogger } from "./logger";
+
+const logger = getLogger("memory:compaction");
 
 export type CompactionMode = "manual" | "threshold" | "overflow";
 
@@ -367,14 +371,41 @@ export function findTurnStartIndex(envelopes: SessionRuntimeMessageEnvelope[], e
 
 /**
  * Find the cut point in session entries that keeps approximately `keepRecentTokens`.
+ * Protected history entries (from key memories) are excluded from compaction candidates.
  */
 export function findCutPoint(
   envelopes: SessionRuntimeMessageEnvelope[],
   startIndex: number,
   endIndex: number,
   keepRecentTokens: number,
+  protectedHistoryEntryIds?: Set<string>,
 ): CutPointResult {
-  const cutPoints = findValidCutPoints(envelopes, startIndex, endIndex);
+  // Build cut points excluding protected entries
+  const cutPoints: number[] = [];
+  for (let i = startIndex; i < endIndex; i++) {
+    const envelope = envelopes[i];
+    const msg = envelope.message;
+
+    // Skip protected entries - they must be kept
+    if (protectedHistoryEntryIds?.has(envelope.sourceHistoryEntryId ?? "")) {
+      continue;
+    }
+
+    switch (msg.role) {
+      case "user":
+      case "assistantTranscript":
+      case "custom":
+      case "branchSummary":
+      case "compactionSummary":
+        cutPoints.push(i);
+        break;
+      case "runtimeToolOutput":
+      case "bashExecution":
+        // Tool results can be cut if their parent is not protected
+        cutPoints.push(i);
+        break;
+    }
+  }
 
   if (cutPoints.length === 0) {
     return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
@@ -385,6 +416,11 @@ export function findCutPoint(
   let cutIndex = cutPoints[0]; // Default: keep from first message
 
   for (let i = endIndex - 1; i >= startIndex; i--) {
+    // Skip protected entries in accumulation
+    if (protectedHistoryEntryIds?.has(envelopes[i].sourceHistoryEntryId ?? "")) {
+      continue;
+    }
+
     const messageTokens = estimateRuntimeMessageTokens(envelopes[i].message);
     accumulatedTokens += messageTokens;
 
@@ -472,6 +508,7 @@ export function buildCompactionPlan(
   envelopes: SessionRuntimeMessageEnvelope[],
   contextWindow: number,
   mode: CompactionMode,
+  protectedHistoryEntryIds?: Set<string>,
 ): CompactionPlan | null {
   if (envelopes.length === 0) {
     return null;
@@ -488,13 +525,24 @@ export function buildCompactionPlan(
     return null;
   }
 
-  const cutoffIndex = findCutoffIndex(envelopes, keepRecentTokens);
+  const cutoffIndex = findCutoffIndex(envelopes, keepRecentTokens, protectedHistoryEntryIds);
   if (mode === "threshold" && cutoffIndex === 0) {
     return null;
   }
 
-  const summaryMessages = envelopes.slice(0, cutoffIndex).map((entry) => entry.message);
-  const keptEnvelopes = envelopes.slice(cutoffIndex);
+  // Find the first entry that is NOT protected - that's our cutoff
+  let effectiveCutoffIndex = cutoffIndex;
+  for (let i = cutoffIndex; i < envelopes.length; i++) {
+    const entryId = envelopes[i].sourceHistoryEntryId;
+    if (!protectedHistoryEntryIds?.has(entryId ?? "")) {
+      effectiveCutoffIndex = i;
+      break;
+    }
+    effectiveCutoffIndex = i + 1;
+  }
+
+  const summaryMessages = envelopes.slice(0, effectiveCutoffIndex).map((entry) => entry.message);
+  const keptEnvelopes = envelopes.slice(effectiveCutoffIndex);
   const keptMessages = keptEnvelopes.map((entry) => entry.message);
   const tokensKept = estimateRuntimeMessagesTokens(keptMessages);
   const firstKeptEnvelope = keptEnvelopes[0] ?? null;
@@ -504,7 +552,7 @@ export function buildCompactionPlan(
     keepRecentTokens,
     tokensBefore,
     tokensKept,
-    cutoffIndex,
+    cutoffIndex: effectiveCutoffIndex,
     firstKeptHistoryEntryId: firstKeptEnvelope?.sourceHistoryEntryId ?? null,
     firstKeptTimestamp: firstKeptEnvelope ? new Date(firstKeptEnvelope.timestamp).toISOString() : null,
     summaryMessages,
@@ -596,11 +644,21 @@ function resolveKeepRecentTokens(contextWindow: number, mode: CompactionMode): n
   return Math.max(floor, Math.floor(contextWindow * ratio));
 }
 
-function findCutoffIndex(envelopes: SessionRuntimeMessageEnvelope[], keepRecentTokens: number): number {
+function findCutoffIndex(
+  envelopes: SessionRuntimeMessageEnvelope[],
+  keepRecentTokens: number,
+  protectedHistoryEntryIds?: Set<string>,
+): number {
   let tokensKept = 0;
   let cutoffIndex = envelopes.length;
 
   for (let index = envelopes.length - 1; index >= 0; index -= 1) {
+    // Protected entries are always kept, skip them in the calculation
+    const entryId = envelopes[index].sourceHistoryEntryId;
+    if (protectedHistoryEntryIds?.has(entryId ?? "")) {
+      continue;
+    }
+
     const tokens = estimateRuntimeMessageTokens(envelopes[index].message);
     if (tokensKept > 0 && tokensKept + tokens > keepRecentTokens) {
       break;
@@ -856,10 +914,12 @@ export async function generateSummary(
 
 /**
  * Prepare compaction by analyzing entries and determining what to summarize.
+ * Protected history entry IDs are excluded from compaction candidates.
  */
 export function prepareCompaction(
   envelopes: SessionRuntimeMessageEnvelope[],
   settings: CompactionSettings,
+  protectedHistoryEntryIds?: Set<string>,
 ): CompactionPreparation | undefined {
   if (envelopes.length === 0) {
     return undefined;
@@ -877,35 +937,59 @@ export function prepareCompaction(
   const boundaryStart = prevCompactionIndex + 1;
   const boundaryEnd = envelopes.length;
 
-  // Calculate tokens before compaction
+  // Calculate tokens before compaction (excluding protected entries from the count)
   const usageMessages: RuntimeMessage[] = [];
   for (let i = prevCompactionIndex >= 0 ? prevCompactionIndex : 0; i < boundaryEnd; i++) {
+    const entryId = envelopes[i].sourceHistoryEntryId;
+    // Include protected entries in the token count for accurate context estimation
     usageMessages.push(envelopes[i].message);
   }
   const tokensBefore = estimateContextTokens(usageMessages).tokens;
 
-  // Find cut point
-  const cutPoint = findCutPoint(envelopes, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+  // Find cut point, respecting protected entries
+  const cutPoint = findCutPoint(envelopes, boundaryStart, boundaryEnd, settings.keepRecentTokens, protectedHistoryEntryIds);
+
+  // Find the first non-protected entry to keep
+  let effectiveFirstKeptIndex = cutPoint.firstKeptEntryIndex;
+  for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
+    const entryId = envelopes[i].sourceHistoryEntryId;
+    if (!protectedHistoryEntryIds?.has(entryId ?? "")) {
+      effectiveFirstKeptIndex = i;
+      break;
+    }
+    effectiveFirstKeptIndex = i + 1;
+  }
 
   // Get UUID of first kept entry
-  const firstKeptEnvelope = envelopes[cutPoint.firstKeptEntryIndex];
+  const firstKeptEnvelope = envelopes[effectiveFirstKeptIndex];
   if (!firstKeptEnvelope?.sourceHistoryEntryId) {
     return undefined; // Session needs migration
   }
   const firstKeptEntryId = firstKeptEnvelope.sourceHistoryEntryId;
 
-  const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
+  // Use effective first kept index for determining history end
+  const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : effectiveFirstKeptIndex;
 
   // Messages to summarize (will be discarded after summary)
   const messagesToSummarize: RuntimeMessage[] = [];
   for (let i = boundaryStart; i < historyEnd; i++) {
+    // Skip protected entries - they're not summarized, they're kept
+    const entryId = envelopes[i].sourceHistoryEntryId;
+    if (protectedHistoryEntryIds?.has(entryId ?? "")) {
+      continue;
+    }
     messagesToSummarize.push(envelopes[i].message);
   }
 
   // Messages for turn prefix summary (if splitting a turn)
   const turnPrefixMessages: RuntimeMessage[] = [];
   if (cutPoint.isSplitTurn) {
-    for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
+    for (let i = cutPoint.turnStartIndex; i < effectiveFirstKeptIndex; i++) {
+      // Skip protected entries
+      const entryId = envelopes[i].sourceHistoryEntryId;
+      if (protectedHistoryEntryIds?.has(entryId ?? "")) {
+        continue;
+      }
       turnPrefixMessages.push(envelopes[i].message);
     }
   }
@@ -950,6 +1034,7 @@ export async function compact(
   customInstructions?: string,
   signal?: AbortSignal,
 ): Promise<CompactionResult> {
+  const startTime = Date.now();
   const {
     firstKeptEntryId,
     messagesToSummarize,
@@ -961,49 +1046,75 @@ export async function compact(
     settings,
   } = preparation;
 
-  // Generate summaries (can be parallel if both needed) and merge into one
-  let summary: string;
-
-  if (isSplitTurn && turnPrefixMessages.length > 0) {
-    // Generate both summaries in parallel
-    const [historyResult, turnPrefixResult] = await Promise.all([
-      messagesToSummarize.length > 0
-        ? generateSummary(
-            messagesToSummarize,
-            model,
-            settings.reserveTokens,
-            apiKey,
-            signal,
-            customInstructions,
-            previousSummary,
-          )
-        : Promise.resolve("No prior history."),
-      generateSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal),
-    ]);
-    // Merge into single summary
-    summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
-  } else {
-    // Just generate history summary
-    summary = await generateSummary(
-      messagesToSummarize,
-      model,
-      settings.reserveTokens,
-      apiKey,
-      signal,
-      customInstructions,
-      previousSummary,
-    );
-  }
-
-  // Compute file lists and append to summary
-  const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-  summary += formatFileOperations(readFiles, modifiedFiles);
-
-  return {
-    summary,
-    firstKeptEntryId,
+  logger.debug("Compaction started", {
+    isSplitTurn,
+    messagesToSummarize: messagesToSummarize.length,
+    turnPrefixMessages: turnPrefixMessages.length,
     tokensBefore,
-    details: { readFiles, modifiedFiles } as CompactionDetails,
-  };
+  });
+
+  try {
+    // Generate summaries (can be parallel if both needed) and merge into one
+    let summary: string;
+
+    if (isSplitTurn && turnPrefixMessages.length > 0) {
+      // Generate both summaries in parallel
+      const [historyResult, turnPrefixResult] = await Promise.all([
+        messagesToSummarize.length > 0
+          ? generateSummary(
+              messagesToSummarize,
+              model,
+              settings.reserveTokens,
+              apiKey,
+              signal,
+              customInstructions,
+              previousSummary,
+            )
+          : Promise.resolve("No prior history."),
+        generateSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal),
+      ]);
+      // Merge into single summary
+      summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
+    } else {
+      // Just generate history summary
+      summary = await generateSummary(
+        messagesToSummarize,
+        model,
+        settings.reserveTokens,
+        apiKey,
+        signal,
+        customInstructions,
+        previousSummary,
+      );
+    }
+
+    // Compute file lists and append to summary
+    const { readFiles, modifiedFiles } = computeFileLists(fileOps);
+    summary += formatFileOperations(readFiles, modifiedFiles);
+
+    const durationMs = Date.now() - startTime;
+    logger.info("Compaction completed", {
+      durationMs,
+      tokensBefore,
+      firstKeptEntryId,
+      readFiles: readFiles.length,
+      modifiedFiles: modifiedFiles.length,
+    });
+
+    return {
+      summary,
+      firstKeptEntryId,
+      tokensBefore,
+      details: { readFiles, modifiedFiles } as CompactionDetails,
+    };
+  } catch (error) {
+    const durationMs = Date.now() - startTime;
+    logger.errorWithError("Compaction failed", error, {
+      durationMs,
+      messagesToSummarize: messagesToSummarize.length,
+      isSplitTurn,
+    });
+    throw error;
+  }
 }
 

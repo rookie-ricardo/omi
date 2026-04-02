@@ -7,12 +7,17 @@ import { createWriteTool } from "./write.js";
 import { createLsTool } from "./ls.js";
 import { createGrepTool } from "./grep.js";
 import { createFindTool } from "./find.js";
+import { createEnterPlanTool } from "./enter-plan/index.js";
+import { createExitPlanTool } from "./exit-plan/index.js";
+import { createEnterWorktreeTool } from "./enter-worktree/index.js";
+import { createExitWorktreeTool } from "./exit-worktree/index.js";
 
 export type ApprovalPolicy = "always" | "safe";
 export type ToolName = string;
 
 export interface ToolContext {
   workspaceRoot: string;
+  sessionId?: string;
 }
 
 // Tools that require explicit user approval before execution
@@ -27,6 +32,10 @@ const BUILT_IN_TOOL_NAMES = new Set<string>([
   "ls",
   "grep",
   "find",
+  "enter_plan",
+  "exit_plan",
+  "enter_worktree",
+  "exit_worktree",
 ]);
 
 /**
@@ -47,7 +56,7 @@ export function isBuiltInTool(toolName: string): boolean {
  * Create all coding tools configured for a specific working directory.
  * Returns a Record mapping tool names to AgentTool instances.
  */
-export function createAllTools(cwd: string): Record<string, AgentTool> {
+export function createAllTools(cwd: string, sessionId?: string): Record<string, AgentTool> {
   return {
     read: createReadTool(cwd),
     bash: createBashTool(cwd),
@@ -56,6 +65,10 @@ export function createAllTools(cwd: string): Record<string, AgentTool> {
     ls: createLsTool(cwd),
     grep: createGrepTool(cwd),
     find: createFindTool(cwd),
+    enter_plan: createEnterPlanTool(sessionId ?? "") as AgentTool,
+    exit_plan: createExitPlanTool(sessionId ?? "") as AgentTool,
+    enter_worktree: createEnterWorktreeTool(cwd, sessionId ?? "") as AgentTool,
+    exit_worktree: createExitWorktreeTool(sessionId ?? "") as AgentTool,
   };
 }
 

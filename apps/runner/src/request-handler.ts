@@ -2,6 +2,9 @@ import type { AppOrchestrator } from "@omi/agent";
 import type { RpcRequest, RunnerCommandName } from "@omi/protocol";
 
 import { parseCommand } from "@omi/protocol";
+import { getLogger } from "@omi/agent/logger";
+
+const logger = getLogger("runner:request-handler");
 
 type RunnerRequestOrchestrator = Pick<
   AppOrchestrator,
@@ -36,9 +39,33 @@ export async function handleRunnerRequest(
   orchestrator: RunnerRequestOrchestrator,
   request: RpcRequest,
 ): Promise<unknown> {
-  const params = parseCommand(request.method, request.params) as Record<string, unknown>;
+  const startTime = Date.now();
+  const { method, id } = request;
 
-  switch (request.method as RunnerCommandName) {
+  logger.debug("Runner request received", { method, requestId: id });
+
+  try {
+    const params = parseCommand(request.method, request.params) as Record<string, unknown>;
+
+    const result = await executeCommand(orchestrator, method as RunnerCommandName, params);
+
+    const durationMs = Date.now() - startTime;
+    logger.debug("Runner request completed", { method, requestId: id, durationMs });
+
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startTime;
+    logger.errorWithError("Runner request failed", error, { method, requestId: id, durationMs });
+    throw error;
+  }
+}
+
+async function executeCommand(
+  orchestrator: RunnerRequestOrchestrator,
+  method: RunnerCommandName,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  switch (method) {
     case "session.create":
       return orchestrator.createSession(String(params.title));
     case "session.list":
@@ -114,5 +141,7 @@ export async function handleRunnerRequest(
       return orchestrator.listExtensions();
     case "model.list":
       return orchestrator.listModels();
+    default:
+      throw new Error(`Unknown command: ${method}`);
   }
 }

@@ -9,3 +9,19 @@ export * from "./bash-executor";
 export * from "./slash-commands";
 export * from "./prompt-templates";
 export * from "./modes";
+export * from "./subagent-manager";
+export * from "./task-mailbox";
+export * from "./multi-agent";
+
+// Re-export plan-mode and worktree-mode from modes
+export * from "./modes/plan-mode";
+export * from "./modes/worktree-mode";
+
+// Telemetry and Audit Log
+export * from "./telemetry";
+export * from "./audit-log";
+
+// Observability
+export * from "./observability";
+export * from "./logger";
+export * from "./bash-observability";

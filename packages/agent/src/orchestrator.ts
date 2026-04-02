@@ -27,6 +27,9 @@ import {
   type SessionRuntimeState,
 } from "./session-manager";
 import { getGitDiffPreview, getGitRepoState } from "./vcs";
+import { getLogger } from "./logger";
+
+const logger = getLogger("orchestrator");
 
 export interface SessionDetail {
   session: Session;
@@ -114,16 +117,20 @@ export class AppOrchestrator {
   createSession(title: string): Session {
     const session = this.database.createSession(title);
     this.sessionManager.getOrCreate(session.id);
+    logger.info("Session created", { sessionId: session.id, title });
     return session;
   }
 
   listSessions(): Session[] {
-    return this.database.listSessions();
+    const sessions = this.database.listSessions();
+    logger.debug("Sessions listed", { count: sessions.length });
+    return sessions;
   }
 
   getSessionDetail(sessionId: string): SessionDetail {
     const session = this.database.getSession(sessionId);
     if (!session) {
+      logger.error("Session not found", { sessionId });
       throw new Error(`Session ${sessionId} not found`);
     }
 
@@ -272,16 +279,28 @@ export class AppOrchestrator {
   }
 
   startRun(input: { sessionId: string; taskId: string | null; prompt: string }): Run {
+    const startTime = Date.now();
     const session = this.database.getSession(input.sessionId);
     if (!session) {
+      logger.error("Run start failed: Session not found", { sessionId: input.sessionId });
       throw new Error(`Session ${input.sessionId} not found`);
     }
 
-    return this.getAgentSession(session.id).startRun({
+    const run = this.getAgentSession(session.id).startRun({
       taskId: input.taskId,
       prompt: input.prompt,
       providerConfig: this.resolveProviderConfigForSession(session.id),
     });
+
+    logger.info("Run started", {
+      runId: run.id,
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      promptLength: input.prompt.length,
+      durationMs: Date.now() - startTime,
+    });
+
+    return run;
   }
 
   continueFromHistoryEntry(input: {
@@ -308,30 +327,61 @@ export class AppOrchestrator {
   }
 
   retryRun(runId: string): Run {
+    const startTime = Date.now();
     const run = this.database.getRun(runId);
     if (!run) {
+      logger.error("Run retry failed: Run not found", { runId });
       throw new Error(`Run ${runId} not found`);
     }
 
-    return this.getAgentSession(run.sessionId).retryRun(runId);
+    const newRun = this.getAgentSession(run.sessionId).retryRun(runId);
+    logger.info("Run retried", {
+      originalRunId: runId,
+      newRunId: newRun.id,
+      sessionId: run.sessionId,
+      durationMs: Date.now() - startTime,
+    });
+
+    return newRun;
   }
 
   resumeRun(runId: string): Run {
+    const startTime = Date.now();
     const run = this.database.getRun(runId);
     if (!run) {
+      logger.error("Run resume failed: Run not found", { runId });
       throw new Error(`Run ${runId} not found`);
     }
 
-    return this.getAgentSession(run.sessionId).resumeRun(runId);
+    const resumedRun = this.getAgentSession(run.sessionId).resumeRun(runId);
+    logger.info("Run resumed", {
+      runId,
+      sessionId: run.sessionId,
+      durationMs: Date.now() - startTime,
+    });
+
+    return resumedRun;
   }
 
   async compactSession(sessionId: string): Promise<SessionCompactionResult> {
+    const startTime = Date.now();
     const session = this.database.getSession(sessionId);
     if (!session) {
+      logger.error("Session compaction failed: Session not found", { sessionId });
       throw new Error(`Session ${sessionId} not found`);
     }
 
-    return this.getAgentSession(sessionId).compactSession();
+    try {
+      const result = await this.getAgentSession(sessionId).compactSession();
+      logger.info("Session compacted", {
+        sessionId,
+        durationMs: Date.now() - startTime,
+      });
+      return result;
+    } catch (error) {
+      logger.errorWithError("Session compaction failed", error, { sessionId });
+      throw error;
+    }
   }
 
   switchModel(sessionId: string, providerConfigId: string): { sessionId: string; runtime: SessionRuntimeState } {
@@ -357,10 +407,13 @@ export class AppOrchestrator {
   cancelRun(runId: string): { runId: string; canceled: true } {
     const run = this.database.getRun(runId);
     if (!run) {
+      logger.warn("Run cancel: Run not found", { runId });
       return { runId, canceled: true };
     }
 
-    return this.getAgentSession(run.sessionId).cancelRun(runId);
+    const result = this.getAgentSession(run.sessionId).cancelRun(runId);
+    logger.info("Run cancelled", { runId, sessionId: run.sessionId });
+    return result;
   }
 
   approveTool(toolCallId: string): { toolCallId: string; decision: "approved" } {
@@ -407,6 +460,7 @@ export class AppOrchestrator {
       return current;
     }
 
+    const startTime = Date.now();
     const agentSession = this.createAgentSession({
       database: this.database,
       sessionId,
@@ -417,6 +471,7 @@ export class AppOrchestrator {
       settingsManager: this.settingsManager,
     });
     this.agentSessions.set(sessionId, agentSession);
+    logger.debug("AgentSession created", { sessionId, durationMs: Date.now() - startTime });
     return agentSession;
   }
 

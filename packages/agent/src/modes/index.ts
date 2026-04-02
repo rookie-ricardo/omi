@@ -19,3 +19,33 @@ export type {
   RpcExtensionUIResponse,
   RpcCommandType,
 } from "./rpc/rpc-types";
+
+// Plan Mode
+export {
+  PlanStateManager,
+  getPlanStateManager,
+  createPlanStateManager,
+  isReadOnlyTool,
+  canExecuteTool,
+  validateAllowedPrompt,
+  type PlanState,
+  type PlanPermissionContext,
+  type AllowedPrompt,
+  type AgentMode,
+  type PlanModeEvent,
+  type PlanModeEventHandler,
+} from "./plan-mode";
+
+// Worktree Mode
+export {
+  WorktreeStateManager,
+  getWorktreeStateManager,
+  createWorktreeStateManager,
+  type WorktreeState,
+  type WorktreeCreateOptions,
+  type WorktreeCreateResult,
+  type WorktreeChanges,
+  type ExitWorktreeOptions,
+  type WorktreeEvent,
+  type WorktreeEventHandler,
+} from "./worktree-mode";
