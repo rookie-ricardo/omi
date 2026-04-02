@@ -5,9 +5,9 @@ import {
   type PermissionEvaluatorConfig,
   type PermissionContext,
   type PermissionRule,
-} from "../../../src/permissions/evaluator";
-import type { DenialTracker } from "../../../src/permissions/tracking";
-import { MemoryDenialTracker } from "../../../src/permissions/tracking";
+} from "../src/permissions/evaluator";
+import type { DenialTracker } from "../src/permissions/tracking";
+import { MemoryDenialTracker } from "../src/permissions/tracking";
 
 describe("permissions/evaluator", () => {
   // ============================================================================
@@ -150,7 +150,7 @@ describe("permissions/evaluator", () => {
         });
 
         const result = evaluator.evaluate(createContext());
-        expect(result.matchedRules.length).toBe(2);
+        expect(result.matchedRules.length).toBe(3);
         // 按优先级降序排列
         expect(result.matchedRules[0].id).toBe("rule-2");
         expect(result.matchedRules[1].id).toBe("rule-1");
@@ -189,10 +189,7 @@ describe("permissions/evaluator", () => {
         tracker.recordDenial("test-session:bash");
         tracker.recordDenial("test-session:bash");
 
-        evaluator = new PermissionEvaluator({
-          denialTracker: tracker,
-          maxConsecutiveDenials: 3,
-        });
+        evaluator = new PermissionEvaluator({ maxConsecutiveDenials: 3 }, tracker);
 
         const result = evaluator.evaluate(createContext());
         expect(result.decision).toBe("deny");
@@ -203,11 +200,13 @@ describe("permissions/evaluator", () => {
         tracker.recordDenial("test-session:bash");
         tracker.recordDenial("test-session:bash");
 
-        evaluator = new PermissionEvaluator({
-          denialTracker: tracker,
-          maxConsecutiveDenials: 3,
-          extraDefaultRules: [createRule({ decision: "allow" })],
-        });
+        evaluator = new PermissionEvaluator(
+          {
+            maxConsecutiveDenials: 3,
+            extraDefaultRules: [createRule({ decision: "allow" })],
+          },
+          tracker,
+        );
 
         const result = evaluator.evaluate(createContext());
         expect(result.decision).toBe("allow");

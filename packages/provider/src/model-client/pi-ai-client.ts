@@ -7,6 +7,7 @@ import {
 import type { Message } from "@mariozechner/pi-ai";
 import { createModelFromConfig } from "../model-registry";
 import type { ToolName } from "@omi/tools";
+import { createToolArray } from "@omi/tools";
 import type {
   ModelClient,
   ModelClientCallbacks,
@@ -70,6 +71,7 @@ export class PiAiModelClient implements ModelClient {
       enabledTools,
       thinkingLevel,
       toolExecutionMode,
+      preflightToolCheck,
     } = input;
 
     // Validate protocol routing contract before model execution.
@@ -99,8 +101,17 @@ export class PiAiModelClient implements ModelClient {
         args: Record<string, unknown>;
       }) => {
         const toolName = toolCall.name;
-        const requiresReview = this.requiresApproval(toolName);
         const toolCallId = `${runId}:${toolCalls.length + 1}`;
+        const preflightReason = await preflightToolCheck?.(toolName, args);
+        if (preflightReason) {
+          callbacks.onToolDecision?.(toolCallId, "rejected");
+          return {
+            block: true,
+            reason: preflightReason,
+          };
+        }
+
+        const requiresReview = this.requiresApproval(toolName);
 
         toolCalls.push({
           toolCallId,
@@ -277,9 +288,6 @@ export class PiAiModelClient implements ModelClient {
   }
 
   private buildTools(enabledTools?: ToolName[]): AgentTool[] {
-    const { createToolArray } = require("@omi/tools") as {
-      createToolArray: (workspaceRoot: string) => AgentTool[];
-    };
     const allTools = createToolArray("");
 
     if (!enabledTools || enabledTools.length === 0) {

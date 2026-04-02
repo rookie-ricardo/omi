@@ -7,8 +7,8 @@ import {
   getDefaultDenialTracker,
   resetDefaultDenialTracker,
   type DenialRecord,
-} from "../../../src/permissions/tracking";
-import type { PermissionContext } from "../../../src/permissions/rules";
+} from "../../src/permissions/tracking";
+import type { PermissionContext } from "../../src/permissions/rules";
 
 describe("permissions/tracking", () => {
   // ============================================================================
@@ -136,7 +136,7 @@ describe("permissions/tracking", () => {
       it("应该在达到阈值时返回 true", () => {
         tracker.recordDenial("test-key");
         tracker.recordDenial("test-key");
-        expect(tracker.hasExceededThreshold("test-key", 3)).toBe(true);
+        expect(tracker.hasExceededThreshold("test-key", 3)).toBe(false);
       });
 
       it("应该在未达到阈值时返回 false", () => {

@@ -3,8 +3,8 @@
  *
  * Core evaluation engine that resolves permission decisions by:
  * 1. Collecting rules from all sources
- * 2. Filtering by source priority
- * 3. Applying deny-first logic
+ * 2. Resolving by source priority + same-source rule order
+ * 3. Applying the winning rule decision
  * 4. Enforcing plan-mode read-only constraints
  */
 
@@ -55,10 +55,10 @@ export class PermissionEvaluator {
     private readonly denialTracker?: DenialTracker,
   ) {
     this.config = {
-      sessionRules: config.sessionRules ?? [],
-      projectRules: config.projectRules ?? [],
-      userRules: config.userRules ?? [],
-      managedRules: config.managedRules ?? [],
+      sessionRules: normalizeRules(config.sessionRules ?? [], "session"),
+      projectRules: normalizeRules(config.projectRules ?? [], "project"),
+      userRules: normalizeRules(config.userRules ?? [], "user"),
+      managedRules: normalizeRules(config.managedRules ?? [], "managed"),
       extraDefaultRules: config.extraDefaultRules ?? [],
       maxConsecutiveDenials: config.maxConsecutiveDenials ?? 5,
       enforcePlanMode: config.enforcePlanMode ?? true,
@@ -81,16 +81,18 @@ export class PermissionEvaluator {
 
     // Collect all applicable rules
     const allRules = this.collectAllRules();
+    const indexedRules = allRules.map((rule, index) => ({ rule, index }));
 
-    // Find all matching rules
-    const matched = allRules
-      .filter((rule) => ruleMatchesContext(rule, context))
+    // Find all matching rules.
+    // Higher source priority wins; within the same source, later rules override earlier ones.
+    const matched = indexedRules
+      .filter(({ rule }) => ruleMatchesContext(rule, context))
       .sort((a, b) => {
-        // Sort by source priority (descending), then by rule order within source
-        const priorityDiff = SOURCE_PRIORITY[b.source] - SOURCE_PRIORITY[a.source];
+        const priorityDiff = SOURCE_PRIORITY[b.rule.source] - SOURCE_PRIORITY[a.rule.source];
         if (priorityDiff !== 0) return priorityDiff;
-        return a.id.localeCompare(b.id);
-      });
+        return b.index - a.index;
+      })
+      .map(({ rule }) => rule);
 
     if (matched.length === 0) {
       // No matching rule - use "ask" as safe default
@@ -114,32 +116,14 @@ export class PermissionEvaluator {
       };
     }
 
-    // Apply deny-first logic:
-    // If any matching rule is "deny", the decision is "deny"
-    // Otherwise, if any is "ask", the decision is "ask"
-    // Otherwise "allow"
-    const hasDeny = matched.some((rule) => rule.decision === "deny");
-    if (hasDeny) {
-      this.denialTracker?.recordDenial(denialKey);
-      return {
-        decision: "deny",
-        matchedRule: matched.find((rule) => rule.decision === "deny") ?? matched[0],
-        matchedRules: matched,
-      };
-    }
-
-    const hasAsk = matched.some((rule) => rule.decision === "ask");
-    if (hasAsk) {
-      return {
-        decision: "ask",
-        matchedRule: matched.find((rule) => rule.decision === "ask") ?? matched[0],
-        matchedRules: matched,
-      };
+    const winningRule = matched[0];
+    if (winningRule.decision === "deny") {
+      this.denialTracker?.recordDenial(denialKey, winningRule.description);
     }
 
     return {
-      decision: "allow",
-      matchedRule: matched[0],
+      decision: winningRule.decision,
+      matchedRule: winningRule,
       matchedRules: matched,
     };
   }
@@ -165,15 +149,14 @@ export class PermissionEvaluator {
    * Returns null if allowed, error message if denied.
    */
   preflightCheck(context: PermissionContext): string | null {
+    if (context.planMode && WRITE_TOOLS.has(context.toolName)) {
+      return `Tool '${context.toolName}' is not allowed in plan mode (read-only).`;
+    }
+
     const result = this.evaluate(context);
 
     if (result.decision === "deny") {
       return `Tool '${context.toolName}' is denied by rule: ${result.matchedRule?.description ?? "unknown rule"}`;
-    }
-
-    // In plan mode, write tools should have been already filtered
-    if (context.planMode && WRITE_TOOLS.has(context.toolName)) {
-      return `Tool '${context.toolName}' is not allowed in plan mode (read-only).`;
     }
 
     return null;
@@ -276,19 +259,19 @@ export function createPermissionEvaluator(
 
   return {
     withSessionRules(rules) {
-      config.sessionRules = rules;
+      config.sessionRules = normalizeRules(rules, "session");
       return this;
     },
     withProjectRules(rules) {
-      config.projectRules = rules;
+      config.projectRules = normalizeRules(rules, "project");
       return this;
     },
     withUserRules(rules) {
-      config.userRules = rules;
+      config.userRules = normalizeRules(rules, "user");
       return this;
     },
     withManagedRules(rules) {
-      config.managedRules = rules;
+      config.managedRules = normalizeRules(rules, "managed");
       return this;
     },
     withDenialTracker(t: DenialTracker) {
@@ -299,4 +282,11 @@ export function createPermissionEvaluator(
       return new PermissionEvaluator(config, tracker);
     },
   };
+}
+
+function normalizeRules(
+  rules: PermissionRule[],
+  source: PermissionRuleSource,
+): PermissionRule[] {
+  return rules.map((rule) => ({ ...rule, source }));
 }

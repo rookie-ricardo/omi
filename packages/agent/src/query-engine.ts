@@ -32,7 +32,7 @@ import {
 } from "@omi/memory";
 import { createModelFromConfig, PiAiProvider } from "@omi/provider";
 import type { ProviderAdapter, ProviderRunResult, ProviderToolRequestedEvent } from "@omi/provider";
-import { SAFE_TOOL_NAMES } from "@omi/tools";
+import { SAFE_TOOL_NAMES, listBuiltInToolNames } from "@omi/tools";
 import type { ToolName } from "@omi/tools";
 import type { AppStore } from "@omi/store";
 import type { ResourceLoader } from "./resource-loader";
@@ -526,11 +526,32 @@ export class QueryEngine {
         systemPrompt,
         providerConfig,
         enabledTools: resolvedSkill?.enabledToolNames.length
-          ? (resolvedSkill.enabledToolNames as ToolName[])
-          : undefined,
+          ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
+          : this.filterVisibleTools(listBuiltInToolNames(), input.session.id),
         toolExecutionMode: resolveToolExecutionMode(
           resolvedSkill?.enabledToolNames as ToolName[] | undefined,
         ),
+        preflightToolCheck: async (toolName, toolInput) => {
+          const planMode = this.isPlanMode();
+          const reason = this.evaluator.preflightCheck({
+            toolName,
+            input: toolInput,
+            planMode,
+            sessionId: input.session.id,
+          });
+          if (reason) {
+            this.emitEvent({
+              type: "run.tool_denied",
+              payload: {
+                runId: input.run.id,
+                sessionId: input.session.id,
+                toolName,
+                reason,
+              },
+            });
+          }
+          return reason;
+        },
         onTextDelta: (delta) => {
           this.emitEvent({
             type: "run.delta",
@@ -967,6 +988,14 @@ export class QueryEngine {
       type: "run.tool_decided",
       payload: { runId, sessionId, toolCallId, decision },
     });
+  }
+
+  private filterVisibleTools(toolNames: ToolName[], sessionId: string): ToolName[] {
+    return this.evaluator.filterVisibleTools(toolNames, {
+      toolName: "",
+      planMode: this.isPlanMode(),
+      sessionId,
+    }) as ToolName[];
   }
 
   // ==========================================================================

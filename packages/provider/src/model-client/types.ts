@@ -185,6 +185,10 @@ export interface ModelClientRunInput {
   enabledTools?: ToolName[];
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   toolExecutionMode?: "sequential" | "parallel";
+  preflightToolCheck?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => string | null | Promise<string | null>;
 }
 
 export interface ModelClientRunResult {

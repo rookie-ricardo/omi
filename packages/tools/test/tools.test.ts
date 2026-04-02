@@ -29,7 +29,19 @@ describe("tools", () => {
   it("creates all tools for a workspace", () => {
     const root = mkdtempSync(join(tmpdir(), "omi-tools-"));
     const tools = createAllTools(root);
-    expect(Object.keys(tools)).toEqual(["read", "bash", "edit", "write", "ls", "grep", "find"]);
+    expect(Object.keys(tools)).toEqual([
+      "read",
+      "bash",
+      "edit",
+      "write",
+      "ls",
+      "grep",
+      "find",
+      "enter_plan",
+      "exit_plan",
+      "enter_worktree",
+      "exit_worktree",
+    ]);
     for (const tool of Object.values(tools)) {
       expect(tool.name).toBeTruthy();
       expect(tool.description).toBeTruthy();

@@ -147,7 +147,17 @@ export function matchCommand(command: string, pattern: string): boolean {
  * Check if a path starts with the given prefix.
  */
 export function matchPathPrefix(filePath: string, prefix: string): boolean {
-  return filePath.startsWith(prefix) || filePath.startsWith("./" + prefix);
+  const normalizedFilePath = normalizePathPrefix(filePath);
+  const normalizedPrefix = normalizePathPrefix(prefix);
+
+  if (normalizedPrefix === "") {
+    return true;
+  }
+
+  return (
+    normalizedFilePath === normalizedPrefix ||
+    normalizedFilePath.startsWith(`${normalizedPrefix}/`)
+  );
 }
 
 /**
@@ -165,6 +175,8 @@ export function ruleMatchesContext(rule: PermissionRule, context: PermissionCont
     return false;
   }
 
+  const inferredMcpServerName = context.mcpServerName ?? inferMcpServerName(context.toolName);
+
   return rule.matchers.every((matcher) => {
     switch (matcher.type) {
       case "tool_name":
@@ -178,8 +190,8 @@ export function ruleMatchesContext(rule: PermissionRule, context: PermissionCont
         return path ? matchPathPrefix(path, matcher.prefix) : false;
       }
       case "mcp_server":
-        return context.mcpServerName
-          ? matchMcpServer(context.mcpServerName, matcher.prefix)
+        return inferredMcpServerName
+          ? matchMcpServer(inferredMcpServerName, matcher.prefix)
           : false;
     }
   });
@@ -204,6 +216,15 @@ function extractPath(input: Record<string, unknown>): string | null {
   if (typeof path === "string") return path;
 
   return null;
+}
+
+function normalizePathPrefix(value: string): string {
+  return value.replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+function inferMcpServerName(toolName: string): string | null {
+  const match = toolName.match(/^mcp__([^_]+?)__/);
+  return match?.[1] ?? null;
 }
 
 // ============================================================================

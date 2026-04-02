@@ -26,6 +26,10 @@ export interface ProviderRunInput {
   enabledTools?: ToolName[];
   thinkingLevel?: ThinkingLevel;
   toolExecutionMode?: "sequential" | "parallel";
+  preflightToolCheck?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => string | null | Promise<string | null>;
   convertToLlm?: (messages: Message[]) => Message[];
   onTextDelta?: (delta: string) => void;
   onToolRequested?: (event: ProviderToolRequestedEvent) => Promise<string>;
@@ -153,6 +157,7 @@ export class PiAiProvider implements ProviderAdapter {
           enabledTools: input.enabledTools,
           thinkingLevel: input.thinkingLevel,
           toolExecutionMode: input.toolExecutionMode,
+          preflightToolCheck: input.preflightToolCheck,
         },
         { ...normalizedCallbacks, ...approvalCallbacks },
       );

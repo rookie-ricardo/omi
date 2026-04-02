@@ -11,7 +11,7 @@ import {
   READ_TOOLS,
   type PermissionContext,
   type PermissionRule,
-} from "../../../src/permissions/rules";
+} from "../../src/permissions/rules";
 
 describe("permissions/rules", () => {
   // ============================================================================
@@ -21,7 +21,7 @@ describe("permissions/rules", () => {
     it("应该精确匹配工具名", () => {
       expect(matchToolName("bash", "bash")).toBe(true);
       expect(matchToolName("read", "read")).toBe(true);
-      expect(matchToolName("edit", "edit")).toBe(false);
+      expect(matchToolName("edit", "edit")).toBe(true);
     });
 
     it("应该支持尾随通配符匹配", () => {

@@ -53,6 +53,13 @@ export function isBuiltInTool(toolName: string): boolean {
 }
 
 /**
+ * Return the built-in tool names in registration order.
+ */
+export function listBuiltInToolNames(): ToolName[] {
+  return [...BUILT_IN_TOOL_NAMES];
+}
+
+/**
  * Create all coding tools configured for a specific working directory.
  * Returns a Record mapping tool names to AgentTool instances.
  */
