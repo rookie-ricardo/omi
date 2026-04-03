@@ -123,6 +123,7 @@ export class PlanStateManager {
 
 		const context: PlanPermissionContext = {
 			mode: "plan",
+			allowedPrompts: [...this.state.allowedPrompts],
 			previousMode,
 		};
 
@@ -130,6 +131,9 @@ export class PlanStateManager {
 			type: "enter_plan",
 			sessionId: "",
 			timestamp,
+			allowedPrompts: [...this.state.allowedPrompts],
+			planFilePath: this.state.planFilePath,
+			planWasEdited: this.state.planWasEdited,
 		});
 
 		return context;
@@ -148,6 +152,8 @@ export class PlanStateManager {
 
 		const previousMode = this.state.previousMode ?? "default";
 		const allowedPrompts = [...this.state.allowedPrompts];
+		const planFilePath = this.state.planFilePath;
+		const planWasEdited = this.state.planWasEdited;
 
 		this.state = {
 			isInPlanMode: false,
@@ -162,6 +168,9 @@ export class PlanStateManager {
 			type: "exit_plan",
 			sessionId: "",
 			timestamp: nowIso(),
+			allowedPrompts,
+			planFilePath,
+			planWasEdited,
 		});
 
 		return { previousMode, allowedPrompts };
@@ -179,14 +188,14 @@ export class PlanStateManager {
 	 * 设置允许的 prompts
 	 */
 	setAllowedPrompts(prompts: AllowedPrompt[]): void {
-		this.state.allowedPrompts = prompts;
+		this.state.allowedPrompts = [...prompts];
 	}
 
 	/**
 	 * 获取允许的 prompts
 	 */
 	getAllowedPrompts(): AllowedPrompt[] {
-		return this.state.allowedPrompts;
+		return [...this.state.allowedPrompts];
 	}
 
 	/**
@@ -209,7 +218,7 @@ export class PlanStateManager {
 	getPermissionContext(): PlanPermissionContext {
 		return {
 			mode: "plan",
-			allowedPrompts: this.state.allowedPrompts,
+			allowedPrompts: [...this.state.allowedPrompts],
 			previousMode: this.state.previousMode,
 		};
 	}
