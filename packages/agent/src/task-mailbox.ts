@@ -345,6 +345,356 @@ export class Mailbox {
 }
 
 // ============================================================================
+// Task Notification Mailbox
+// ============================================================================
+
+export type TaskNotificationKind =
+  | "submitted"
+  | "completed"
+  | "failed"
+  | "progress"
+  | "canceled"
+  | "cancelled";
+
+export interface TaskMailboxEvent<T = unknown> {
+  id: string;
+  type: string;
+  senderId: string;
+  recipientId?: string | null;
+  payload: T;
+  timestamp: string;
+  correlationId?: string;
+}
+
+export interface TaskMailboxQueryFilter {
+  type?: string | string[];
+  senderId?: string;
+  recipientId?: string;
+  correlationId?: string;
+  taskId?: string;
+}
+
+export interface TaskMailboxSubscription<T = unknown> {
+  id: string;
+  filter: TaskMailboxQueryFilter;
+  callback: (event: TaskMailboxEvent<T>) => void | Promise<void>;
+}
+
+export interface TaskSubmittedPayload {
+  taskId: string;
+  task: string;
+  priority?: number;
+  deadline?: number;
+  ownerId?: string;
+  writeScope?: string;
+  background?: boolean;
+}
+
+export interface TaskCompletedPayload<T = unknown> {
+  taskId: string;
+  result: T;
+}
+
+export interface TaskFailedPayload {
+  taskId: string;
+  error: string;
+}
+
+export interface TaskProgressPayload {
+  taskId: string;
+  progress: number;
+  message?: string;
+}
+
+function normalizeTaskNotificationType(kind: TaskNotificationKind): string {
+  if (kind === "submitted") {
+    return "task.submitted";
+  }
+  if (kind === "completed") {
+    return "task.completed";
+  }
+  if (kind === "failed") {
+    return "task.failed";
+  }
+  if (kind === "progress") {
+    return "task.progress";
+  }
+  return "task.canceled";
+}
+
+function matchesTaskMailboxFilter(
+  event: TaskMailboxEvent,
+  filter: TaskMailboxQueryFilter,
+): boolean {
+  if (filter.type !== undefined) {
+    const types = Array.isArray(filter.type) ? filter.type : [filter.type];
+    if (!types.includes(event.type)) {
+      return false;
+    }
+  }
+
+  if (filter.senderId !== undefined && filter.senderId !== event.senderId) {
+    return false;
+  }
+
+  if (filter.recipientId !== undefined && filter.recipientId !== event.recipientId) {
+    return false;
+  }
+
+  if (filter.correlationId !== undefined && filter.correlationId !== event.correlationId) {
+    return false;
+  }
+
+  if (filter.taskId !== undefined) {
+    const payload = event.payload as { taskId?: string };
+    if (payload.taskId !== filter.taskId) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function buildTaskNotificationPayload(
+  kind: TaskNotificationKind,
+  taskId: string,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (kind === "submitted") {
+    return {
+      taskId,
+      task: String(payload.task ?? ""),
+      priority: payload.priority as number | undefined,
+      deadline: payload.deadline as number | undefined,
+      ownerId: payload.ownerId as string | undefined,
+      writeScope: payload.writeScope as string | undefined,
+      background: payload.background as boolean | undefined,
+    };
+  }
+
+  if (kind === "completed") {
+    return {
+      taskId,
+      result: payload.result,
+    };
+  }
+
+  if (kind === "failed") {
+    return {
+      taskId,
+      error: String(payload.error ?? "Unknown error"),
+    };
+  }
+
+  if (kind === "progress") {
+    return {
+      taskId,
+      progress: Number(payload.progress ?? 0),
+      message: payload.message as string | undefined,
+    };
+  }
+
+  return {
+    taskId,
+    status: "canceled",
+    reason: payload.reason as string | undefined,
+  };
+}
+
+export function createTaskSubmittedEvent(
+  senderId: string,
+  taskId: string,
+  task: string,
+  options: {
+    priority?: number;
+    deadline?: number;
+    ownerId?: string;
+    writeScope?: string;
+    background?: boolean;
+    correlationId?: string;
+    recipientId?: string | null;
+  } = {},
+): TaskMailboxEvent<TaskSubmittedPayload> {
+  return {
+    id: createId("evt"),
+    type: "task.submitted",
+    senderId,
+    recipientId: options.recipientId ?? null,
+    payload: {
+      taskId,
+      task,
+      priority: options.priority,
+      deadline: options.deadline,
+      ownerId: options.ownerId,
+      writeScope: options.writeScope,
+      background: options.background,
+    },
+    timestamp: nowIso(),
+    correlationId: options.correlationId,
+  };
+}
+
+export function createTaskCompletedEvent<T>(
+  senderId: string,
+  taskId: string,
+  result: T,
+  correlationId?: string,
+): TaskMailboxEvent<TaskCompletedPayload<T>> {
+  return {
+    id: createId("evt"),
+    type: "task.completed",
+    senderId,
+    recipientId: null,
+    payload: {
+      taskId,
+      result,
+    },
+    timestamp: nowIso(),
+    correlationId,
+  };
+}
+
+export function createTaskFailedEvent(
+  senderId: string,
+  taskId: string,
+  error: string,
+  correlationId?: string,
+): TaskMailboxEvent<TaskFailedPayload> {
+  return {
+    id: createId("evt"),
+    type: "task.failed",
+    senderId,
+    recipientId: null,
+    payload: {
+      taskId,
+      error,
+    },
+    timestamp: nowIso(),
+    correlationId,
+  };
+}
+
+export function createTaskProgressEvent(
+  senderId: string,
+  taskId: string,
+  progress: number,
+  message?: string,
+  correlationId?: string,
+): TaskMailboxEvent<TaskProgressPayload> {
+  return {
+    id: createId("evt"),
+    type: "task.progress",
+    senderId,
+    recipientId: null,
+    payload: {
+      taskId,
+      progress,
+      message,
+    },
+    timestamp: nowIso(),
+    correlationId,
+  };
+}
+
+/**
+ * Task mailbox with task-notification style events.
+ */
+export class TaskMailbox {
+  private readonly events: TaskMailboxEvent[] = [];
+  private readonly subscriptions = new Map<string, TaskMailboxSubscription>();
+
+  publish<T>(event: Omit<TaskMailboxEvent<T>, "id" | "timestamp">): string {
+    const fullEvent: TaskMailboxEvent<T> = {
+      ...event,
+      id: createId("evt"),
+      timestamp: nowIso(),
+    };
+
+    this.events.push(fullEvent as TaskMailboxEvent);
+    this.deliver(fullEvent as TaskMailboxEvent);
+    return fullEvent.id;
+  }
+
+  publishTaskNotification(
+    kind: TaskNotificationKind,
+    senderId: string,
+    taskId: string,
+    payload: Record<string, unknown> = {},
+    correlationId?: string,
+  ): string {
+    const type = normalizeTaskNotificationType(kind);
+    const notificationPayload = buildTaskNotificationPayload(kind, taskId, payload);
+
+    return this.publish({
+      type,
+      senderId,
+      recipientId: payload.recipientId === undefined ? null : (payload.recipientId as string | null),
+      payload: notificationPayload,
+      correlationId,
+    });
+  }
+
+  sendMessage(
+    senderId: string,
+    recipientId: string,
+    message: string,
+    correlationId?: string,
+  ): string {
+    return this.publish({
+      type: "message.sent",
+      senderId,
+      recipientId,
+      payload: { message },
+      correlationId,
+    });
+  }
+
+  subscribe<T>(
+    filter: TaskMailboxQueryFilter,
+    callback: (event: TaskMailboxEvent<T>) => void | Promise<void>,
+  ): string {
+    const id = createId("sub");
+    this.subscriptions.set(id, {
+      id,
+      filter,
+      callback: callback as TaskMailboxSubscription["callback"],
+    });
+    return id;
+  }
+
+  unsubscribe(subscriptionId: string): boolean {
+    return this.subscriptions.delete(subscriptionId);
+  }
+
+  query(filter: TaskMailboxQueryFilter = {}, limit?: number): TaskMailboxEvent[] {
+    const matches = this.events.filter((event) => matchesTaskMailboxFilter(event, filter));
+    return typeof limit === "number" ? matches.slice(-limit) : matches;
+  }
+
+  clear(): void {
+    this.events.length = 0;
+    this.subscriptions.clear();
+  }
+
+  getStats(): { totalEvents: number; totalSubscriptions: number } {
+    return {
+      totalEvents: this.events.length,
+      totalSubscriptions: this.subscriptions.size,
+    };
+  }
+
+  private deliver(event: TaskMailboxEvent): void {
+    for (const subscription of this.subscriptions.values()) {
+      if (!matchesTaskMailboxFilter(event, subscription.filter)) {
+        continue;
+      }
+
+      void subscription.callback(event);
+    }
+  }
+}
+
+// ============================================================================
 // Topic Constants
 // ============================================================================
 
@@ -367,6 +717,18 @@ export const MailboxTopics = {
   SHUTDOWN: "system/shutdown",
   /** Health checks */
   HEALTH: "system/health",
+  /** Task notification envelope */
+  TASK_NOTIFICATION: "task.notification",
+  /** Task submitted notification */
+  TASK_SUBMITTED: "task.submitted",
+  /** Task completed notification */
+  TASK_COMPLETED: "task.completed",
+  /** Task failed notification */
+  TASK_FAILED: "task.failed",
+  /** Task canceled notification */
+  TASK_CANCELED: "task.canceled",
+  /** Direct message notification */
+  MESSAGE_SENT: "message.sent",
 } as const;
 
 // ============================================================================

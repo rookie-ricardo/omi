@@ -13,7 +13,7 @@ import type { TextContent, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { createId, nowIso } from "@omi/core";
 
-import type { Mailbox, MailboxMessage } from "./task-mailbox.js";
+import { Mailbox, type MailboxMessage } from "./task-mailbox.js";
 import { MailboxTopics } from "./task-mailbox.js";
 
 // ============================================================================
@@ -61,6 +61,8 @@ export interface BuiltInAgentDefinition {
 // Types
 // ============================================================================
 
+export type WriteScope = "shared" | "isolated" | "worktree";
+
 /**
  * SubAgent status
  */
@@ -71,6 +73,7 @@ export type SubAgentStatus =
   | "waiting"
   | "completed"
   | "failed"
+  | "canceled"
   | "closed";
 
 /**
@@ -83,6 +86,18 @@ export interface SubAgentConfig {
   name: string;
   /** Task description for the subagent */
   task: string;
+  /** Owner of the task */
+  ownerId: string;
+  /** Workspace write scope */
+  writeScope: WriteScope;
+  /** Current status */
+  status: SubAgentStatus;
+  /** Deadline in milliseconds, if any */
+  deadline?: number;
+  /** Task output/result */
+  output?: string;
+  /** Whether the subagent is running in the background */
+  background?: boolean;
   /** Agent definition if this is a built-in agent */
   agentDefinition?: BuiltInAgentDefinition;
   /** Working directory (defaults to parent workspace) */
@@ -109,6 +124,11 @@ export interface SubAgentState {
   name: string;
   status: SubAgentStatus;
   task: string;
+  ownerId: string;
+  writeScope: WriteScope;
+  background: boolean;
+  deadline?: number;
+  output?: string;
   workspaceRoot: string;
   worktreePath?: string;
   parentId: string;
@@ -159,6 +179,29 @@ export interface SpawnOptions {
   skills?: string[];
   /** Description for display */
   description?: string;
+  /** Workspace write scope */
+  writeScope?: WriteScope;
+  /** Whether to start in background */
+  background?: boolean;
+  /** Optional deadline in milliseconds */
+  deadline?: number;
+  /** Optional task output seed */
+  output?: string;
+  /** Status hint */
+  status?: SubAgentStatus;
+}
+
+export interface SubAgentSpawnConfig extends SpawnOptions {
+  ownerId: string;
+  task: string;
+  writeScope: WriteScope;
+  background: boolean;
+  status: SubAgentStatus;
+}
+
+export interface SubAgentSpawnRequest extends SpawnOptions {
+  task: string;
+  ownerId?: string;
 }
 
 /**
@@ -166,11 +209,30 @@ export interface SpawnOptions {
  */
 export interface TaskResult {
   subAgentId: string;
-  status: "completed" | "failed" | "timeout" | "cancelled";
+  status: "completed" | "failed" | "timeout" | "canceled";
+  success?: boolean;
+  text?: string;
+  output?: string;
   result?: string;
   error?: string;
   completedAt: string;
   durationMs: number;
+}
+
+export function createSpawnConfig(
+  ownerId: string,
+  task: string,
+  options: Partial<SubAgentSpawnConfig> = {},
+): SubAgentSpawnConfig {
+  const background = options.background ?? false;
+  return {
+    ...options,
+    ownerId,
+    task,
+    writeScope: options.writeScope ?? "shared",
+    background,
+    status: options.status ?? "pending",
+  };
 }
 
 // ============================================================================
@@ -187,6 +249,9 @@ export const spawnSchema: TSchema = Type.Object({
   task: Type.String({
     description: "Task description for the subagent to execute",
   }),
+  ownerId: Type.Optional(
+    Type.String({ description: "Owner agent ID" }),
+  ),
   workspaceRoot: Type.Optional(
     Type.String({ description: "Working directory (defaults to parent workspace)" }),
   ),
@@ -209,6 +274,16 @@ export const spawnSchema: TSchema = Type.Object({
   disallowedTools: Type.Optional(Type.Array(Type.String())),
   maxTurns: Type.Optional(Type.Number()),
   skills: Type.Optional(Type.Array(Type.String())),
+  writeScope: Type.Optional(
+    Type.Union([
+      Type.Literal("shared"),
+      Type.Literal("isolated"),
+      Type.Literal("worktree"),
+    ]),
+  ),
+  background: Type.Optional(Type.Boolean()),
+  deadline: Type.Optional(Type.Number()),
+  output: Type.Optional(Type.String()),
 });
 
 export const sendSchema: TSchema = Type.Object({
@@ -246,10 +321,11 @@ export const closeSchema: TSchema = Type.Object({
 export const listSchema: TSchema = Type.Object({
   status: Type.Optional(
     Type.String({
-      description: "Filter by status (pending, running, completed, failed, closed)",
+      description: "Filter by status (pending, running, completed, failed, canceled, closed)",
     }),
   ),
   parentId: Type.Optional(Type.String({ description: "Filter by parent agent ID" })),
+  ownerId: Type.Optional(Type.String({ description: "Filter by owner agent ID" })),
 });
 
 // ============================================================================
@@ -302,7 +378,7 @@ registerBuiltInAgent({
 
 export interface SubAgentManagerConfig {
   workspaceRoot: string;
-  mailbox: Mailbox;
+  mailbox?: Mailbox;
   parentId?: string;
   getTools?: () => AgentTool[];
   getSystemPrompt?: () => string;
@@ -312,16 +388,37 @@ export interface SubAgentManagerConfig {
   onSubAgentError?: (subAgent: SubAgent, error: Error) => void;
 }
 
+type SubAgentManagerEvent =
+  | "subagent.spawned"
+  | "subagent.started"
+  | "subagent.completed"
+  | "subagent.failed"
+  | "subagent.canceled"
+  | "subagent.closed";
+
 export class SubAgentManager {
   private readonly subAgents = new Map<string, SubAgent>();
+  private readonly listeners = new Map<SubAgentManagerEvent, Set<(subAgent: SubAgent, result?: TaskResult) => void>>();
   private readonly config: SubAgentManagerConfig;
 
-  constructor(config: SubAgentManagerConfig) {
-    this.config = {
-      parentId: "main",
-      builtInAgents: [],
-      ...config,
-    };
+  constructor(workspaceRoot: string);
+  constructor(config: SubAgentManagerConfig);
+  constructor(configOrWorkspaceRoot: string | SubAgentManagerConfig) {
+    if (typeof configOrWorkspaceRoot === "string") {
+      this.config = {
+        workspaceRoot: configOrWorkspaceRoot,
+        mailbox: new Mailbox(),
+        parentId: "main",
+        builtInAgents: [],
+      };
+    } else {
+      this.config = {
+        parentId: "main",
+        builtInAgents: [],
+        mailbox: new Mailbox(),
+        ...configOrWorkspaceRoot,
+      };
+    }
 
     // Register built-in agents
     for (const agent of this.config.builtInAgents ?? []) {
@@ -329,15 +426,30 @@ export class SubAgentManager {
     }
   }
 
+  on(
+    event: SubAgentManagerEvent,
+    listener: (subAgent: SubAgent, result?: TaskResult) => void,
+  ): () => void {
+    const listeners = this.listeners.get(event) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(event, listeners);
+    return () => {
+      const current = this.listeners.get(event);
+      current?.delete(listener);
+      if (current && current.size === 0) {
+        this.listeners.delete(event);
+      }
+    };
+  }
+
   /**
    * Spawn a new SubAgent with the given task.
    */
-  spawn(
-    options: SpawnOptions & { task: string },
-  ): SubAgent {
+  spawn(options: SubAgentSpawnRequest): string {
     const id = createId("agent");
     const now = nowIso();
     const name = options.name ?? `subagent-${id.slice(0, 8)}`;
+    const ownerId = options.ownerId ?? this.config.parentId ?? "main";
 
     // Get agent definition if agentType is specified
     const agentDefinition = options.agentType
@@ -351,12 +463,25 @@ export class SubAgentManager {
     const effectiveModel = options.model ?? agentDefinition?.model ?? "inherit";
     const effectivePermissionMode =
       options.permissionMode ?? agentDefinition?.permissionMode ?? "default";
+    const effectiveWriteScope = options.writeScope
+      ?? (options.isolated ? "isolated" : "shared");
+    const effectiveBackground = options.background ?? false;
+    const effectiveStatus = options.status
+      ?? (effectiveBackground ? "running" : "pending");
+    const effectiveDeadline = options.deadline;
+    const effectiveOutput = options.output;
 
     const subAgent: SubAgent = {
       config: {
         id,
         name,
         task: options.task,
+        ownerId,
+        writeScope: effectiveWriteScope,
+        status: effectiveStatus,
+        deadline: effectiveDeadline,
+        output: effectiveOutput,
+        background: effectiveBackground,
         agentDefinition,
         workspaceRoot: options.workspaceRoot ?? this.config.workspaceRoot,
         parentId: this.config.parentId ?? "main",
@@ -368,15 +493,21 @@ export class SubAgentManager {
       state: {
         id,
         name,
-        status: "initializing",
+        status: effectiveStatus,
         task: options.task,
+        ownerId,
+        writeScope: effectiveWriteScope,
+        background: effectiveBackground,
+        deadline: effectiveDeadline,
+        output: effectiveOutput,
         workspaceRoot: options.workspaceRoot ?? this.config.workspaceRoot,
         parentId: this.config.parentId ?? "main",
         createdAt: now,
+        startedAt: effectiveStatus === "running" ? now : undefined,
         messages: 0,
         toolCalls: 0,
       },
-      mailbox: this.config.mailbox,
+      mailbox: this.config.mailbox ?? new Mailbox(),
       abortController: new AbortController(),
       tools: this.buildToolsForSubAgent(id, {
         allowedTools: effectiveAllowedTools,
@@ -385,9 +516,10 @@ export class SubAgentManager {
     };
 
     this.subAgents.set(id, subAgent);
+    this.emit("subagent.spawned", subAgent);
     this.config.onSubAgentStart?.(subAgent);
 
-    return subAgent;
+    return id;
   }
 
   /**
@@ -403,12 +535,22 @@ export class SubAgentManager {
       return null;
     }
 
-    return this.config.mailbox.sendTo(
+    subAgent.state.messages++;
+
+    const mailbox = this.config.mailbox ?? subAgent.mailbox;
+    return mailbox.sendTo(
       this.config.parentId ?? "main",
       subAgentId,
       topic,
       { text: message },
     );
+  }
+
+  /**
+   * Start a SubAgent.
+   */
+  start(subAgentId: string): boolean {
+    return this.updateStatus(subAgentId, "running");
   }
 
   /**
@@ -420,6 +562,8 @@ export class SubAgentManager {
       return {
         subAgentId,
         status: "failed",
+        success: false,
+        text: `SubAgent ${subAgentId} not found`,
         error: `SubAgent ${subAgentId} not found`,
         completedAt: nowIso(),
         durationMs: 0,
@@ -428,55 +572,69 @@ export class SubAgentManager {
 
     const startTime = Date.now();
 
-    // If already completed, return immediately
+    if (timeoutMs !== undefined && timeoutMs <= 0) {
+      return this.buildResult(subAgent, startTime);
+    }
+
     if (
-      subAgent.state.status === "completed" ||
-      subAgent.state.status === "failed"
+      subAgent.state.status === "completed"
+      || subAgent.state.status === "failed"
+      || subAgent.state.status === "canceled"
+      || subAgent.state.status === "closed"
     ) {
       return this.buildResult(subAgent, startTime);
     }
 
-    return new Promise((resolve) => {
-      // Subscribe to completion
-      const subscription = this.config.mailbox.subscribe(
-        MailboxTopics.TASK_COMPLETE,
-        (msg) => {
-          if (msg.senderId === subAgentId) {
-            this.config.mailbox.unsubscribe(subscription.id);
-            resolve(this.buildResult(subAgent, startTime));
-          }
-        },
-      );
+    if (subAgent.state.status === "pending" || subAgent.state.status === "initializing") {
+      this.start(subAgentId);
+    }
 
-      // Also listen for failures
-      const failSubscription = this.config.mailbox.subscribe(
-        MailboxTopics.TASK_FAIL,
-        (msg) => {
-          if (msg.senderId === subAgentId) {
-            this.config.mailbox.unsubscribe(failSubscription.id);
-            resolve(this.buildResult(subAgent, startTime));
-          }
-        },
-      );
-
-      // Apply timeout if specified
-      if (timeoutMs !== undefined && timeoutMs > 0) {
-        setTimeout(() => {
-          this.config.mailbox.unsubscribe(subscription.id);
-          this.config.mailbox.unsubscribe(failSubscription.id);
-
-          if (!subAgent.abortController.signal.aborted) {
-            resolve({
-              subAgentId,
-              status: "timeout",
-              error: `Timeout after ${timeoutMs}ms`,
-              completedAt: nowIso(),
-              durationMs: Date.now() - startTime,
-            });
-          }
-        }, timeoutMs);
+    if (!subAgent.state.background) {
+      if (subAgent.state.status === "running" || subAgent.state.status === "waiting") {
+        if (subAgent.state.output === undefined && subAgent.state.result === undefined) {
+          subAgent.state.output = "";
+        }
+        this.updateStatus(subAgentId, "completed");
       }
-    });
+      return this.buildResult(subAgent, startTime);
+    }
+
+    const timeout = timeoutMs ?? subAgent.state.deadline ?? 300000;
+    const deadlineAt = Date.now() + timeout;
+    while (Date.now() < deadlineAt) {
+      const latest = this.subAgents.get(subAgentId);
+      if (!latest) {
+        return {
+          subAgentId,
+          status: "canceled",
+          success: false,
+          text: `Sub-agent ${subAgentId} was closed`,
+          error: `Sub-agent ${subAgentId} was closed`,
+          completedAt: nowIso(),
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      if (
+        latest.state.status === "completed"
+        || latest.state.status === "failed"
+        || latest.state.status === "canceled"
+        || latest.state.status === "closed"
+      ) {
+        return this.buildResult(latest, startTime);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    return {
+      subAgentId,
+      status: "timeout",
+      success: false,
+      text: `Timeout waiting for sub-agent ${subAgentId}`,
+      error: `Timeout waiting for sub-agent ${subAgentId}`,
+      completedAt: nowIso(),
+      durationMs: Date.now() - startTime,
+    };
   }
 
   /**
@@ -490,7 +648,7 @@ export class SubAgentManager {
 
     if (!force) {
       // Send shutdown signal and wait for graceful completion
-      this.config.mailbox.broadcast(subAgentId, MailboxTopics.SHUTDOWN, {
+      (this.config.mailbox ?? subAgent.mailbox).broadcast(subAgentId, MailboxTopics.SHUTDOWN, {
         reason: "Parent agent requested shutdown",
       });
     }
@@ -500,13 +658,32 @@ export class SubAgentManager {
       subAgent.abortController.abort();
     }
 
-    // Update state
     subAgent.state.status = "closed";
     subAgent.state.completedAt = nowIso();
+    this.emit("subagent.closed", subAgent);
 
     // Clean up
     this.cleanupSubAgent(subAgentId);
 
+    return true;
+  }
+
+  /**
+   * Cancel a SubAgent without removing it from the manager.
+   */
+  cancel(subAgentId: string): boolean {
+    const subAgent = this.subAgents.get(subAgentId);
+    if (!subAgent) {
+      return false;
+    }
+
+    if (!subAgent.abortController.signal.aborted) {
+      subAgent.abortController.abort();
+    }
+
+    subAgent.state.status = "canceled";
+    subAgent.state.completedAt = nowIso();
+    this.emit("subagent.canceled", subAgent);
     return true;
   }
 
@@ -516,6 +693,7 @@ export class SubAgentManager {
   list(filter?: {
     status?: SubAgentStatus;
     parentId?: string;
+    ownerId?: string;
   }): SubAgent[] {
     let agents = [...this.subAgents.values()];
 
@@ -527,7 +705,28 @@ export class SubAgentManager {
       agents = agents.filter((a) => a.state.parentId === filter.parentId);
     }
 
+    if (filter?.ownerId) {
+      agents = agents.filter((a) => a.state.ownerId === filter.ownerId);
+    }
+
     return agents;
+  }
+
+  getByOwner(ownerId: string): SubAgentState[] {
+    return this.list({ ownerId }).map((agent) => agent.state);
+  }
+
+  getByStatus(status: SubAgentStatus): SubAgentState[] {
+    return this.list({ status }).map((agent) => agent.state);
+  }
+
+  hasRunning(): boolean {
+    return [...this.subAgents.values()].some((agent) =>
+      agent.state.status === "pending"
+      || agent.state.status === "initializing"
+      || agent.state.status === "running"
+      || agent.state.status === "waiting",
+    );
   }
 
   /**
@@ -558,18 +757,21 @@ export class SubAgentManager {
     }
 
     subAgent.state.status = status;
+    subAgent.config.status = status;
     if (status === "running") {
       subAgent.state.startedAt = nowIso();
     }
     if (
       status === "completed" ||
       status === "failed" ||
+      status === "canceled" ||
       status === "closed"
     ) {
       subAgent.state.completedAt = nowIso();
     }
     if (error) {
       subAgent.state.error = error;
+      subAgent.config.output = error;
     }
 
     // Emit events
@@ -579,8 +781,12 @@ export class SubAgentManager {
         new Date(subAgent.state.createdAt).getTime(),
       );
       this.config.onSubAgentComplete?.(subAgent, result);
+      this.emit("subagent.completed", subAgent, result);
     } else if (status === "failed") {
       this.config.onSubAgentError?.(subAgent, new Error(error ?? "Unknown error"));
+      this.emit("subagent.failed", subAgent);
+    } else if (status === "canceled") {
+      this.emit("subagent.canceled", subAgent);
     }
 
     return true;
@@ -595,6 +801,8 @@ export class SubAgentManager {
       return false;
     }
     subAgent.state.result = result;
+    subAgent.state.output = result;
+    subAgent.config.output = result;
     return true;
   }
 
@@ -657,13 +865,12 @@ export class SubAgentManager {
   }
 
   private cleanupSubAgent(subAgentId: string): void {
-    const subAgent = this.subAgents.get(subAgentId);
-    if (subAgent) {
-      subAgent.state.status = "closed";
-    }
+    this.subAgents.delete(subAgentId);
   }
 
   private buildResult(subAgent: SubAgent, startTime: number): TaskResult {
+    const resultText = subAgent.state.output ?? subAgent.state.result ?? subAgent.state.error ?? "";
+    const success = subAgent.state.status === "completed";
     return {
       subAgentId: subAgent.config.id,
       status:
@@ -671,12 +878,32 @@ export class SubAgentManager {
           ? "completed"
           : subAgent.state.status === "failed"
             ? "failed"
-            : "cancelled",
-      result: subAgent.state.result,
+            : subAgent.state.status === "canceled" || subAgent.state.status === "closed"
+              ? "canceled"
+              : "timeout",
+      success,
+      text: resultText,
+      output: subAgent.state.output ?? subAgent.state.result,
+      result: subAgent.state.result ?? subAgent.state.output,
       error: subAgent.state.error,
       completedAt: subAgent.state.completedAt ?? nowIso(),
       durationMs: Date.now() - startTime,
     };
+  }
+
+  private emit(event: SubAgentManagerEvent, subAgent: SubAgent, result?: TaskResult): void {
+    const listeners = this.listeners.get(event);
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+
+    for (const listener of listeners) {
+      try {
+        listener(subAgent, result);
+      } catch {
+        // Ignore listener errors
+      }
+    }
   }
 }
 
@@ -717,17 +944,18 @@ function createSpawnTool(manager: SubAgentManager): AgentTool {
     parameters: spawnSchema,
     execute: async (_toolCallId, params: unknown) => {
       try {
-        const typedParams = params as SpawnOptions & { task: string };
-        const subAgent = manager.spawn(typedParams);
+        const typedParams = params as SubAgentSpawnRequest;
+        const subAgentId = manager.spawn(typedParams);
+        const subAgentState = manager.getState(subAgentId);
         return {
           content: [
             makeTextContent(
-              `SubAgent spawned: ${subAgent.config.name} (${subAgent.config.id})\n` +
+              `SubAgent spawned: ${subAgentState?.name ?? subAgentId} (${subAgentId})\n` +
                 `Task: ${typedParams.task}\n` +
-                `Workspace: ${subAgent.config.workspaceRoot}`,
+                `Workspace: ${subAgentState?.workspaceRoot ?? "unknown"}`,
             ),
           ],
-          details: { subAgentId: subAgent.config.id },
+          details: { subAgentId },
         };
       } catch (error) {
         return {
@@ -866,10 +1094,12 @@ function createListSubAgentsTool(manager: SubAgentManager): AgentTool {
       const typedParams = (params ?? {}) as {
         status?: string;
         parentId?: string;
+        ownerId?: string;
       };
       const subAgents = manager.list({
         status: typedParams.status as SubAgentStatus | undefined,
         parentId: typedParams.parentId,
+        ownerId: typedParams.ownerId,
       });
 
       if (subAgents.length === 0) {
