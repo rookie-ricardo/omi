@@ -1,286 +1,335 @@
 /**
- * Telemetry Tests
+ * Telemetry Service Tests
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  TelemetryCollector,
-  getTelemetryCollector,
-  setTelemetryCollector,
+  TelemetryService,
+  type CompactionEvent,
+  type McpConnectionEvent,
+  type RunEvent,
+  type SubAgentEvent,
 } from "../src/telemetry";
-import type { TelemetryEvent } from "../src/telemetry";
 
-describe("TelemetryCollector", () => {
-  let collector: TelemetryCollector;
-
+describe("TelemetryService", () => {
   beforeEach(() => {
-    collector = new TelemetryCollector({ maxEvents: 100 });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
   });
 
   afterEach(() => {
-    setTelemetryCollector(undefined);
+    vi.useRealTimers();
   });
 
-  describe("record", () => {
-    it("should record events", () => {
-      const event = collector.record("run.started", {
-        runId: "run-1",
-        sessionId: "session-1",
-      });
+  it("emits run lifecycle events and tracks counters", () => {
+    const telemetry = new TelemetryService();
+    const runEvents: RunEvent[] = [];
+    const completedEvents: RunEvent[] = [];
 
-      expect(event.id).toBeDefined();
-      expect(event.type).toBe("run.started");
-      expect(event.timestamp).toBeDefined();
-      expect(event.payload.runId).toBe("run-1");
+    telemetry.on("run", (event) => {
+      runEvents.push(event as RunEvent);
+    });
+    telemetry.on("run:completed", (event) => {
+      completedEvents.push(event as RunEvent);
     });
 
-    it("should include metadata", () => {
-      const event = collector.record(
-        "run.completed",
-        { runId: "run-1", sessionId: "session-1", durationMs: 1000, toolCallCount: 5, success: true },
-        { source: "test" }
-      );
-
-      expect(event.metadata?.source).toBe("test");
+    telemetry.emitRunEvent({
+      type: "run:started",
+      sessionId: "session-1",
+      runId: "run-1",
+      prompt: "Plan the next step",
+      model: "claude-sonnet-4",
+      provider: "anthropic",
+      timestamp: new Date().toISOString(),
     });
 
-    it("should limit event count", () => {
-      const smallCollector = new TelemetryCollector({ maxEvents: 5 });
+    vi.advanceTimersByTime(250);
 
-      for (let i = 0; i < 10; i++) {
-        smallCollector.record("run.started", { runId: `run-${i}`, sessionId: "s1" });
-      }
-
-      const events = smallCollector.getEvents();
-      expect(events.length).toBe(5);
-    });
-  });
-
-  describe("convenience methods", () => {
-    it("should record run started", () => {
-      const event = collector.recordRunStarted({
-        runId: "run-1",
-        sessionId: "session-1",
-        trigger: "user",
-      });
-
-      expect(event.type).toBe("run.started");
-      expect(event.payload.runId).toBe("run-1");
-      expect(event.payload.trigger).toBe("user");
+    telemetry.emitRunEvent({
+      type: "run:completed",
+      sessionId: "session-1",
+      runId: "run-1",
+      responseLength: 128,
+      durationMs: 250,
+      tokenUsage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        totalTokens: 30,
+        cacheReadTokens: 5,
+      },
+      timestamp: new Date().toISOString(),
     });
 
-    it("should record tool called", () => {
-      const event = collector.recordToolCalled({
-        runId: "run-1",
-        sessionId: "session-1",
-        toolCallId: "tc-1",
-        toolName: "bash",
-        durationMs: 100,
-      });
-
-      expect(event.type).toBe("tool.called");
-      expect(event.payload.toolName).toBe("bash");
+    telemetry.emitRunEvent({
+      type: "run:failed",
+      sessionId: "session-1",
+      runId: "run-2",
+      error: "provider timeout",
+      errorCode: "ETIMEDOUT",
+      durationMs: 900,
+      timestamp: new Date().toISOString(),
     });
 
-    it("should record tool approved", () => {
-      const event = collector.recordToolApproved({
-        runId: "run-1",
-        sessionId: "session-1",
-        toolCallId: "tc-1",
-        toolName: "bash",
-        decision: "approved",
-        decisionSource: "user",
-      });
-
-      expect(event.type).toBe("tool.approved");
-      expect(event.payload.decision).toBe("approved");
+    telemetry.emitRunEvent({
+      type: "run:cancelled",
+      sessionId: "session-1",
+      runId: "run-3",
+      reason: "user cancelled",
+      durationMs: 40,
+      timestamp: new Date().toISOString(),
     });
 
-    it("should record tool rejected", () => {
-      const event = collector.recordToolRejected({
-        runId: "run-1",
-        sessionId: "session-1",
-        toolCallId: "tc-1",
-        toolName: "bash",
-        decision: "rejected",
-        reason: "Dangerous command",
-      });
-
-      expect(event.type).toBe("tool.rejected");
-      expect(event.payload.decision).toBe("rejected");
+    telemetry.emitRunEvent({
+      type: "run:blocked",
+      sessionId: "session-1",
+      runId: "run-4",
+      toolCallId: "tool-1",
+      toolName: "bash",
+      timestamp: new Date().toISOString(),
     });
 
-    it("should record compaction", () => {
-      const event = collector.recordCompactionCompleted({
-        sessionId: "session-1",
-        tokensBefore: 100000,
-        tokensAfter: 50000,
-        tokensSaved: 50000,
-        durationMs: 500,
-        entriesRemoved: 10,
-        success: true,
-      });
-
-      expect(event.type).toBe("compaction.completed");
-      expect(event.payload.tokensSaved).toBe(50000);
+    expect(runEvents.map((event) => event.type)).toEqual([
+      "run:started",
+      "run:completed",
+      "run:failed",
+      "run:cancelled",
+      "run:blocked",
+    ]);
+    expect(completedEvents).toHaveLength(1);
+    expect(completedEvents[0]).toMatchObject({
+      type: "run:completed",
+      sessionId: "session-1",
+      runId: "run-1",
+      responseLength: 128,
+      durationMs: 250,
+      tokenUsage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        totalTokens: 30,
+        cacheReadTokens: 5,
+      },
+      timestamp: "2024-01-01T00:00:00.250Z",
     });
-
-    it("should record subagent events", () => {
-      const spawned = collector.recordSubagentSpawned({
-        taskId: "task-1",
-        ownerId: "session-1",
-        writeScope: "shared",
-        background: false,
-      });
-
-      expect(spawned.type).toBe("subagent.spawned");
-
-      const completed = collector.recordSubagentCompleted({
-        taskId: "task-1",
-        ownerId: "session-1",
-        durationMs: 5000,
-        success: true,
-      });
-
-      expect(completed.type).toBe("subagent.completed");
-    });
-
-    it("should record MCP events", () => {
-      const connected = collector.recordMcpConnected({
-        serverId: "mcp-1",
-        serverName: "Test Server",
-        transport: "stdio",
-        durationMs: 200,
-      });
-
-      expect(connected.type).toBe("mcp.connected");
-
-      const error = collector.recordMcpError({
-        serverId: "mcp-1",
-        serverName: "Test Server",
-        error: "Connection refused",
-        recoverable: true,
-      });
-
-      expect(error.type).toBe("mcp.error");
+    expect(telemetry.getCounter("run:run:started")).toBe(1);
+    expect(telemetry.getCounter("run:run:completed")).toBe(1);
+    expect(telemetry.getCounter("run:run:failed")).toBe(1);
+    expect(telemetry.getCounter("run:run:cancelled")).toBe(1);
+    expect(telemetry.getCounter("run:run:blocked")).toBe(1);
+    expect(telemetry.getAllCounters()).toEqual({
+      "run:run:started": 1,
+      "run:run:completed": 1,
+      "run:run:failed": 1,
+      "run:run:cancelled": 1,
+      "run:run:blocked": 1,
     });
   });
 
-  describe("getEvents", () => {
-    beforeEach(() => {
-      collector.record("run.started", { runId: "run-1", sessionId: "s1" });
-      collector.record("tool.called", { runId: "run-1", sessionId: "s1", toolCallId: "tc-1", toolName: "bash" });
-      collector.record("run.completed", { runId: "run-1", sessionId: "s1", durationMs: 1000, toolCallCount: 1, success: true });
+  it("emits compaction, subagent, and MCP observation events across success and failure paths", () => {
+    const telemetry = new TelemetryService();
+    const compactionEvents: CompactionEvent[] = [];
+    const subagentEvents: SubAgentEvent[] = [];
+    const mcpEvents: McpConnectionEvent[] = [];
+
+    telemetry.on("compaction", (event) => {
+      compactionEvents.push(event as CompactionEvent);
+    });
+    telemetry.on("subagent", (event) => {
+      subagentEvents.push(event as SubAgentEvent);
+    });
+    telemetry.on("mcp", (event) => {
+      mcpEvents.push(event as McpConnectionEvent);
     });
 
-    it("should get all events", () => {
-      const events = collector.getEvents();
-      expect(events.length).toBe(3);
+    telemetry.emitCompactionEvent({
+      type: "compaction:requested",
+      sessionId: "session-1",
+      reason: "token budget exceeded",
+      currentMessageCount: 40,
+      currentTokenCount: 62000,
+      timestamp: new Date().toISOString(),
+    });
+    vi.advanceTimersByTime(10);
+    telemetry.emitCompactionEvent({
+      type: "compaction:started",
+      sessionId: "session-1",
+      timestamp: new Date().toISOString(),
+    });
+    vi.advanceTimersByTime(20);
+    telemetry.emitCompactionEvent({
+      type: "compaction:completed",
+      sessionId: "session-1",
+      tokensFreed: 12000,
+      messagesBefore: 40,
+      messagesAfter: 18,
+      durationMs: 20,
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitCompactionEvent({
+      type: "compaction:failed",
+      sessionId: "session-1",
+      error: "summarizer unavailable",
+      durationMs: 15,
+      timestamp: new Date().toISOString(),
     });
 
-    it("should filter by type", () => {
-      const events = collector.getEvents("run.started");
-      expect(events.length).toBe(1);
-      expect(events[0].type).toBe("run.started");
+    telemetry.emitSubAgentEvent({
+      type: "subagent:spawned",
+      sessionId: "session-1",
+      subAgentId: "subagent-1",
+      name: "research",
+      isolated: true,
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitSubAgentEvent({
+      type: "subagent:background",
+      sessionId: "session-1",
+      subAgentId: "subagent-1",
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitSubAgentEvent({
+      type: "subagent:foreground",
+      sessionId: "session-1",
+      subAgentId: "subagent-1",
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitSubAgentEvent({
+      type: "subagent:started",
+      sessionId: "session-1",
+      subAgentId: "subagent-1",
+      timestamp: new Date().toISOString(),
+    });
+    vi.advanceTimersByTime(75);
+    telemetry.emitSubAgentEvent({
+      type: "subagent:completed",
+      sessionId: "session-1",
+      subAgentId: "subagent-1",
+      durationMs: 75,
+      resultLength: 512,
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitSubAgentEvent({
+      type: "subagent:failed",
+      sessionId: "session-1",
+      subAgentId: "subagent-2",
+      error: "subagent crashed",
+      durationMs: 30,
+      timestamp: new Date().toISOString(),
     });
 
-    it("should limit results", () => {
-      const events = collector.getEvents(undefined, 2);
-      expect(events.length).toBe(2);
+    telemetry.emitMcpConnectionEvent({
+      type: "mcp:connected",
+      serverName: "filesystem",
+      serverType: "stdio",
+      transport: "stdio",
+      latencyMs: 12,
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitMcpConnectionEvent({
+      type: "mcp:disconnected",
+      serverName: "filesystem",
+      serverType: "stdio",
+      reason: "server shutdown",
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitMcpConnectionEvent({
+      type: "mcp:reconnecting",
+      serverName: "filesystem",
+      attemptNumber: 2,
+      maxAttempts: 5,
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitMcpConnectionEvent({
+      type: "mcp:auth_failed",
+      serverName: "filesystem",
+      authType: "oauth",
+      error: "invalid token",
+      timestamp: new Date().toISOString(),
+    });
+    telemetry.emitMcpConnectionEvent({
+      type: "mcp:error",
+      serverName: "filesystem",
+      error: "transport closed",
+      errorCode: "ECONNRESET",
+      timestamp: new Date().toISOString(),
+    });
+
+    expect(compactionEvents.map((event) => event.type)).toEqual([
+      "compaction:requested",
+      "compaction:started",
+      "compaction:completed",
+      "compaction:failed",
+    ]);
+    expect(subagentEvents.map((event) => event.type)).toEqual([
+      "subagent:spawned",
+      "subagent:background",
+      "subagent:foreground",
+      "subagent:started",
+      "subagent:completed",
+      "subagent:failed",
+    ]);
+    expect(mcpEvents.map((event) => event.type)).toEqual([
+      "mcp:connected",
+      "mcp:disconnected",
+      "mcp:reconnecting",
+      "mcp:auth_failed",
+      "mcp:error",
+    ]);
+    expect(telemetry.getAllCounters()).toMatchObject({
+      "compaction:compaction:requested": 1,
+      "compaction:compaction:started": 1,
+      "compaction:compaction:completed": 1,
+      "compaction:compaction:failed": 1,
+      "subagent:subagent:spawned": 1,
+      "subagent:subagent:background": 1,
+      "subagent:subagent:foreground": 1,
+      "subagent:subagent:started": 1,
+      "subagent:subagent:completed": 1,
+      "subagent:subagent:failed": 1,
+      "mcp:mcp:connected": 1,
+      "mcp:mcp:disconnected": 1,
+      "mcp:mcp:reconnecting": 1,
+      "mcp:mcp:auth_failed": 1,
+      "mcp:mcp:error": 1,
     });
   });
 
-  describe("getRunEvents", () => {
-    beforeEach(() => {
-      collector.record("run.started", { runId: "run-1", sessionId: "s1" });
-      collector.record("tool.called", { runId: "run-1", sessionId: "s1", toolCallId: "tc-1", toolName: "bash" });
-      collector.record("run.completed", { runId: "run-2", sessionId: "s1", durationMs: 1000, toolCallCount: 0, success: true });
+  it("clears listeners and counters", () => {
+    const telemetry = new TelemetryService();
+    const runEvents: RunEvent[] = [];
+
+    telemetry.on("run", (event) => {
+      runEvents.push(event as RunEvent);
     });
 
-    it("should get events for specific run", () => {
-      const events = collector.getRunEvents("run-1");
-      expect(events.length).toBe(2);
-    });
-  });
-
-  describe("metrics", () => {
-    beforeEach(() => {
-      collector.recordRunStarted({ runId: "run-1", sessionId: "s1", trigger: "user" });
+    telemetry.emitRunEvent({
+      type: "run:started",
+      sessionId: "session-1",
+      runId: "run-1",
+      prompt: "Start",
+      timestamp: new Date().toISOString(),
     });
 
-    it("should track run metrics", () => {
-      const metrics = collector.getRunMetrics("run-1");
+    telemetry.clear();
 
-      expect(metrics).toBeDefined();
-      expect(metrics!.runId).toBe("run-1");
-      expect(metrics!.sessionId).toBe("s1");
-      expect(metrics!.toolCallCount).toBe(0);
+    expect(telemetry.getAllCounters()).toEqual({});
+
+    telemetry.emitRunEvent({
+      type: "run:completed",
+      sessionId: "session-1",
+      runId: "run-1",
+      responseLength: 20,
+      durationMs: 10,
+      timestamp: new Date().toISOString(),
     });
 
-    it("should update metrics on tool calls", () => {
-      collector.recordToolCalled({
-        runId: "run-1",
-        sessionId: "s1",
-        toolCallId: "tc-1",
-        toolName: "bash",
-      });
-
-      const metrics = collector.getRunMetrics("run-1");
-      expect(metrics!.toolCallCount).toBe(1);
+    expect(runEvents).toHaveLength(1);
+    expect(runEvents[0]).toMatchObject({
+      type: "run:started",
+      sessionId: "session-1",
+      runId: "run-1",
     });
-
-    it("should track tool approval/rejection", () => {
-      collector.recordToolCalled({ runId: "run-1", sessionId: "s1", toolCallId: "tc-1", toolName: "bash" });
-      collector.recordToolApproved({ runId: "run-1", sessionId: "s1", toolCallId: "tc-1", toolName: "bash", decision: "approved", decisionSource: "user" });
-      collector.recordToolCalled({ runId: "run-1", sessionId: "s1", toolCallId: "tc-2", toolName: "edit" });
-      collector.recordToolRejected({ runId: "run-1", sessionId: "s1", toolCallId: "tc-2", toolName: "edit", decision: "rejected", decisionSource: "rule" });
-
-      const metrics = collector.getRunMetrics("run-1");
-      expect(metrics!.toolApprovalCount).toBe(1);
-      expect(metrics!.toolRejectionCount).toBe(1);
-    });
-
-    it("should get tool metrics", () => {
-      collector.recordToolCalled({ runId: "run-1", sessionId: "s1", toolCallId: "tc-1", toolName: "bash" });
-      collector.recordToolCalled({ runId: "run-1", sessionId: "s1", toolCallId: "tc-2", toolName: "bash" });
-
-      const toolMetrics = collector.getToolMetrics("bash");
-      expect(toolMetrics).toBeDefined();
-      expect(toolMetrics!.callCount).toBe(2);
-    });
-
-    it("should get all run metrics", () => {
-      collector.recordRunStarted({ runId: "run-2", sessionId: "s1", trigger: "retry" });
-
-      const allMetrics = collector.getAllRunMetrics();
-      expect(allMetrics.length).toBe(2);
-    });
-  });
-
-  describe("clearOlderThan", () => {
-    it("should clear old events", () => {
-      collector.record("run.started", { runId: "run-1", sessionId: "s1" });
-
-      const cleared = collector.clearOlderThan(0);
-      expect(cleared).toBe(1);
-      expect(collector.getEvents()).toHaveLength(0);
-    });
-  });
-
-  describe("singleton", () => {
-    it("should get global collector", () => {
-      const collector1 = getTelemetryCollector();
-      expect(collector1).toBeDefined();
-
-      const collector2 = getTelemetryCollector();
-      expect(collector1).toBe(collector2);
-    });
-
-    it("should set global collector", () => {
-      const custom = new TelemetryCollector();
-      setTelemetryCollector(custom);
-
-      expect(getTelemetryCollector()).toBe(custom);
+    expect(telemetry.getAllCounters()).toEqual({
+      "run:run:completed": 1,
     });
   });
 });

@@ -26,6 +26,11 @@ export type PermissionSource =
 	| "hook"; // Hook 批准
 
 /**
+ * 权限裁决结果
+ */
+export type PermissionDecision = "approved" | "rejected";
+
+/**
  * 工具调用状态
  */
 export type ToolCallStatus = "pending" | "approved" | "rejected" | "failed" | "skipped";
@@ -84,10 +89,16 @@ export interface PermissionAuditEntry {
 	id: string;
 	/** 会话 ID */
 	sessionId: string;
+	/** Run ID */
+	runId: string;
+	/** 工具调用 ID */
+	toolCallId: string;
 	/** 工具名称 */
 	toolName: string;
 	/** 裁决来源 */
 	source: PermissionSource;
+	/** 裁决结果 */
+	decision: PermissionDecision;
 	/** 是否批准 */
 	approved: boolean;
 	/** 用户确认（如果是手动裁决） */
@@ -235,9 +246,11 @@ export class AuditLogService {
 	 */
 	recordPermission(
 		sessionId: string,
+		runId: string,
+		toolCallId: string,
 		toolName: string,
 		source: PermissionSource,
-		approved: boolean,
+		decision: PermissionDecision,
 		options?: {
 			userConfirmed?: boolean;
 			promptMatch?: string;
@@ -249,9 +262,12 @@ export class AuditLogService {
 		const entry: PermissionAuditEntry = {
 			id,
 			sessionId,
+			runId,
+			toolCallId,
 			toolName,
 			source,
-			approved,
+			decision,
+			approved: decision === "approved",
 			userConfirmed: options?.userConfirmed,
 			promptMatch: options?.promptMatch,
 			timestamp: nowIso(),
@@ -497,12 +513,14 @@ export function recordToolComplete(
  */
 export function recordPermissionDecision(
 	sessionId: string,
+	runId: string,
+	toolCallId: string,
 	toolName: string,
 	source: PermissionSource,
-	approved: boolean,
+	decision: PermissionDecision,
 	options?: { userConfirmed?: boolean; promptMatch?: string },
 ): string {
-	return getGlobalAuditLog().recordPermission(sessionId, toolName, source, approved, options);
+	return getGlobalAuditLog().recordPermission(sessionId, runId, toolCallId, toolName, source, decision, options);
 }
 
 /**

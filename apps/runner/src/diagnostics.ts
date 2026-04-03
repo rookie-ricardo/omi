@@ -8,9 +8,19 @@
  * - 健康检查接口
  */
 
-import { createEventBus, type EventBusController } from "@omi/agent/event-bus";
-import { getGlobalTelemetry, type TelemetryService } from "@omi/agent/telemetry";
-import { getGlobalAuditLog, type AuditLogService } from "@omi/agent/audit-log";
+import {
+	createEventBus,
+	type EventBusController,
+} from "../../../packages/agent/src/event-bus";
+import {
+	getGlobalAuditLog,
+	type AuditLogService,
+} from "../../../packages/agent/src/audit-log";
+import {
+	getGlobalTelemetry,
+	type McpConnectionEvent,
+	type TelemetryService,
+} from "../../../packages/agent/src/telemetry";
 
 // ============================================================================
 // Types
@@ -65,7 +75,7 @@ export interface McpServerDiagnostics {
 /**
  * MCP 服务器状态
  */
-export type McpServerStatus = "connecting" | "connected" | "disconnected" | "error" | "reconnecting";
+export type McpServerStatus = "connecting" | "connected" | "disconnected" | "reconnecting" | "auth_failed" | "error";
 
 /**
  * Provider 诊断信息
@@ -204,22 +214,10 @@ export class DiagnosticsService {
 	 * 更新 MCP 服务器状态
 	 */
 	updateMcpServerStatus(serverName: string, status: McpServerStatus, error?: string): void {
-		const server = this.mcpServers.get(serverName);
-		if (server) {
-			server.status = status;
-			server.lastActivity = new Date().toISOString();
-			if (error) {
-				server.lastError = error;
-				server.errorCount++;
-			}
-			if (status === "connected") {
-				server.connectedAt = new Date().toISOString();
-			}
-			if (status === "reconnecting") {
-				server.reconnectCount++;
-			}
-			this.emitEvent("mcp:server_status_changed", { serverName, status });
-		}
+		this.applyMcpServerStatus(serverName, status, {
+			error,
+			timestamp: new Date().toISOString(),
+		});
 	}
 
 	/**
@@ -278,7 +276,7 @@ export class DiagnosticsService {
 	 * 获取活跃 Runs
 	 */
 	getActiveRuns(): RunDiagnostics[] {
-		return this.runs.values().filter((run) => run.status === "running" || run.status === "blocked");
+		return [...this.runs.values()].filter((run) => run.status === "running" || run.status === "blocked");
 	}
 
 	/**
@@ -333,7 +331,7 @@ export class DiagnosticsService {
 		const checks: HealthCheck[] = [];
 
 		// 检查 Runs
-		const failedRuns = this.runs.values().filter((run) => run.status === "failed");
+		const failedRuns = [...this.runs.values()].filter((run) => run.status === "failed");
 		checks.push({
 			name: "runs",
 			status: failedRuns.length > 0 ? "warn" : "pass",
@@ -345,7 +343,7 @@ export class DiagnosticsService {
 		});
 
 		// 检查 MCP 服务器
-		const disconnectedMcpServers = this.mcpServers.values().filter((server) => server.status !== "connected");
+		const disconnectedMcpServers = [...this.mcpServers.values()].filter((server) => server.status !== "connected");
 		checks.push({
 			name: "mcp_servers",
 			status: disconnectedMcpServers.length > 0 ? "warn" : "pass",
@@ -357,7 +355,7 @@ export class DiagnosticsService {
 		});
 
 		// 检查 Providers
-		const errorProviders = this.providers.values().filter((provider) => provider.status === "error");
+		const errorProviders = [...this.providers.values()].filter((provider) => provider.status === "error");
 		checks.push({
 			name: "providers",
 			status: errorProviders.length > 0 ? "fail" : "pass",
@@ -431,14 +429,86 @@ export class DiagnosticsService {
 		});
 
 		this.telemetry.on("mcp", (event: unknown) => {
-			const mcpEvent = event as { serverName: string; type: string };
-			if (mcpEvent.type === "mcp:connected" || mcpEvent.type === "mcp:disconnected") {
-				this.updateMcpServerStatus(
-					mcpEvent.serverName,
-					mcpEvent.type === "mcp:connected" ? "connected" : "disconnected",
-				);
-			}
+			this.handleMcpTelemetryEvent(event as McpConnectionEvent);
 		});
+	}
+
+	private applyMcpServerStatus(
+		serverName: string,
+		status: McpServerStatus,
+		options: {
+			error?: string;
+			timestamp: string;
+			latencyMs?: number;
+		},
+	): void {
+		const server = this.mcpServers.get(serverName);
+		if (!server) {
+			return;
+		}
+
+		server.status = status;
+		server.lastActivity = options.timestamp;
+
+		if (status === "connected") {
+			server.connectedAt = options.timestamp;
+		}
+
+		if (status === "reconnecting") {
+			server.reconnectCount++;
+		}
+
+		if (status === "auth_failed" || status === "error" || options.error) {
+			if (options.error) {
+				server.lastError = options.error;
+			}
+			if (status === "auth_failed" || status === "error") {
+				server.errorCount++;
+			}
+		}
+
+		if (options.latencyMs !== undefined) {
+			server.latencyMs = options.latencyMs;
+		}
+
+		this.emitEvent("mcp:server_status_changed", {
+			serverName,
+			status,
+		});
+	}
+
+	private handleMcpTelemetryEvent(event: McpConnectionEvent): void {
+		switch (event.type) {
+			case "mcp:connected":
+				this.applyMcpServerStatus(event.serverName, "connected", {
+					timestamp: event.timestamp,
+					latencyMs: event.latencyMs,
+				});
+				return;
+			case "mcp:disconnected":
+				this.applyMcpServerStatus(event.serverName, "disconnected", {
+					timestamp: event.timestamp,
+					error: event.reason,
+				});
+				return;
+			case "mcp:reconnecting":
+				this.applyMcpServerStatus(event.serverName, "reconnecting", {
+					timestamp: event.timestamp,
+				});
+				return;
+			case "mcp:auth_failed":
+				this.applyMcpServerStatus(event.serverName, "auth_failed", {
+					timestamp: event.timestamp,
+					error: event.error,
+				});
+				return;
+			case "mcp:error":
+				this.applyMcpServerStatus(event.serverName, "error", {
+					timestamp: event.timestamp,
+					error: event.error,
+				});
+				return;
+		}
 	}
 }
 
