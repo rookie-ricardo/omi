@@ -312,6 +312,60 @@ export const resultSchemas = {
   "tool.list": toolListResultSchema,
   "extension.list": extensionListResultSchema,
   "model.list": modelListResultSchema,
+  get "session.branch.create"() {
+    return sessionBranchCreateResultSchema;
+  },
+  get "session.branch.list"() {
+    return sessionBranchListResultSchema;
+  },
+  get "session.branch.switch"() {
+    return sessionBranchSwitchResultSchema;
+  },
+  get "session.mode.enter"() {
+    return sessionModeEnterResultSchema;
+  },
+  get "session.mode.exit"() {
+    return sessionModeExitResultSchema;
+  },
+  get "permission.rule.list"() {
+    return permissionRuleListResultSchema;
+  },
+  get "permission.rule.add"() {
+    return permissionRuleAddResultSchema;
+  },
+  get "permission.rule.delete"() {
+    return permissionRuleDeleteResultSchema;
+  },
+  get "mcp.server.list"() {
+    return mcpServerListResultSchema;
+  },
+  get "mcp.server.connect"() {
+    return mcpServerConnectResultSchema;
+  },
+  get "mcp.server.disconnect"() {
+    return mcpServerDisconnectResultSchema;
+  },
+  get "agent.spawn"() {
+    return agentSpawnResultSchema;
+  },
+  get "agent.send"() {
+    return agentSendResultSchema;
+  },
+  get "agent.wait"() {
+    return agentWaitResultSchema;
+  },
+  get "agent.close"() {
+    return agentCloseResultSchema;
+  },
+  get "run.state.get"() {
+    return runStateGetResultSchema;
+  },
+  get "run.events.subscribe"() {
+    return runEventsSubscribeResultSchema;
+  },
+  get "skill.refresh"() {
+    return skillRefreshResultSchema;
+  },
 } as const;
 
 // Branch schemas
@@ -460,6 +514,22 @@ export const runStateSchema = z.object({
 
 export const runStateGetResultSchema = z.object({
   run: runStateSchema,
+});
+
+export const runEventsSubscribeResultSchema = z.object({
+  runId: z.string(),
+  subscriptionId: z.string(),
+  events: z.array(z.string()),
+});
+
+export const agentSendResultSchema = z.object({
+  subAgentId: z.string(),
+  sent: z.boolean(),
+});
+
+export const agentCloseResultSchema = z.object({
+  subAgentId: z.string(),
+  closed: z.boolean(),
 });
 
 export const eventSchemas = {
@@ -627,11 +697,20 @@ export type McpServerDisconnectResult = z.infer<typeof mcpServerDisconnectResult
 // Subagent types
 export type SubagentTask = z.infer<typeof subagentTaskSchema>;
 export type AgentSpawnResult = z.infer<typeof agentSpawnResultSchema>;
+export type AgentSendResult = z.infer<typeof agentSendResultSchema>;
 export type AgentWaitResult = z.infer<typeof agentWaitResultSchema>;
+export type AgentCloseResult = z.infer<typeof agentCloseResultSchema>;
 
 // Run state types
 export type RunState = z.infer<typeof runStateSchema>;
 export type RunStateGetResult = z.infer<typeof runStateGetResultSchema>;
+export type RunEventsSubscribeResult = z.infer<typeof runEventsSubscribeResultSchema>;
+
+export const skillRefreshResultSchema = z.object({
+  refreshedAt: z.string(),
+  skills: z.array(z.any()),
+});
+export type SkillRefreshResult = z.infer<typeof skillRefreshResultSchema>;
 
 export type RunnerCommandName = keyof typeof commandMap;
 export type RunnerEventName = keyof typeof eventSchemas;

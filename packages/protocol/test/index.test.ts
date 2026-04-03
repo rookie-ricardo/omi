@@ -244,4 +244,163 @@ describe("protocol", () => {
 
     expect(compacted.summary.goal).toBe("summary");
   });
+
+  it("parses control plane result payloads", () => {
+    const branch = parseResult("session.branch.create", {
+      sessionId: "session_1",
+      branch: {
+        id: "branch_1",
+        name: "feature",
+        sessionId: "session_1",
+        parentEntryId: null,
+        createdAt: "2025-03-30T00:00:00.000Z",
+        isActive: true,
+      },
+    });
+    expect(branch.branch.isActive).toBe(true);
+
+    const branches = parseResult("session.branch.list", {
+      sessionId: "session_1",
+      branches: [branch.branch],
+    });
+    expect(branches.branches).toHaveLength(1);
+
+    const switched = parseResult("session.branch.switch", {
+      sessionId: "session_1",
+      branch: branch.branch,
+      previousBranchId: "branch_main",
+    });
+    expect(switched.previousBranchId).toBe("branch_main");
+
+    const modeEntered = parseResult("session.mode.enter", {
+      sessionId: "session_1",
+      mode: {
+        sessionId: "session_1",
+        mode: "plan",
+        status: "planning",
+        enteredAt: "2025-03-30T00:00:00.000Z",
+        summary: null,
+      },
+    });
+    expect(modeEntered.mode.mode).toBe("plan");
+
+    const modeExited = parseResult("session.mode.exit", {
+      sessionId: "session_1",
+      previousMode: modeEntered.mode,
+      discarded: false,
+    });
+    expect(modeExited.discarded).toBe(false);
+
+    const runState = parseResult("run.state.get", {
+      run: {
+        runId: "run_1",
+        sessionId: "session_1",
+        status: "running",
+        startedAt: "2025-03-30T00:00:00.000Z",
+        currentToolCallId: null,
+        pendingApprovalToolCallIds: [],
+        error: null,
+        checkpoints: [
+          {
+            id: "ckpt_1",
+            createdAt: "2025-03-30T00:00:00.000Z",
+            summary: "checkpoint",
+          },
+        ],
+      },
+    });
+    expect(runState.run.checkpoints).toHaveLength(1);
+
+    const runSubscription = parseResult("run.events.subscribe", {
+      runId: "run_1",
+      subscriptionId: "sub_1",
+      events: ["run.completed", "run.failed"],
+    });
+    expect(runSubscription.subscriptionId).toBe("sub_1");
+
+    const refreshedSkills = parseResult("skill.refresh", {
+      refreshedAt: "2025-03-30T00:00:00.000Z",
+      skills: [],
+    });
+    expect(refreshedSkills.skills).toEqual([]);
+
+    const permissionList = parseResult("permission.rule.list", {
+      sessionId: "session_1",
+      rules: [
+        {
+          id: "rule_1",
+          name: "Allow read",
+          toolPattern: "read",
+          action: "allow",
+          priority: 10,
+          createdAt: "2025-03-30T00:00:00.000Z",
+          updatedAt: "2025-03-30T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(permissionList.rules[0]?.action).toBe("allow");
+
+    const mcpList = parseResult("mcp.server.list", {
+      servers: [
+        {
+          id: "server_1",
+          name: "server_1",
+          command: "",
+          args: [],
+          status: "connected",
+          error: null,
+          tools: [],
+          resources: [],
+        },
+      ],
+    });
+    expect(mcpList.servers[0]?.status).toBe("connected");
+
+    const spawn = parseResult("agent.spawn", {
+      task: {
+        id: "agent_1",
+        name: "agent_1",
+        ownerId: "main",
+        status: "pending",
+        writeScope: "shared",
+        progress: 0,
+        createdAt: "2025-03-30T00:00:00.000Z",
+        startedAt: null,
+        completedAt: null,
+        output: null,
+        error: null,
+      },
+    });
+    expect(spawn.task.id).toBe("agent_1");
+
+    const waited = parseResult("agent.wait", {
+      task: {
+        id: "agent_1",
+        name: "agent_1",
+        ownerId: "main",
+        status: "completed",
+        writeScope: "shared",
+        progress: 100,
+        createdAt: "2025-03-30T00:00:00.000Z",
+        startedAt: "2025-03-30T00:00:00.000Z",
+        completedAt: "2025-03-30T00:00:00.000Z",
+        output: "done",
+        error: null,
+      },
+      timedOut: false,
+    });
+    expect(waited.timedOut).toBe(false);
+
+    const agentSend = parseResult("agent.send", {
+      subAgentId: "agent_1",
+      sent: true,
+    });
+    expect(agentSend.sent).toBe(true);
+
+    const agentClose = parseResult("agent.close", {
+      subAgentId: "agent_1",
+      closed: true,
+    });
+    expect(agentClose.closed).toBe(true);
+  });
 });

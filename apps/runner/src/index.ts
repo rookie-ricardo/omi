@@ -4,7 +4,7 @@ import { AppOrchestrator } from "@omi/agent";
 import { createAppDatabase } from "@omi/store";
 import { createId } from "@omi/core";
 import { type RpcRequest, rpcRequestSchema } from "@omi/protocol";
-import { getLogger } from "@omi/agent/logger";
+import { getLogger } from "@omi/agent";
 
 import { normalizeResult } from "./protocol";
 import { handleRunnerRequest } from "./request-handler";

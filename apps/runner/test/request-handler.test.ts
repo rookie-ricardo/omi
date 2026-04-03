@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionRuntimeState } from "@omi/agent";
-import type { Run } from "@omi/core";
+import type { SessionBranch as CoreSessionBranch, Run } from "@omi/core";
 import type { CompactionSummaryDocument } from "@omi/memory";
 import { parseResult } from "@omi/protocol";
 
@@ -9,7 +9,7 @@ import { normalizeResult } from "../src/protocol";
 import { handleRunnerRequest } from "../src/request-handler";
 
 describe("runner request handler", () => {
-  it("returns schema-shaped payloads for runtime, pending, and switch requests", async () => {
+  it("returns structured payloads for runtime, branches, run state, and mode control", async () => {
     const runtimeState: SessionRuntimeState = {
       sessionId: "session_1",
       activeRunId: null,
@@ -34,6 +34,42 @@ describe("runner request handler", () => {
       },
     };
 
+    const mainBranch: CoreSessionBranch = {
+      id: "branch_main",
+      sessionId: "session_1",
+      headEntryId: null,
+      title: "main",
+      createdAt: "2025-03-30T00:00:00.000Z",
+      updatedAt: "2025-03-30T00:00:00.000Z",
+    };
+
+    const featureBranch: CoreSessionBranch = {
+      id: "branch_feature",
+      sessionId: "session_1",
+      headEntryId: "hist_1",
+      title: "feature",
+      createdAt: "2025-03-30T00:00:00.000Z",
+      updatedAt: "2025-03-30T00:00:00.000Z",
+    };
+
+    let activeBranchId = "branch_main";
+
+    const runStateRun: Run = {
+      id: "run_1",
+      sessionId: "session_1",
+      taskId: null,
+      status: "running",
+      provider: "anthropic",
+      prompt: "Inspect the repo",
+      sourceRunId: null,
+      recoveryMode: "start",
+      originRunId: null,
+      resumeFromCheckpoint: null,
+      terminalReason: null,
+      createdAt: "2025-03-30T00:00:00.000Z",
+      updatedAt: "2025-03-30T00:00:00.000Z",
+    };
+
     const orchestrator = {
       createSession: vi.fn(),
       listSessions: vi.fn(),
@@ -43,7 +79,7 @@ describe("runner request handler", () => {
         sessionId: "session_1",
         historyEntries: [],
       })),
-      listSkills: vi.fn(),
+      listSkills: vi.fn(async () => []),
       searchSkills: vi.fn(),
       listTasks: vi.fn(),
       updateTask: vi.fn(),
@@ -111,6 +147,35 @@ describe("runner request handler", () => {
       }),
       listExtensions: vi.fn(),
       listModels: vi.fn(),
+      database: {
+        getRun: vi.fn((runId: string) => (runId === "run_1" ? runStateRun : null)),
+        listCheckpoints: vi.fn(() => [
+          {
+            id: "ckpt_1",
+            createdAt: "2025-03-30T00:00:00.000Z",
+            summary: "checkpoint",
+          },
+        ]),
+      },
+      sessionManager: {
+        createBranch: vi.fn((sessionId: string, title: string, fromEntryId: string | null) => {
+          activeBranchId = "branch_feature";
+          return {
+            id: "branch_feature",
+            sessionId,
+            headEntryId: fromEntryId,
+            title,
+            createdAt: "2025-03-30T00:00:00.000Z",
+            updatedAt: "2025-03-30T00:00:00.000Z",
+          };
+        }),
+        listBranches: vi.fn(() => [mainBranch, featureBranch]),
+        switchBranch: vi.fn((sessionId: string, branchId: string) => {
+          activeBranchId = branchId;
+          return branchId === "branch_main" ? mainBranch : featureBranch;
+        }),
+        getActiveBranchId: vi.fn(() => activeBranchId),
+      },
     };
 
     const runtimeResponse = await handleRunnerRequest(orchestrator, {
@@ -122,12 +187,194 @@ describe("runner request handler", () => {
       sessionId: "session_1",
       runtime: runtimeState,
     });
-    expect(
-      normalizeResult("session.runtime.get", runtimeResponse),
-    ).toEqual(parseResult("session.runtime.get", runtimeResponse));
+    expect(normalizeResult("session.runtime.get", runtimeResponse)).toEqual(
+      parseResult("session.runtime.get", runtimeResponse),
+    );
+
+    const createdBranchResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_2",
+      method: "session.branch.create",
+      params: {
+        sessionId: "session_1",
+        branchName: "feature",
+        fromEntryId: "hist_1",
+      },
+    });
+    expect(createdBranchResponse).toEqual({
+      sessionId: "session_1",
+      branch: {
+        id: "branch_feature",
+        name: "feature",
+        sessionId: "session_1",
+        parentEntryId: "hist_1",
+        createdAt: "2025-03-30T00:00:00.000Z",
+        isActive: true,
+      },
+    });
+    expect(normalizeResult("session.branch.create", createdBranchResponse)).toEqual(
+      parseResult("session.branch.create", createdBranchResponse),
+    );
+
+    const listedBranchesResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_3",
+      method: "session.branch.list",
+      params: {
+        sessionId: "session_1",
+      },
+    });
+    expect(listedBranchesResponse).toEqual({
+      sessionId: "session_1",
+      branches: [
+        {
+          id: "branch_main",
+          name: "main",
+          sessionId: "session_1",
+          parentEntryId: null,
+          createdAt: "2025-03-30T00:00:00.000Z",
+          isActive: false,
+        },
+        {
+          id: "branch_feature",
+          name: "feature",
+          sessionId: "session_1",
+          parentEntryId: "hist_1",
+          createdAt: "2025-03-30T00:00:00.000Z",
+          isActive: true,
+        },
+      ],
+    });
+    expect(normalizeResult("session.branch.list", listedBranchesResponse)).toEqual(
+      parseResult("session.branch.list", listedBranchesResponse),
+    );
+
+    const switchedBranchResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_4",
+      method: "session.branch.switch",
+      params: {
+        sessionId: "session_1",
+        branchId: "branch_main",
+      },
+    });
+    expect(switchedBranchResponse).toEqual({
+      sessionId: "session_1",
+      branch: {
+        id: "branch_main",
+        name: "main",
+        sessionId: "session_1",
+        parentEntryId: null,
+        createdAt: "2025-03-30T00:00:00.000Z",
+        isActive: true,
+      },
+      previousBranchId: "branch_feature",
+    });
+    expect(normalizeResult("session.branch.switch", switchedBranchResponse)).toEqual(
+      parseResult("session.branch.switch", switchedBranchResponse),
+    );
+
+    const runStateResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_5",
+      method: "run.state.get",
+      params: {
+        runId: "run_1",
+      },
+    });
+    expect(runStateResponse).toEqual({
+      run: {
+        runId: "run_1",
+        sessionId: "session_1",
+        status: "running",
+        startedAt: "2025-03-30T00:00:00.000Z",
+        currentToolCallId: null,
+        pendingApprovalToolCallIds: [],
+        error: null,
+        checkpoints: [
+          {
+            id: "ckpt_1",
+            createdAt: "2025-03-30T00:00:00.000Z",
+            summary: "checkpoint",
+          },
+        ],
+      },
+    });
+    expect(normalizeResult("run.state.get", runStateResponse)).toEqual(
+      parseResult("run.state.get", runStateResponse),
+    );
+
+    const runEventsResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_5b",
+      method: "run.events.subscribe",
+      params: {
+        runId: "run_1",
+        events: ["run.completed", "run.failed"],
+      },
+    });
+    expect(runEventsResponse).toEqual({
+      runId: "run_1",
+      subscriptionId: expect.any(String),
+      events: ["run.completed", "run.failed"],
+    });
+    expect(normalizeResult("run.events.subscribe", runEventsResponse)).toEqual(
+      parseResult("run.events.subscribe", runEventsResponse),
+    );
+
+    const refreshedSkillsResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_5c",
+      method: "skill.refresh",
+      params: {},
+    });
+    expect(refreshedSkillsResponse).toEqual({
+      refreshedAt: expect.any(String),
+      skills: [],
+    });
+    expect(normalizeResult("skill.refresh", refreshedSkillsResponse)).toEqual(
+      parseResult("skill.refresh", refreshedSkillsResponse),
+    );
+
+    const enteredModeResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_6",
+      method: "session.mode.enter",
+      params: {
+        sessionId: "session_1",
+        mode: "plan",
+        config: { summary: "plan" },
+      },
+    });
+    expect(enteredModeResponse).toEqual({
+      sessionId: "session_1",
+      mode: {
+        sessionId: "session_1",
+        mode: "plan",
+        status: "planning",
+        enteredAt: expect.any(String),
+        summary: "plan",
+      },
+    });
+    expect(normalizeResult("session.mode.enter", enteredModeResponse)).toEqual(
+      parseResult("session.mode.enter", enteredModeResponse),
+    );
+
+    const exitedModeResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_7",
+      method: "session.mode.exit",
+      params: {
+        sessionId: "session_1",
+        discard: false,
+      },
+    });
+    expect(exitedModeResponse).toEqual({
+      sessionId: "session_1",
+      previousMode: expect.objectContaining({
+        sessionId: "session_1",
+        mode: "plan",
+      }),
+      discarded: false,
+    });
+    expect(normalizeResult("session.mode.exit", exitedModeResponse)).toEqual(
+      parseResult("session.mode.exit", exitedModeResponse),
+    );
 
     const pendingResponse = await handleRunnerRequest(orchestrator, {
-      id: "rpc_2",
+      id: "rpc_8",
       method: "tool.pending.list",
       params: { sessionId: "session_1" },
     });
@@ -136,12 +383,12 @@ describe("runner request handler", () => {
       runtime: runtimeState,
       pendingToolCalls: [],
     });
-    expect(
-      normalizeResult("tool.pending.list", pendingResponse),
-    ).toEqual(parseResult("tool.pending.list", pendingResponse));
+    expect(normalizeResult("tool.pending.list", pendingResponse)).toEqual(
+      parseResult("tool.pending.list", pendingResponse),
+    );
 
     const switchedResponse = await handleRunnerRequest(orchestrator, {
-      id: "rpc_3",
+      id: "rpc_9",
       method: "session.model.switch",
       params: {
         sessionId: "session_1",
@@ -152,12 +399,12 @@ describe("runner request handler", () => {
       sessionId: "session_1",
       runtime: runtimeState,
     });
-    expect(
-      normalizeResult("session.model.switch", switchedResponse),
-    ).toEqual(parseResult("session.model.switch", switchedResponse));
+    expect(normalizeResult("session.model.switch", switchedResponse)).toEqual(
+      parseResult("session.model.switch", switchedResponse),
+    );
 
     const compactedResponse = await handleRunnerRequest(orchestrator, {
-      id: "rpc_4",
+      id: "rpc_10",
       method: "session.compact",
       params: {
         sessionId: "session_1",
@@ -181,12 +428,12 @@ describe("runner request handler", () => {
       },
       compactedAt: "2025-03-30T00:00:00.000Z",
     });
-    expect(
-      normalizeResult("session.compact", compactedResponse),
-    ).toEqual(parseResult("session.compact", compactedResponse));
+    expect(normalizeResult("session.compact", compactedResponse)).toEqual(
+      parseResult("session.compact", compactedResponse),
+    );
 
     const historyResponse = await handleRunnerRequest(orchestrator, {
-      id: "rpc_5",
+      id: "rpc_11",
       method: "session.history.list",
       params: {
         sessionId: "session_1",
@@ -196,12 +443,12 @@ describe("runner request handler", () => {
       sessionId: "session_1",
       historyEntries: [],
     });
-    expect(
-      normalizeResult("session.history.list", historyResponse),
-    ).toEqual(parseResult("session.history.list", historyResponse));
+    expect(normalizeResult("session.history.list", historyResponse)).toEqual(
+      parseResult("session.history.list", historyResponse),
+    );
 
     const continuedResponse = await handleRunnerRequest(orchestrator, {
-      id: "rpc_6",
+      id: "rpc_12",
       method: "session.history.continue",
       params: {
         sessionId: "session_1",
@@ -216,8 +463,8 @@ describe("runner request handler", () => {
       sessionId: "session_1",
       status: "queued",
     });
-    expect(
-      normalizeResult("session.history.continue", continuedResponse),
-    ).toEqual(parseResult("session.history.continue", continuedResponse));
+    expect(normalizeResult("session.history.continue", continuedResponse)).toEqual(
+      parseResult("session.history.continue", continuedResponse),
+    );
   });
 });
