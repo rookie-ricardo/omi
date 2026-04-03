@@ -2,7 +2,7 @@ export * from "./agent-session";
 export * from "./orchestrator";
 export * from "./session-manager";
 export * from "./resource-loader";
-export * from "./skills";
+export * from "./skills/index.js";
 export * from "./vcs";
 export * from "./event-bus";
 export * from "./bash-executor";

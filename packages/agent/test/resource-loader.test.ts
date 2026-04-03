@@ -72,10 +72,13 @@ describe("resource loader", () => {
     expect(contextFiles[2]?.content).toContain("Parent workspace context.");
 
     const skills = await loader.listSkills();
-    expect(skills).toHaveLength(2);
+    expect(skills).toHaveLength(3);
     expect(skills[0]?.name).toBe("Git Inspector");
+    expect(skills[0]?.source.client).toBe("claude");
     expect(skills[1]?.name).toBe("Repo Review");
     expect(skills[1]?.source.client).toBe("agent");
+    expect(skills[2]?.name).toBe("Repo Review");
+    expect(skills[2]?.source.client).toBe("agent");
 
     const matches = await loader.searchSkills("show me git diff");
     expect(matches[0]?.name).toBe("Git Inspector");

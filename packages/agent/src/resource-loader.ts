@@ -6,7 +6,7 @@ import { loadExtensions } from "@omi/extensions";
 import type { ExtensionDefinition } from "@omi/extensions";
 import { buildSystemPrompt, loadProjectContextFiles, type ProjectContextFile } from "@omi/prompt";
 
-import { listSkills, resolveSkillForPrompt, searchSkills } from "./skills";
+import { listSkills, resolveSkillForPrompt, searchSkills } from "./skills/index.js";
 
 export interface ResourceCatalog<T> {
   items: T[];

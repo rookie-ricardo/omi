@@ -22,20 +22,25 @@ describe("skills", () => {
       join(homeRoot, ".claude", "skills", "review"),
       "Repo Review",
       "Review repositories carefully.",
-      "allowed-tools: read grep",
+      "allowed_tools:\n  - read\n  - grep",
     );
     writeSkill(
       join(workspaceRoot, ".agent", "skills", "review"),
       "Repo Review",
       "Review this workspace with stronger instructions.",
-      "allowed-tools: read bash",
+      "allowed_tools:\n  - read\n  - bash",
     );
 
     const skills = await listSkills(workspaceRoot);
-    expect(skills).toHaveLength(1);
-    expect(skills[0]?.source.scope).toBe("workspace");
-    expect(skills[0]?.source.client).toBe("agent");
-    expect(skills[0]?.allowedTools).toEqual(["read", "bash"]);
+    expect(skills).toHaveLength(2);
+
+    const workspaceSkill = skills.find((skill) => skill.source.scope === "workspace");
+    const userSkill = skills.find((skill) => skill.source.scope === "user");
+
+    expect(workspaceSkill?.source.client).toBe("agent");
+    expect(workspaceSkill?.allowedTools).toEqual(["read", "bash"]);
+    expect(userSkill?.source.client).toBe("claude");
+    expect(userSkill?.allowedTools).toEqual(["read", "grep"]);
   });
 
   it("searches and resolves the best matching skill without blocking", async () => {
@@ -47,7 +52,7 @@ describe("skills", () => {
       join(workspaceRoot, ".agent", "skills", "git-inspector"),
       "Git Inspector",
       "Inspect git changes and diff previews.",
-      "allowed-tools: read bash",
+      "allowed_tools:\n  - read\n  - bash",
     );
 
     const matches = await searchSkills(workspaceRoot, "show me git diff");
@@ -68,7 +73,7 @@ describe("skills", () => {
       join(workspaceRoot, ".agent", "skills", "repo-review"),
       "Repo Review",
       "Review the repository with precision.",
-      "allowed-tools: read rogue_tool bash",
+      "allowed_tools:\n  - read\n  - rogue_tool\n  - bash",
     );
 
     const resolved = await resolveSkillForPrompt(workspaceRoot, "review this repo");
