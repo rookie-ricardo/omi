@@ -397,15 +397,21 @@ function makeHistoryEntry(
   messageId: string | null,
   summary: string | null,
   createdAt: string,
+  originRunId: string | null = null,
+  branchId: string | null = null,
+  lineageDepth = 0,
 ): SessionHistoryEntry {
   return {
     id,
     sessionId: "session_1",
     parentId,
+    originRunId,
     kind,
     messageId,
     summary,
     details: null,
+    branchId,
+    lineageDepth,
     createdAt,
     updatedAt: createdAt,
   };

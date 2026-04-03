@@ -17,7 +17,7 @@ describe("Context Pipeline", () => {
       const memory: MemoryRecord = {
         id: "mem-1",
         tags: ["key", "other"],
-      } as MemoryRecord;
+      } as unknown as MemoryRecord;
 
       expect(isProtectedMemory(memory)).toBe(true);
     });
@@ -26,7 +26,7 @@ describe("Context Pipeline", () => {
       const memory: MemoryRecord = {
         id: "mem-2",
         tags: ["protected"],
-      } as MemoryRecord;
+      } as unknown as MemoryRecord;
 
       expect(isProtectedMemory(memory)).toBe(true);
     });
@@ -35,7 +35,7 @@ describe("Context Pipeline", () => {
       const memory: MemoryRecord = {
         id: "mem-3",
         tags: ["KEY", "Protected"],
-      } as MemoryRecord;
+      } as unknown as MemoryRecord;
 
       expect(isProtectedMemory(memory)).toBe(true);
     });
@@ -44,7 +44,7 @@ describe("Context Pipeline", () => {
       const memory: MemoryRecord = {
         id: "mem-4",
         tags: ["normal", "conversation"],
-      } as MemoryRecord;
+      } as unknown as MemoryRecord;
 
       expect(isProtectedMemory(memory)).toBe(false);
     });
@@ -53,7 +53,7 @@ describe("Context Pipeline", () => {
       const memory: MemoryRecord = {
         id: "mem-5",
         tags: [],
-      } as MemoryRecord;
+      } as unknown as MemoryRecord;
 
       expect(isProtectedMemory(memory)).toBe(false);
     });
@@ -62,10 +62,10 @@ describe("Context Pipeline", () => {
   describe("filterCompactableMemories", () => {
     it("应该过滤掉受保护的记忆", () => {
       const memories: MemoryRecord[] = [
-        { id: "mem-1", tags: ["key"] } as MemoryRecord,
-        { id: "mem-2", tags: ["normal"] } as MemoryRecord,
-        { id: "mem-3", tags: ["protected"] } as MemoryRecord,
-        { id: "mem-4", tags: ["conversation"] } as MemoryRecord,
+        { id: "mem-1", tags: ["key"] } as unknown as MemoryRecord,
+        { id: "mem-2", tags: ["normal"] } as unknown as MemoryRecord,
+        { id: "mem-3", tags: ["protected"] } as unknown as MemoryRecord,
+        { id: "mem-4", tags: ["conversation"] } as unknown as MemoryRecord,
       ];
 
       const result = filterCompactableMemories(memories);
@@ -79,8 +79,8 @@ describe("Context Pipeline", () => {
 
     it("应该返回空数组当所有记忆都受保护", () => {
       const memories: MemoryRecord[] = [
-        { id: "mem-1", tags: ["key"] } as MemoryRecord,
-        { id: "mem-2", tags: ["protected"] } as MemoryRecord,
+        { id: "mem-1", tags: ["key"] } as unknown as MemoryRecord,
+        { id: "mem-2", tags: ["protected"] } as unknown as MemoryRecord,
       ];
 
       const result = filterCompactableMemories(memories);
@@ -90,8 +90,8 @@ describe("Context Pipeline", () => {
 
     it("应该返回所有记忆当没有受保护的记忆", () => {
       const memories: MemoryRecord[] = [
-        { id: "mem-1", tags: ["normal"] } as MemoryRecord,
-        { id: "mem-2", tags: ["conversation"] } as MemoryRecord,
+        { id: "mem-1", tags: ["normal"] } as unknown as MemoryRecord,
+        { id: "mem-2", tags: ["conversation"] } as unknown as MemoryRecord,
       ];
 
       const result = filterCompactableMemories(memories);
@@ -103,9 +103,9 @@ describe("Context Pipeline", () => {
   describe("getProtectedMemories", () => {
     it("应该只返回受保护的记忆", () => {
       const memories: MemoryRecord[] = [
-        { id: "mem-1", tags: ["key"] } as MemoryRecord,
-        { id: "mem-2", tags: ["normal"] } as MemoryRecord,
-        { id: "mem-3", tags: ["protected"] } as MemoryRecord,
+        { id: "mem-1", tags: ["key"] } as unknown as MemoryRecord,
+        { id: "mem-2", tags: ["normal"] } as unknown as MemoryRecord,
+        { id: "mem-3", tags: ["protected"] } as unknown as MemoryRecord,
       ];
 
       const result = getProtectedMemories(memories);
@@ -252,9 +252,9 @@ describe("Context Pipeline", () => {
       it("应该从记忆记录同步受保护的记忆", () => {
         const coordinator = new ContextPipelineCoordinator();
         const memories: MemoryRecord[] = [
-          { id: "mem-1", tags: ["key"] } as MemoryRecord,
-          { id: "mem-2", tags: ["normal"] } as MemoryRecord,
-          { id: "mem-3", tags: ["protected"] } as MemoryRecord,
+          { id: "mem-1", tags: ["key"] } as unknown as MemoryRecord,
+          { id: "mem-2", tags: ["normal"] } as unknown as MemoryRecord,
+          { id: "mem-3", tags: ["protected"] } as unknown as MemoryRecord,
         ];
 
         coordinator.syncProtectedMemories(memories);
@@ -271,7 +271,7 @@ describe("Context Pipeline", () => {
         });
 
         coordinator.syncProtectedMemories([
-          { id: "mem-1", tags: ["key"] } as MemoryRecord,
+          { id: "mem-1", tags: ["key"] } as unknown as MemoryRecord,
         ]);
 
         expect(onMemoryProtected).toHaveBeenCalledWith("mem-1");
@@ -285,7 +285,7 @@ describe("Context Pipeline", () => {
         coordinator.protectMemory("mem-1");
 
         coordinator.syncProtectedMemories([
-          { id: "mem-1", tags: ["normal"] } as MemoryRecord,
+          { id: "mem-1", tags: ["normal"] } as unknown as MemoryRecord,
         ]);
 
         expect(onMemoryUnprotected).toHaveBeenCalledWith("mem-1");

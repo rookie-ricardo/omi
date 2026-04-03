@@ -16,7 +16,22 @@ import {
   type CompactionSettings,
   type FileOperations,
 } from "../src/compaction";
-import type { Usage, RuntimeMessage, SessionRuntimeMessageEnvelope } from "../src/messages";
+import type { RuntimeMessage, SessionRuntimeMessageEnvelope } from "../src/messages";
+import type { Usage } from "@mariozechner/pi-ai";
+
+function makeUsage(input: number, output: number, extras: Partial<Usage> = {}): Usage {
+  const cacheRead = extras.cacheRead ?? 0;
+  const cacheWrite = extras.cacheWrite ?? 0;
+  const totalTokens = extras.totalTokens ?? input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost: extras.cost ?? 0,
+  } as Usage;
+}
 
 describe("Compaction", () => {
   describe("estimateTextTokens", () => {
@@ -46,31 +61,19 @@ describe("Compaction", () => {
 
   describe("calculateContextTokens", () => {
     it("应该优先使用 totalTokens", () => {
-      const usage: Usage = {
-        input: 100,
-        output: 50,
-        totalTokens: 200,
-      };
+      const usage = makeUsage(100, 50, { totalTokens: 200 });
 
       expect(calculateContextTokens(usage)).toBe(200);
     });
 
     it("应该在 totalTokens 不存在时计算总和", () => {
-      const usage: Usage = {
-        input: 100,
-        output: 50,
-      };
+      const usage = makeUsage(100, 50);
 
       expect(calculateContextTokens(usage)).toBe(150);
     });
 
     it("应该包含缓存token", () => {
-      const usage: Usage = {
-        input: 100,
-        output: 50,
-        cacheRead: 25,
-        cacheWrite: 25,
-      };
+      const usage = makeUsage(100, 50, { cacheRead: 25, cacheWrite: 25 });
 
       expect(calculateContextTokens(usage)).toBe(200);
     });
@@ -236,7 +239,7 @@ describe("Compaction", () => {
               args: { path: "/test/file.ts" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -256,7 +259,7 @@ describe("Compaction", () => {
               args: { path: "/test/output.ts" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -276,7 +279,7 @@ describe("Compaction", () => {
               args: { path: "/test/edit.ts" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -290,11 +293,11 @@ describe("Compaction", () => {
         {
           role: "user",
           content: "Hello",
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
         {
           role: "assistantTranscript",
           content: [{ type: "text", text: "Hi" }],
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -316,7 +319,7 @@ describe("Compaction", () => {
               args: { other: "param" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -405,7 +408,7 @@ describe("Compaction", () => {
       const message: RuntimeMessage = {
         role: "user",
         content: "Hello",
-      } as RuntimeMessage;
+      } as unknown as RuntimeMessage;
 
       const tokens = estimateRuntimeMessageTokens(message);
 
@@ -416,12 +419,12 @@ describe("Compaction", () => {
       const shortMessage: RuntimeMessage = {
         role: "user",
         content: "Hi",
-      } as RuntimeMessage;
+      } as unknown as RuntimeMessage;
 
       const longMessage: RuntimeMessage = {
         role: "user",
         content: "This is a much longer message with many words to test token estimation",
-      } as RuntimeMessage;
+      } as unknown as RuntimeMessage;
 
       expect(estimateRuntimeMessageTokens(longMessage)).toBeGreaterThan(
         estimateRuntimeMessageTokens(shortMessage),
@@ -432,9 +435,9 @@ describe("Compaction", () => {
   describe("findTurnStartIndex", () => {
     it("应该找到用户消息作为回合起点", () => {
       const envelopes: SessionRuntimeMessageEnvelope[] = [
-        { message: { role: "user" } as RuntimeMessage },
-        { message: { role: "assistantTranscript" } as RuntimeMessage },
-        { message: { role: "user" } as RuntimeMessage },
+        { message: { role: "user" } as unknown as RuntimeMessage },
+        { message: { role: "assistantTranscript" } as unknown as RuntimeMessage },
+        { message: { role: "user" } as unknown as RuntimeMessage },
       ] as SessionRuntimeMessageEnvelope[];
 
       const result = findTurnStartIndex(envelopes, 2, 0);
@@ -444,9 +447,9 @@ describe("Compaction", () => {
 
     it("应该正确处理分支摘要作为回合起点", () => {
       const envelopes: SessionRuntimeMessageEnvelope[] = [
-        { message: { role: "user" } as RuntimeMessage },
-        { message: { role: "branchSummary" } as RuntimeMessage },
-        { message: { role: "assistantTranscript" } as RuntimeMessage },
+        { message: { role: "user" } as unknown as RuntimeMessage },
+        { message: { role: "branchSummary" } as unknown as RuntimeMessage },
+        { message: { role: "assistantTranscript" } as unknown as RuntimeMessage },
       ] as SessionRuntimeMessageEnvelope[];
 
       const result = findTurnStartIndex(envelopes, 2, 0);
@@ -456,8 +459,8 @@ describe("Compaction", () => {
 
     it("当没有找到起点时返回 -1", () => {
       const envelopes: SessionRuntimeMessageEnvelope[] = [
-        { message: { role: "assistantTranscript" } as RuntimeMessage },
-        { message: { role: "runtimeToolOutput" } as RuntimeMessage },
+        { message: { role: "assistantTranscript" } as unknown as RuntimeMessage },
+        { message: { role: "runtimeToolOutput" } as unknown as RuntimeMessage },
       ] as SessionRuntimeMessageEnvelope[];
 
       const result = findTurnStartIndex(envelopes, 1, 0);
@@ -503,31 +506,19 @@ describe("Compaction", () => {
 
   describe("calculateContextTokens", () => {
     it("应该优先使用 totalTokens", () => {
-      const usage: Usage = {
-        input: 100,
-        output: 50,
-        totalTokens: 200,
-      };
+      const usage = makeUsage(100, 50, { totalTokens: 200 });
 
       expect(calculateContextTokens(usage)).toBe(200);
     });
 
     it("应该在 totalTokens 不存在时计算总和", () => {
-      const usage: Usage = {
-        input: 100,
-        output: 50,
-      };
+      const usage = makeUsage(100, 50);
 
       expect(calculateContextTokens(usage)).toBe(150);
     });
 
     it("应该包含缓存token", () => {
-      const usage: Usage = {
-        input: 100,
-        output: 50,
-        cacheRead: 25,
-        cacheWrite: 25,
-      };
+      const usage = makeUsage(100, 50, { cacheRead: 25, cacheWrite: 25 });
 
       expect(calculateContextTokens(usage)).toBe(200);
     });
@@ -693,7 +684,7 @@ describe("Compaction", () => {
               args: { path: "/test/file.ts" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -713,7 +704,7 @@ describe("Compaction", () => {
               args: { path: "/test/output.ts" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -733,7 +724,7 @@ describe("Compaction", () => {
               args: { path: "/test/edit.ts" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -747,11 +738,11 @@ describe("Compaction", () => {
         {
           role: "user",
           content: "Hello",
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
         {
           role: "assistantTranscript",
           content: [{ type: "text", text: "Hi" }],
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -773,7 +764,7 @@ describe("Compaction", () => {
               args: { other: "param" },
             },
           },
-        } as RuntimeMessage,
+        } as unknown as RuntimeMessage,
       ];
 
       extractFileOpsFromMessages(messages, fileOps);
@@ -862,7 +853,7 @@ describe("Compaction", () => {
       const message: RuntimeMessage = {
         role: "user",
         content: "Hello",
-      } as RuntimeMessage;
+      } as unknown as RuntimeMessage;
 
       const tokens = estimateRuntimeMessageTokens(message);
 
@@ -873,12 +864,12 @@ describe("Compaction", () => {
       const shortMessage: RuntimeMessage = {
         role: "user",
         content: "Hi",
-      } as RuntimeMessage;
+      } as unknown as RuntimeMessage;
 
       const longMessage: RuntimeMessage = {
         role: "user",
         content: "This is a much longer message with many words to test token estimation",
-      } as RuntimeMessage;
+      } as unknown as RuntimeMessage;
 
       expect(estimateRuntimeMessageTokens(longMessage)).toBeGreaterThan(
         estimateRuntimeMessageTokens(shortMessage),
@@ -889,9 +880,9 @@ describe("Compaction", () => {
   describe("findTurnStartIndex", () => {
     it("应该找到用户消息作为回合起点", () => {
       const envelopes: SessionRuntimeMessageEnvelope[] = [
-        { message: { role: "user" } as RuntimeMessage },
-        { message: { role: "assistantTranscript" } as RuntimeMessage },
-        { message: { role: "user" } as RuntimeMessage },
+        { message: { role: "user" } as unknown as RuntimeMessage },
+        { message: { role: "assistantTranscript" } as unknown as RuntimeMessage },
+        { message: { role: "user" } as unknown as RuntimeMessage },
       ] as SessionRuntimeMessageEnvelope[];
 
       const result = findTurnStartIndex(envelopes, 2, 0);
@@ -901,9 +892,9 @@ describe("Compaction", () => {
 
     it("应该正确处理分支摘要作为回合起点", () => {
       const envelopes: SessionRuntimeMessageEnvelope[] = [
-        { message: { role: "user" } as RuntimeMessage },
-        { message: { role: "branchSummary" } as RuntimeMessage },
-        { message: { role: "assistantTranscript" } as RuntimeMessage },
+        { message: { role: "user" } as unknown as RuntimeMessage },
+        { message: { role: "branchSummary" } as unknown as RuntimeMessage },
+        { message: { role: "assistantTranscript" } as unknown as RuntimeMessage },
       ] as SessionRuntimeMessageEnvelope[];
 
       const result = findTurnStartIndex(envelopes, 2, 0);
@@ -913,8 +904,8 @@ describe("Compaction", () => {
 
     it("当没有找到起点时返回 -1", () => {
       const envelopes: SessionRuntimeMessageEnvelope[] = [
-        { message: { role: "assistantTranscript" } as RuntimeMessage },
-        { message: { role: "runtimeToolOutput" } as RuntimeMessage },
+        { message: { role: "assistantTranscript" } as unknown as RuntimeMessage },
+        { message: { role: "runtimeToolOutput" } as unknown as RuntimeMessage },
       ] as SessionRuntimeMessageEnvelope[];
 
       const result = findTurnStartIndex(envelopes, 1, 0);

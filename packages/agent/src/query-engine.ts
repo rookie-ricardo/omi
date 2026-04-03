@@ -21,7 +21,6 @@ import {
   createContextBudget,
   calculateTokenWarningState,
   needsContextAttention,
-  quickBudgetCheck,
   type ContextBudget,
   type TokenWarningState,
 } from "@omi/memory";
@@ -1185,7 +1184,7 @@ export class QueryEngine {
     const budget = createContextBudget(providerConfig);
     const usage = estimateContextTokens(messages);
     const warningState = calculateTokenWarningState(usage.tokens, budget);
-    const needsAttention = needsContextAttention(messages, providerConfig);
+    const needsAttention = needsContextAttention(usage.tokens, budget);
 
     return { warningState, budget, needsAttention };
   }

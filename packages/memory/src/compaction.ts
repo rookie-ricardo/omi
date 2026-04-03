@@ -573,7 +573,13 @@ export async function generateCompactionSummary(
 
 export function isOverflowError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return getOverflowPatterns().some((pattern) => pattern.test(message));
+  const lowerMessage = message.toLowerCase();
+  return (
+    getOverflowPatterns().some((pattern) => pattern.test(message)) ||
+    lowerMessage.includes("token limit") ||
+    lowerMessage.includes("context limit") ||
+    lowerMessage.includes("output token limit")
+  );
 }
 
 /**
@@ -1117,4 +1123,3 @@ export async function compact(
     throw error;
   }
 }
-

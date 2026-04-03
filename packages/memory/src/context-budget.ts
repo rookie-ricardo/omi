@@ -77,6 +77,13 @@ export interface TokenWarningState {
   isAtBlockingLimit: boolean;
 }
 
+export interface QuickBudgetCheckResult {
+  budget: ContextBudget;
+  usage: number;
+  warningState: TokenWarningState;
+  needsAttention: boolean;
+}
+
 // ============================================================================
 // Context Budget Calculation
 // ============================================================================
@@ -141,6 +148,31 @@ export function calculateTokenWarningState(
     isAboveErrorThreshold: tokenUsage >= budget.errorThreshold,
     isAtBlockingLimit: tokenUsage >= budget.manualCompactThreshold,
   };
+}
+
+/**
+ * Perform a one-shot budget check for a transcript.
+ * Returns the computed budget, usage estimate, and whether the transcript
+ * should be compacted soon.
+ */
+export function quickBudgetCheck(
+  tokenUsage: number,
+  budget: ContextBudget,
+): QuickBudgetCheckResult {
+  const warningState = calculateTokenWarningState(tokenUsage, budget);
+  return {
+    budget,
+    usage: tokenUsage,
+    warningState,
+    needsAttention: warningState.isAboveWarningThreshold || warningState.isAtBlockingLimit,
+  };
+}
+
+/**
+ * Check whether the current context needs attention from the compaction pipeline.
+ */
+export function needsContextAttention(tokenUsage: number, budget: ContextBudget): boolean {
+  return calculateTokenWarningState(tokenUsage, budget).isAboveWarningThreshold;
 }
 
 /**

@@ -58,6 +58,7 @@ function createTestProviderConfig(): ProviderConfig {
     id: createId("provider"),
     name: "Test Provider",
     type: "anthropic",
+    protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     apiKey: "test-key",
     model: "claude-sonnet-4-20250514",
@@ -363,7 +364,7 @@ describe("QueryEngine", () => {
 
   describe("tool execution mode", () => {
     it("uses parallel mode for the concurrency-safe read-only whitelist", () => {
-      expect(resolveToolExecutionMode(["read", "ls", "grep", "find"])).toBe("parallel");
+      expect(resolveToolExecutionMode(["read", "ls", "grep", "glob"])).toBe("parallel");
     });
 
     it("falls back to sequential mode when any write tool is enabled", () => {

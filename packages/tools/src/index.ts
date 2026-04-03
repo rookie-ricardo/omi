@@ -7,7 +7,16 @@ export {
   findTools,
   isBuiltInTool,
 } from "./builtins";
-export { createToolRegistry, getGlobalRegistry, setGlobalRegistry, resetGlobalRegistry } from "./registry";
+export {
+  CORE_TOOL_NAMES,
+  PLAN_MODE_TOOL_NAMES,
+  SAFE_TOOL_NAMES,
+  WRITE_TOOL_NAMES,
+  createToolRegistry,
+  getGlobalRegistry,
+  setGlobalRegistry,
+  resetGlobalRegistry,
+} from "./registry";
 export * from "./frontmatter";
 export * from "./truncate";
 export * from "./path-utils";
