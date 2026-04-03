@@ -8,9 +8,9 @@
  * - Verify memory references before use (drift defense)
  */
 
+import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, basename } from "node:path";
-import { z } from "zod";
+import { basename, dirname, join, resolve } from "node:path";
 
 import {
   MEMORY_INDEX_FILENAME,
@@ -19,14 +19,12 @@ import {
   FRONTMATTER_MAX_LINES,
   MAX_RECALL_RESULTS,
   parseMemoryType,
+  memoryFrontmatterSchema,
   type MemoryType,
   type MemoryFile,
   type MemoryIndex,
   type MemoryIndexEntry,
-  WHAT_NOT_TO_SAVE_SECTION,
-  WHEN_TO_ACCESS_SECTION,
-  TRUSTING_RECALL_SECTION,
-  HOW_TO_SAVE_SECTION,
+  PROTECTED_MEMORY_TAGS,
 } from "./memory-types";
 
 // ============================================================================
@@ -66,10 +64,75 @@ export function parseFrontmatter(
     if (colonIndex === -1) continue;
     const key = line.slice(0, colonIndex).trim();
     const value = line.slice(colonIndex + 1).trim();
+    if (value.startsWith("[") && value.endsWith("]")) {
+      const items = value
+        .slice(1, -1)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => item.replace(/^["']|["']$/g, ""));
+      frontmatter[key] = items;
+      continue;
+    }
     frontmatter[key] = value;
   }
 
   return { frontmatter, body };
+}
+
+function normalizePath(value: string): string {
+  return resolve(value);
+}
+
+function splitLinkTarget(target: string): { path: string; fragment: string } {
+  const hashIndex = target.indexOf("#");
+  const path = hashIndex === -1 ? target : target.slice(0, hashIndex);
+  const fragment = hashIndex === -1 ? "" : target.slice(hashIndex + 1);
+  return { path, fragment };
+}
+
+function extractMarkdownLinks(content: string): string[] {
+  const links: string[] = [];
+  const linkPattern = /\[[^\]]+\]\(([^)]+)\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = linkPattern.exec(content))) {
+    if (match[1]) {
+      links.push(match[1]);
+    }
+  }
+  return links;
+}
+
+function isExternalLink(target: string): boolean {
+  return /^(https?:|mailto:|file:\/\/)/i.test(target);
+}
+
+function hasProtectedTags(tags: readonly string[]): boolean {
+  return tags.some((tag) => PROTECTED_MEMORY_TAGS.includes(tag.toLowerCase()));
+}
+
+function recentToolNoiseScore(memory: MemoryHeader, recentTools: readonly string[], query: string): number {
+  if (recentTools.length === 0) return 0;
+
+  const searchable = [
+    memory.title,
+    memory.description ?? "",
+    memory.filename,
+  ]
+    .join("\n")
+    .toLowerCase();
+  const queryLower = query.toLowerCase();
+
+  let score = 0;
+  for (const tool of recentTools) {
+    const normalizedTool = tool.trim().toLowerCase();
+    if (!normalizedTool) continue;
+    if (queryLower.includes(normalizedTool)) continue;
+    if (searchable.includes(normalizedTool)) {
+      score += 1;
+    }
+  }
+  return score;
 }
 
 // ============================================================================
@@ -95,9 +158,9 @@ export function parseMemoryIndex(
 ): MemoryIndexLoadResult {
   const lines = content.split("\n").filter((line) => line.trim());
   const validPaths = new Set<string>();
-  const invalidPaths: string[] = [];
+  const invalidPaths = new Set<string>();
   const seenPaths = new Map<string, number>();
-  const duplicates: string[] = [];
+  const duplicates = new Set<string>();
   const entries: MemoryIndexEntry[] = [];
 
   for (let i = 0; i < lines.length; i++) {
@@ -106,16 +169,20 @@ export function parseMemoryIndex(
     if (!match) continue;
 
     const [, title, filePath, hook] = match;
-    const fullPath = join(memoryDir, filePath);
+    const fullPath = normalizePath(join(memoryDir, filePath));
 
-    // Check for duplicates
-    const firstSeen = seenPaths.get(fullPath);
-    if (firstSeen !== undefined) {
-      duplicates.push(`Line ${firstSeen + 1} and ${i + 1}: ${filePath}`);
-    } else {
-      seenPaths.set(fullPath, i);
+    if (!existsSync(fullPath)) {
+      invalidPaths.add(fullPath);
+      continue;
     }
 
+    const firstSeen = seenPaths.get(fullPath);
+    if (firstSeen !== undefined) {
+      duplicates.add(`Line ${firstSeen + 1} and ${i + 1}: ${filePath}`);
+      continue;
+    }
+
+    seenPaths.set(fullPath, i);
     entries.push({
       title,
       filePath,
@@ -134,8 +201,8 @@ export function parseMemoryIndex(
       byteCount: content.length,
     },
     validPaths,
-    invalidPaths,
-    duplicates,
+    invalidPaths: [...invalidPaths],
+    duplicates: [...duplicates],
   };
 }
 
@@ -148,23 +215,23 @@ export async function checkIndexValidity(
   content: string,
 ): Promise<string[]> {
   const lines = content.split("\n");
-  const invalidPaths: string[] = [];
+  const invalidPaths = new Set<string>();
 
   for (const line of lines) {
     const match = line.match(MEMORY_INDEX_ENTRY_REGEX);
     if (!match) continue;
 
     const [, , filePath] = match;
-    const fullPath = join(memoryDir, filePath);
+    const fullPath = normalizePath(join(memoryDir, filePath));
 
     try {
       await stat(fullPath);
     } catch {
-      invalidPaths.push(fullPath);
+      invalidPaths.add(fullPath);
     }
   }
 
-  return invalidPaths;
+  return [...invalidPaths];
 }
 
 // ============================================================================
@@ -175,8 +242,11 @@ export interface MemoryHeader {
   path: string;
   filename: string;
   mtimeMs: number;
+  title: string;
   description: string | null;
   type: MemoryType | undefined;
+  tags: string[];
+  updatedAt: string;
 }
 
 /**
@@ -211,13 +281,20 @@ export async function scanMemoryFiles(
 
         const content = await readFileFrontmatterRange(filePath, FRONTMATTER_MAX_LINES, signal);
         const { frontmatter } = parseFrontmatter(content);
+        const parseResult = memoryFrontmatterSchema.safeParse(frontmatter);
+        if (!parseResult.success) {
+          return null;
+        }
 
         return {
           path: filePath,
           filename: relativePath,
           mtimeMs: fileStat.mtimeMs,
-          description: (frontmatter.description as string) || null,
-          type: parseMemoryType(frontmatter.type),
+          title: parseResult.data.title,
+          description: parseResult.data.description,
+          type: parseMemoryType(parseResult.data.type),
+          tags: parseResult.data.tags,
+          updatedAt: parseResult.data.updatedAt,
         };
       }),
     );
@@ -225,7 +302,7 @@ export async function scanMemoryFiles(
     return results
       .filter((r): r is PromiseFulfilledResult<MemoryHeader> => r.status === "fulfilled" && r.value !== null)
       .map((r) => r.value as MemoryHeader)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || b.mtimeMs - a.mtimeMs)
       .slice(0, MAX_MEMORY_FILES);
   } catch {
     return [];
@@ -264,17 +341,14 @@ export async function loadMemoryFile(
     ]);
 
     const { frontmatter: rawFrontmatter, body } = parseFrontmatter(content);
-    const parseResult = z
-      .object({
-        name: z.string(),
-        description: z.string(),
-        type: z.enum(["user", "feedback", "project", "reference"]),
-        tags: z.array(z.string()).optional(),
-        updatedAt: z.string().optional(),
-      })
-      .safeParse(rawFrontmatter);
+    const parseResult = memoryFrontmatterSchema.safeParse(rawFrontmatter);
 
     if (!parseResult.success) {
+      return null;
+    }
+
+    const referenceValidation = await validateMemoryReferenceLinks(path, body, signal);
+    if (!referenceValidation.isValid) {
       return null;
     }
 
@@ -314,13 +388,22 @@ export async function loadMemoryFiles(
  * Format memory headers as a text manifest for LLM selection.
  */
 export function formatMemoryManifest(memories: MemoryHeader[]): string {
-  return memories
+  const ordered = [...memories].sort((a, b) => {
+    const aProtected = hasProtectedTags(a.tags);
+    const bProtected = hasProtectedTags(b.tags);
+    if (aProtected !== bProtected) {
+      return aProtected ? -1 : 1;
+    }
+    return Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || b.mtimeMs - a.mtimeMs;
+  });
+
+  return ordered
     .map((m) => {
       const tag = m.type ? `[${m.type}] ` : "";
       const ts = new Date(m.mtimeMs).toISOString().split("T")[0];
       return m.description
-        ? `- ${tag}${m.filename} (${ts}): ${m.description}`
-        : `- ${tag}${m.filename} (${ts})`;
+        ? `- ${tag}${m.title} (${m.filename}, ${ts}): ${m.description}`
+        : `- ${tag}${m.title} (${m.filename}, ${ts})`;
     })
     .join("\n");
 }
@@ -378,7 +461,17 @@ export async function recallRelevantMemories(
   const candidates = await scanMemoryFiles(memoryDir, signal);
 
   // Filter out already surfaced memories
-  const filtered = candidates.filter((m) => !alreadySurfaced.has(m.path));
+  const filtered = candidates
+    .filter((m) => !alreadySurfaced.has(m.path))
+    .filter((m) => recentToolNoiseScore(m, recentTools, query) === 0)
+    .sort((a, b) => {
+      const aProtected = hasProtectedTags(a.tags);
+      const bProtected = hasProtectedTags(b.tags);
+      if (aProtected !== bProtected) {
+        return aProtected ? -1 : 1;
+      }
+      return Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || b.mtimeMs - a.mtimeMs;
+    });
 
   if (filtered.length === 0) {
     return { memories: [], totalCandidates: 0, recalledAt: Date.now() };
@@ -393,9 +486,11 @@ export async function recallRelevantMemories(
   });
 
   // Load selected memory files
-  const selectedPaths = selectedFilenames
-    .map((filename) => filtered.find((m) => m.filename === filename)?.path)
-    .filter((p): p is string => p !== undefined);
+  const selectedPaths = [...new Set(
+    selectedFilenames
+      .map((filename) => filtered.find((m) => m.filename === filename)?.path)
+      .filter((p): p is string => p !== undefined),
+  )];
 
   const memories = await loadMemoryFiles(selectedPaths, signal);
 
@@ -497,7 +592,12 @@ export interface ValidationResult {
  */
 export async function validateMemoryReference(path: string): Promise<ValidationResult> {
   try {
-    await stat(path);
+    const content = await readFile(path, { encoding: "utf-8" });
+    const { body } = parseFrontmatter(content);
+    const referenceCheck = await validateMemoryReferenceLinks(path, body);
+    if (!referenceCheck.isValid) {
+      return referenceCheck;
+    }
     return { path, isValid: true };
   } catch (error: unknown) {
     return {
@@ -516,4 +616,39 @@ export async function validateMemoryReferences(
 ): Promise<ValidationResult[]> {
   const results = await Promise.all(paths.map(validateMemoryReference));
   return results;
+}
+
+async function validateMemoryReferenceLinks(
+  path: string,
+  body: string,
+  signal?: AbortSignal,
+): Promise<ValidationResult> {
+  const links = extractMarkdownLinks(body);
+  const baseDir = dirname(path);
+
+  for (const target of links) {
+    if (isExternalLink(target)) continue;
+    const { path: linkPath } = splitLinkTarget(target);
+    if (!linkPath) continue;
+
+    const fullPath = normalizePath(resolve(baseDir, linkPath));
+    if (signal?.aborted) {
+      return {
+        path,
+        isValid: false,
+        reason: "Aborted",
+      };
+    }
+    try {
+      await stat(fullPath);
+    } catch (error: unknown) {
+      return {
+        path,
+        isValid: false,
+        reason: `Missing linked reference: ${fullPath}`,
+      };
+    }
+  }
+
+  return { path, isValid: true };
 }

@@ -8,13 +8,13 @@
  */
 
 import type { MemoryRecord } from "@omi/core";
+import { PROTECTED_MEMORY_TAGS } from "./memory-types";
 
 /** Tag used to mark memories as key/protected from compaction */
 export const KEY_MEMORY_TAG = "key";
 export const PROTECTED_MEMORY_TAG = "protected";
 
-/** All tags that mark memories as protected from compaction */
-export const PROTECTED_MEMORY_TAGS: readonly string[] = [KEY_MEMORY_TAG, PROTECTED_MEMORY_TAG];
+export { PROTECTED_MEMORY_TAGS };
 
 /**
  * Check if a memory record is protected from compaction.

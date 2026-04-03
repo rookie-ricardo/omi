@@ -26,16 +26,21 @@ export function parseMemoryType(raw: unknown): MemoryType | undefined {
   return MEMORY_TYPES.find((t) => t === raw);
 }
 
+/**
+ * Tags that mark a memory as protected from compaction and aggressive pruning.
+ */
+export const PROTECTED_MEMORY_TAGS: readonly string[] = ["key", "protected"];
+
 // ============================================================================
 // Memory File Frontmatter Schema
 // ============================================================================
 
 export const memoryFrontmatterSchema = z.object({
-  name: z.string().min(1),
+  title: z.string().min(1),
   description: z.string().min(1),
   type: z.enum(["user", "feedback", "project", "reference"]),
-  tags: z.array(z.string()).optional(),
-  updatedAt: z.string().optional(),
+  tags: z.array(z.string()),
+  updatedAt: z.string().min(1),
 });
 
 export type MemoryFrontmatter = z.infer<typeof memoryFrontmatterSchema>;
@@ -94,9 +99,11 @@ export const MAX_RECALL_RESULTS = 5;
 export const MEMORY_FRONTMATTER_EXAMPLE = [
   "```markdown",
   "---",
-  "name: {{memory name}}",
+  "title: {{memory title}}",
   "description: {{one-line description — used to decide relevance in future conversations, so be specific}}",
   `type: {{${MEMORY_TYPES.join(", ")}}}`,
+  "tags: [{{tag-1}}, {{tag-2}}]",
+  "updatedAt: 2026-04-03T00:00:00.000Z",
   "---",
   "",
   "{{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}}",

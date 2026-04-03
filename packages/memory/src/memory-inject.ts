@@ -210,7 +210,7 @@ export function buildRecalledMemoriesSection(memories: MemoryFile[]): string {
   const sections: string[] = ["## Recalled Memories", ""];
 
   for (const memory of memories) {
-    sections.push(`### ${memory.frontmatter.name}`, "");
+    sections.push(`### ${memory.frontmatter.title}`, "");
     sections.push(`**Type:** ${memory.frontmatter.type}`, "");
     sections.push(`**Description:** ${memory.frontmatter.description}`, "");
     sections.push("");
@@ -310,7 +310,7 @@ export class MemoryInjector {
         type: "injected",
         memoryPath: memory.path,
         tokens: this.estimateTokens(
-          `${memory.frontmatter.name}\n\n${memory.frontmatter.description}\n\n${memory.body}`,
+          `${memory.frontmatter.title}\n\n${memory.frontmatter.description}\n\n${memory.body}`,
         ),
       });
     }
@@ -392,14 +392,14 @@ export async function getMemoryCount(memoryDir: string): Promise<number> {
 // Memory Injection with Context Budget
 // ============================================================================
 
-export interface ContextBudget {
+interface ContextBudget {
   total: number;
   used: number;
   reserved: number;
   available: number;
 }
 
-export function createContextBudget(total: number, reserved: number): ContextBudget {
+function createContextBudget(total: number, reserved: number): ContextBudget {
   return {
     total,
     used: 0,
@@ -452,7 +452,7 @@ export async function buildMemoryPromptWithBudget(
   const selectedMemories: MemoryFile[] = [];
 
   for (const memory of recalledMemories) {
-    const memoryText = `${memory.frontmatter.name}\n\n${memory.frontmatter.description}\n\n${memory.body}`;
+    const memoryText = `${memory.frontmatter.title}\n\n${memory.frontmatter.description}\n\n${memory.body}`;
     const memoryTokens = estimateTokens(memoryText);
 
     if (recalledTokens + memoryTokens <= newRemaining) {
