@@ -1,5 +1,5 @@
 import type { AppOrchestrator, SessionManager, SubAgentState } from "@omi/agent";
-import { getLogger } from "@omi/agent/logger";
+import { getLogger } from "@omi/agent";
 import { SubAgentManager } from "../../../packages/agent/src/subagent-manager";
 import type {
   AgentCloseResult,

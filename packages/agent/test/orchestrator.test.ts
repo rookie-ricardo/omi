@@ -321,6 +321,9 @@ describe("orchestrator", () => {
       messageId: "msg_root",
       summary: null,
       details: null,
+      branchId: null,
+      lineageDepth: 0,
+      originRunId: null,
     });
     const branchEntry = addSessionHistoryEntry({
       sessionId: session.id,
@@ -329,6 +332,9 @@ describe("orchestrator", () => {
       messageId: null,
       summary: "Branch checkpoint",
       details: { source: "test" },
+      branchId: null,
+      lineageDepth: 1,
+      originRunId: null,
     });
     const historyEntries = [rootEntry, branchEntry];
     const startRun = vi.fn(() => ({
@@ -628,6 +634,9 @@ function createMemoryDatabase(): AppStore {
         messageId: input.messageId,
         summary: input.summary,
         details: input.details ?? null,
+        branchId: input.branchId ?? null,
+        lineageDepth: input.lineageDepth ?? 0,
+        originRunId: input.originRunId ?? null,
         createdAt: now,
         updatedAt: now,
       };

@@ -4,10 +4,27 @@
  * Tool implementations for sub-agent spawning and management.
  */
 
-import type { Tool, ToolInput, ToolResult } from "@omi/tools";
+import type { TSchema } from "@mariozechner/pi-ai";
 import { createId, nowIso } from "@omi/core";
 import { SubAgentManager, createSpawnConfig } from "../subagent-manager";
 import { TaskMailbox } from "../task-mailbox";
+
+type SubAgentToolInput = {
+  args: Record<string, unknown>;
+};
+
+type SubAgentToolResult = {
+  success: boolean;
+  output: string;
+  error?: string;
+};
+
+interface SubAgentTool {
+  name: string;
+  description: string;
+  inputSchema: TSchema;
+  execute(input: SubAgentToolInput): Promise<SubAgentToolResult>;
+}
 
 /**
  * Create spawn subagent tool.
@@ -15,7 +32,7 @@ import { TaskMailbox } from "../task-mailbox";
 export function createSpawnTool(
   workspaceRoot: string,
   ownerId: string,
-): Tool {
+): SubAgentTool {
   const manager = new SubAgentManager(workspaceRoot);
   const mailbox = new TaskMailbox();
 
@@ -46,8 +63,8 @@ export function createSpawnTool(
         },
       },
       required: ["task"],
-    },
-    async execute(input: ToolInput): Promise<ToolResult> {
+    } as unknown as TSchema,
+    async execute(input: SubAgentToolInput): Promise<SubAgentToolResult> {
       try {
         const args = input.args as {
           task: string;
@@ -57,9 +74,9 @@ export function createSpawnTool(
         };
 
         const config = createSpawnConfig(ownerId, args.task, {
-          background: args.background,
+          background: args.background ?? false,
           deadline: args.deadline,
-          writeScope: args.writeScope,
+          writeScope: args.writeScope ?? "shared",
         });
 
         const agentId = await manager.spawn(config);
@@ -81,8 +98,8 @@ export function createSpawnTool(
         const output = await manager.wait(agentId, args.deadline);
 
         return {
-          success: output.success,
-          output: output.text,
+          success: output.success ?? false,
+          output: output.text ?? "",
           error: output.error,
         };
       } catch (error) {
@@ -102,7 +119,7 @@ export function createSpawnTool(
 export function createSendTool(
   workspaceRoot: string,
   ownerId: string,
-): Tool {
+): SubAgentTool {
   const manager = new SubAgentManager(workspaceRoot);
   const mailbox = new TaskMailbox();
 
@@ -122,8 +139,8 @@ export function createSendTool(
         },
       },
       required: ["agentId", "message"],
-    },
-    async execute(input: ToolInput): Promise<ToolResult> {
+    } as unknown as TSchema,
+    async execute(input: SubAgentToolInput): Promise<SubAgentToolResult> {
       try {
         const args = input.args as { agentId: string; message: string };
 
@@ -152,7 +169,7 @@ export function createSendTool(
 export function createWaitTool(
   workspaceRoot: string,
   ownerId: string,
-): Tool {
+): SubAgentTool {
   const manager = new SubAgentManager(workspaceRoot);
 
   return {
@@ -172,16 +189,16 @@ export function createWaitTool(
         },
       },
       required: ["agentId"],
-    },
-    async execute(input: ToolInput): Promise<ToolResult> {
+    } as unknown as TSchema,
+    async execute(input: SubAgentToolInput): Promise<SubAgentToolResult> {
       try {
         const args = input.args as { agentId: string; timeout?: number };
 
         const output = await manager.wait(args.agentId, args.timeout);
 
         return {
-          success: output.success,
-          output: output.text,
+          success: output.success ?? false,
+          output: output.text ?? "",
           error: output.error,
         };
       } catch (error) {
@@ -201,7 +218,7 @@ export function createWaitTool(
 export function createCloseTool(
   workspaceRoot: string,
   ownerId: string,
-): Tool {
+): SubAgentTool {
   const manager = new SubAgentManager(workspaceRoot);
 
   return {
@@ -216,8 +233,8 @@ export function createCloseTool(
         },
       },
       required: ["agentId"],
-    },
-    async execute(input: ToolInput): Promise<ToolResult> {
+    } as unknown as TSchema,
+    async execute(input: SubAgentToolInput): Promise<SubAgentToolResult> {
       try {
         const args = input.args as { agentId: string };
 

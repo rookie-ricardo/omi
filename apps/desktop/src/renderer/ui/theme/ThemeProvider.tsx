@@ -143,7 +143,7 @@ export function ThemeProvider({
     root.dataset.font = resolvedFont;
 
     for (const [name, value] of Object.entries(cssVariables)) {
-      root.style.setProperty(name, value);
+      root.style.setProperty(name, String(value));
     }
 
     if (resolvedTheme.mode === "scenic" && resolvedTheme.backgroundImage) {

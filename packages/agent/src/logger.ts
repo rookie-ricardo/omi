@@ -210,7 +210,21 @@ export function clearLoggers(): void {
  * 快速创建日志条目（用于内联日志）
  */
 export function log(level: LogLevel, component: string, message: string, context?: Record<string, unknown>): void {
-	getLogger(component).log(level as LogLevel, message, context);
+	const logger = getLogger(component);
+	switch (level) {
+		case "debug":
+			logger.debug(message, context);
+			break;
+		case "info":
+			logger.info(message, context);
+			break;
+		case "warn":
+			logger.warn(message, context);
+			break;
+		case "error":
+			logger.error(message, context);
+			break;
+	}
 }
 
 /**

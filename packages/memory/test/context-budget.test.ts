@@ -15,10 +15,12 @@ import {
 
 function makeProviderConfig(): ProviderConfig {
   const now = nowIso();
+  const type = "anthropic";
   return {
     id: createId("provider"),
     name: "Test Provider",
-    type: "anthropic",
+    type,
+    protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     apiKey: "test-key",
     model: "claude-3-5-sonnet-20241022",

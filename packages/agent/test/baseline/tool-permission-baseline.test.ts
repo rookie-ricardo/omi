@@ -79,7 +79,13 @@ function createMemoryDatabase(): AppStore {
     createTask(input) { const now = nowIso(); const t: Task = { id: createId("task"), createdAt: now, updatedAt: now, ...input }; tasks.set(t.id, t); return t; },
     getTask: (id) => tasks.get(id) ?? null,
     updateTask(id, p) { const c = tasks.get(id)!; const n = { ...c, ...p, updatedAt: nowIso() }; tasks.set(id, n); return n; },
-    createRun(input) { const now = nowIso(); const r: Run = { id: createId("run"), createdAt: now, updatedAt: now, ...input }; runs.set(r.id, r); return r; },
+    createRun(input) {
+      const now = nowIso();
+      const runId = (input as { id?: string }).id ?? createId("run");
+      const r: Run = { ...input, id: runId, createdAt: now, updatedAt: now };
+      runs.set(r.id, r);
+      return r;
+    },
     listRuns: (sid) => [...runs.values()].filter((r) => !sid || r.sessionId === sid),
     updateRun(id, p) { const c = runs.get(id)!; const n = { ...c, ...p, updatedAt: nowIso() }; runs.set(id, n); return n; },
     getRun: (id) => runs.get(id) ?? null,
@@ -88,15 +94,52 @@ function createMemoryDatabase(): AppStore {
       const m: SessionMessage = { id: createId("msg"), createdAt: nowIso(), ...mi };
       messages.push(m);
       const pid = parentHistoryEntryId ?? historyEntries.filter((e) => e.sessionId === m.sessionId).at(-1)?.id ?? null;
-      historyEntries.push({ id: createId("hist"), sessionId: m.sessionId, parentId: pid, kind: "message", messageId: m.id, summary: null, details: null, createdAt: m.createdAt, updatedAt: m.createdAt });
+      historyEntries.push({
+        id: createId("hist"),
+        sessionId: m.sessionId,
+        parentId: pid,
+        kind: "message",
+        messageId: m.id,
+        summary: null,
+        details: null,
+        branchId: null,
+        lineageDepth: 0,
+        originRunId: null,
+        createdAt: m.createdAt,
+        updatedAt: m.createdAt,
+      });
       return m;
     },
     listMessages: (sid) => messages.filter((m) => m.sessionId === sid),
-    addSessionHistoryEntry(input) { const now = nowIso(); const e: SessionHistoryEntry = { id: input.id ?? createId("hist"), ...input, createdAt: now, updatedAt: now }; historyEntries.push(e); return e; },
+    addSessionHistoryEntry(input) {
+      const now = nowIso();
+      const e: SessionHistoryEntry = {
+        id: input.id ?? createId("hist"),
+        sessionId: input.sessionId,
+        parentId: input.parentId,
+        kind: input.kind,
+        messageId: input.messageId ?? null,
+        summary: input.summary ?? null,
+        details: input.details ?? null,
+        branchId: input.branchId ?? null,
+        lineageDepth: input.lineageDepth ?? 0,
+        originRunId: input.originRunId ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      historyEntries.push(e);
+      return e;
+    },
     listSessionHistoryEntries(sid) { return historyEntries.filter((e) => e.sessionId === sid); },
     addEvent(input) { const e: EventRecord = { id: createId("evt"), createdAt: nowIso(), ...input }; events.push(e); return e; },
     listEvents: (rid) => events.filter((e) => e.runId === rid),
-    createToolCall(input) { const tc: ToolCall = { id: input.id ?? createId("tool"), createdAt: nowIso(), updatedAt: nowIso(), ...input }; toolCalls.set(tc.id, tc); return tc; },
+    createToolCall(input) {
+      const toolCallId = input.id ?? createId("tool");
+      const createdAt = nowIso();
+      const tc: ToolCall = { ...input, id: toolCallId, createdAt, updatedAt: createdAt };
+      toolCalls.set(tc.id, tc);
+      return tc;
+    },
     updateToolCall(id, p) { const c = toolCalls.get(id)!; const n = { ...c, ...p, updatedAt: nowIso() }; toolCalls.set(id, n); return n; },
     getToolCall: (id) => toolCalls.get(id) ?? null,
     listToolCalls: (rid) => [...toolCalls.values()].filter((tc) => tc.runId === rid),
@@ -191,7 +234,7 @@ describe("Tool & Permission baseline", () => {
         return { assistantText: "tool done" };
       },
       cancel() {},
-      approveTool(id) { onToolDecision?.(id, "approved"); gateResolve(); },
+      approveTool(id: string) { onToolDecision?.(id, "approved"); gateResolve(); },
       rejectTool() {},
     };
 
@@ -246,7 +289,7 @@ describe("Tool & Permission baseline", () => {
       },
       cancel() {},
       approveTool() {},
-      rejectTool(id) { onToolDecision?.(id, "rejected"); gateResolve(); },
+      rejectTool(id: string) { onToolDecision?.(id, "rejected"); gateResolve(); },
     };
 
     const agentSession = new AgentSession({

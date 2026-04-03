@@ -284,6 +284,8 @@ export function createPermissionEvaluator(
   };
 }
 
+export type { PermissionContext, PermissionRule } from "./rules";
+
 function normalizeRules(
   rules: PermissionRule[],
   source: PermissionRuleSource,

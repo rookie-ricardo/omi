@@ -7,23 +7,18 @@ import {
   logRpcReady,
   logRpcShutdown,
 } from "../../../src/modes/rpc/observability";
-import type { Logger } from "../../../src/observability";
+import { Logger } from "../../../src/logger";
 import type { RpcCommand, RpcResponse } from "../../../src/modes/rpc/rpc-types";
 
 describe("RPC Observability", () => {
   let mockLogger: Logger;
-  let infoSpy: ReturnType<typeof vi.fn>;
-  let errorSpy: ReturnType<typeof vi.fn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    infoSpy = vi.fn();
-    errorSpy = vi.fn();
-    mockLogger = {
-      debug: vi.fn(),
-      info: infoSpy,
-      warn: vi.fn(),
-      error: errorSpy,
-    } as unknown as Logger;
+    mockLogger = new Logger("rpc-test", { console: false });
+    infoSpy = vi.spyOn(mockLogger, "info");
+    errorSpy = vi.spyOn(mockLogger, "error");
 
     vi.spyOn(performance, "now")
       .mockReturnValueOnce(1000)  // recordCommandStart 调用
@@ -79,9 +74,15 @@ describe("RPC Observability", () => {
       const response: RpcResponse = {
         id: "cmd-1",
         type: "response",
-        command: "prompt",
+        command: "get_state",
         success: true,
-        data: { result: "ok" },
+        data: {
+          sessionId: "session-1",
+          isStreaming: false,
+          isCompacting: false,
+          messageCount: 0,
+          pendingMessageCount: 0,
+        },
       };
 
       recordCommandSuccess(mockLogger, "cmd-1", "prompt", 1000, response);

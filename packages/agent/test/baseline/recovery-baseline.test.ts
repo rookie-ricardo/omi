@@ -16,7 +16,7 @@ import type { ResourceLoader, RunnerEventEnvelope } from "../../src/index";
 import type { AppStore } from "@omi/store";
 import type {
   EventRecord, MemoryRecord, ProviderConfig, ReviewRequest,
-  Run, Session, SessionHistoryEntry, SessionMessage, Task, ToolCall,
+  Run, Session, SessionBranch, RunCheckpoint, SessionHistoryEntry, SessionMessage, Task, ToolCall,
 } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
 
@@ -33,10 +33,12 @@ function waitFor(predicate: () => boolean, timeoutMs = 2500): Promise<void> {
 
 function makeProviderConfig(overrides?: Partial<ProviderConfig>): ProviderConfig {
   const now = nowIso();
+  const type = overrides?.type ?? "anthropic";
   return {
     id: overrides?.id ?? createId("provider"),
     name: overrides?.name ?? "Test Provider",
-    type: overrides?.type ?? "anthropic",
+    type,
+    protocol: overrides?.protocol ?? (type === "anthropic" ? "anthropic-messages" : "openai-chat"),
     baseUrl: overrides?.baseUrl ?? "https://api.anthropic.com",
     apiKey: overrides?.apiKey ?? "test-key",
     model: overrides?.model ?? "claude-sonnet-4-20250514",
@@ -68,6 +70,9 @@ function createMemoryDatabase(): AppStore {
   const memories = new Map<string, MemoryRecord>();
   const providerConfigs = new Map<string, ProviderConfig>();
   const historyEntries: SessionHistoryEntry[] = [];
+  const branches = new Map<string, SessionBranch>();
+  const checkpoints: RunCheckpoint[] = [];
+  const activeBranchIds = new Map<string, string | null>();
   const runtimeRows = new Map<string, { sessionId: string; snapshot: string; updatedAt: string }>();
 
   return {
@@ -83,7 +88,13 @@ function createMemoryDatabase(): AppStore {
     createTask(input) { const now = nowIso(); const t: Task = { id: createId("task"), createdAt: now, updatedAt: now, ...input }; tasks.set(t.id, t); return t; },
     getTask: (id) => tasks.get(id) ?? null,
     updateTask(id, p) { const c = tasks.get(id)!; const n = { ...c, ...p, updatedAt: nowIso() }; tasks.set(id, n); return n; },
-    createRun(input) { const now = nowIso(); const r: Run = { id: createId("run"), createdAt: now, updatedAt: now, ...input }; runs.set(r.id, r); return r; },
+    createRun(input) {
+      const now = nowIso();
+      const runId = (input as { id?: string }).id ?? createId("run");
+      const r: Run = { ...input, id: runId, createdAt: now, updatedAt: now };
+      runs.set(r.id, r);
+      return r;
+    },
     listRuns: (sid) => [...runs.values()].filter((r) => !sid || r.sessionId === sid),
     updateRun(id, p) { const c = runs.get(id)!; const n = { ...c, ...p, updatedAt: nowIso() }; runs.set(id, n); return n; },
     getRun: (id) => runs.get(id) ?? null,
@@ -92,15 +103,52 @@ function createMemoryDatabase(): AppStore {
       const m: SessionMessage = { id: createId("msg"), createdAt: nowIso(), ...mi };
       messages.push(m);
       const pid = parentHistoryEntryId ?? historyEntries.filter((e) => e.sessionId === m.sessionId).at(-1)?.id ?? null;
-      historyEntries.push({ id: createId("hist"), sessionId: m.sessionId, parentId: pid, kind: "message", messageId: m.id, summary: null, details: null, createdAt: m.createdAt, updatedAt: m.createdAt });
+      historyEntries.push({
+        id: createId("hist"),
+        sessionId: m.sessionId,
+        parentId: pid,
+        kind: "message",
+        messageId: m.id,
+        summary: null,
+        details: null,
+        branchId: null,
+        lineageDepth: 0,
+        originRunId: null,
+        createdAt: m.createdAt,
+        updatedAt: m.createdAt,
+      });
       return m;
     },
     listMessages: (sid) => messages.filter((m) => m.sessionId === sid),
-    addSessionHistoryEntry(input) { const now = nowIso(); const e: SessionHistoryEntry = { id: input.id ?? createId("hist"), ...input, createdAt: now, updatedAt: now }; historyEntries.push(e); return e; },
+    addSessionHistoryEntry(input) {
+      const now = nowIso();
+      const e: SessionHistoryEntry = {
+        id: input.id ?? createId("hist"),
+        sessionId: input.sessionId,
+        parentId: input.parentId,
+        kind: input.kind,
+        messageId: input.messageId ?? null,
+        summary: input.summary ?? null,
+        details: input.details ?? null,
+        branchId: input.branchId ?? null,
+        lineageDepth: input.lineageDepth ?? 0,
+        originRunId: input.originRunId ?? null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      historyEntries.push(e);
+      return e;
+    },
     listSessionHistoryEntries(sid) { return historyEntries.filter((e) => e.sessionId === sid); },
     addEvent(input) { const e: EventRecord = { id: createId("evt"), createdAt: nowIso(), ...input }; events.push(e); return e; },
     listEvents: (rid) => events.filter((e) => e.runId === rid),
-    createToolCall(input) { const tc: ToolCall = { id: input.id ?? createId("tool"), createdAt: nowIso(), updatedAt: nowIso(), ...input }; toolCalls.set(tc.id, tc); return tc; },
+    createToolCall(input) {
+      const toolCallId = input.id ?? createId("tool");
+      const createdAt = nowIso();
+      const tc: ToolCall = { ...input, id: toolCallId, createdAt, updatedAt: createdAt };
+      toolCalls.set(tc.id, tc);
+      return tc;
+    },
     updateToolCall(id, p) { const c = toolCalls.get(id)!; const n = { ...c, ...p, updatedAt: nowIso() }; toolCalls.set(id, n); return n; },
     getToolCall: (id) => toolCalls.get(id) ?? null,
     listToolCalls: (rid) => [...toolCalls.values()].filter((tc) => tc.runId === rid),
@@ -122,6 +170,36 @@ function createMemoryDatabase(): AppStore {
     getProviderConfig(pid) { if (pid) return providerConfigs.get(pid) ?? null; return providerConfigs.values().next().value ?? null; },
     loadSessionRuntimeSnapshot(sid) { return runtimeRows.get(sid) ?? null; },
     saveSessionRuntimeSnapshot(input) { runtimeRows.set(input.sessionId, input); },
+    createBranch(input) {
+      const now = nowIso();
+      const branch: SessionBranch = { ...input, createdAt: now, updatedAt: now };
+      branches.set(branch.id, branch);
+      activeBranchIds.set(branch.sessionId, branch.id);
+      return branch;
+    },
+    getBranch: (branchId) => branches.get(branchId) ?? null,
+    listBranches: (sessionId) => [...branches.values()].filter((branch) => branch.sessionId === sessionId),
+    updateBranch(branchId, partial) {
+      const current = branches.get(branchId);
+      if (!current) throw new Error(`Branch ${branchId} not found`);
+      const next = { ...current, ...partial, updatedAt: nowIso() };
+      branches.set(branchId, next);
+      return next;
+    },
+    createCheckpoint(input) {
+      const checkpoint: RunCheckpoint = {
+        ...input,
+        createdAt: nowIso(),
+      };
+      checkpoints.push(checkpoint);
+      return checkpoint;
+    },
+    listCheckpoints: (runId) => checkpoints.filter((checkpoint) => checkpoint.runId === runId),
+    getLatestCheckpoint: (runId) => [...checkpoints].filter((checkpoint) => checkpoint.runId === runId).at(-1) ?? null,
+    getHistoryEntry: (entryId) => historyEntries.find((entry) => entry.id === entryId) ?? null,
+    getBranchHistory: (branchId) => historyEntries.filter((entry) => entry.branchId === branchId),
+    getActiveBranchId: (sessionId) => activeBranchIds.get(sessionId) ?? null,
+    setActiveBranchId(sessionId, branchId) { activeBranchIds.set(sessionId, branchId); },
   };
 }
 

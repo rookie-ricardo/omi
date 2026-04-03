@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   searchSkills,
   resolveSkillForPrompt,
-} from "../../src/skills/discovery";
+} from "../src/skills/discovery";
 import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 

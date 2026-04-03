@@ -186,10 +186,9 @@ export async function resolveSkillForPrompt(
     });
   });
 
-  // Fall back to prompt-based matching
-  const [bestMatch] = contextMatch
-    ? [contextMatch]
-    : await searchSkills(workspaceRoot, prompt, options);
+  const bestMatch = contextMatch
+    ? toSkillMatch(contextMatch, scoreSkill(contextMatch, prompt.trim().toLowerCase()))
+    : (await searchSkills(workspaceRoot, prompt, options))[0] ?? null;
 
   if (!bestMatch) {
     return null;
@@ -458,6 +457,13 @@ function scoreSkill(skill: DiscoveredSkill, normalizedQuery: string): number {
   }
 
   return score + effortScore;
+}
+
+function toSkillMatch(skill: DiscoveredSkill, score: number): SkillMatch {
+  return skillMatchSchema.parse({
+    ...skill.descriptor,
+    score,
+  });
 }
 
 function buildSkillPrompt(skill: SkillMatch, enabledToolNames: string[]): string {

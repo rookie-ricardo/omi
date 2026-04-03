@@ -14,7 +14,7 @@ const attachJsonlLineReaderMock = vi.mocked(attachJsonlLineReader);
 
 describe("RPC Mode", () => {
   let mockSession: AgentSession;
-  let stdoutWrite: ReturnType<typeof vi.spyOn>;
+  let stdoutWrite: any;
 
   beforeEach(() => {
     mockSession = {
@@ -41,13 +41,12 @@ describe("RPC Mode", () => {
   });
 
   function mockCommandStream(commands: RpcCommand[]) {
-    attachJsonlLineReaderMock.mockReturnValue({
-      async *[Symbol.asyncIterator]() {
-        for (const command of commands) {
-          yield command;
-        }
-      },
-    } as AsyncIterable<unknown>);
+    const stream: AsyncGenerator<unknown, void, unknown> = (async function* () {
+      for (const command of commands) {
+        yield command;
+      }
+    })();
+    attachJsonlLineReaderMock.mockReturnValue(stream);
   }
 
   describe("prompt command", () => {

@@ -756,6 +756,16 @@ Schema 变更（建议）：
 - `packages/store/test/**`
 - `apps/runner/test/**`
 
+矩阵定义：
+- `packages/agent/test/**` 覆盖 session / recovery / permission / skill / subagent
+- `packages/provider/test/**` 覆盖 mcp / 协议路由
+- `packages/tools/test/**` 覆盖工具注册与执行
+- `packages/memory/test/**` 覆盖 context / compaction / recall / inject
+- `packages/store/test/**` 覆盖 session history / runtime persistence
+- `packages/protocol/test/**` 覆盖 runner 协议 schema / parse
+- `apps/runner/test/**` 覆盖 runner request handler / diagnostics
+- `packages/core/test/**`、`packages/extensions/test/**`、`packages/prompt/test/**`、`packages/settings/test/**` 作为支撑矩阵，纳入最终门禁
+
 任务：
 - [ ] 单元测试：状态机、权限引擎、schema、协议适配。
 - [ ] 集成测试：session lineage、resume/retry、plan/worktree、mcp、subagent。
@@ -764,10 +774,13 @@ Schema 变更（建议）：
 - [ ] 长会话压测：100/200/300 turn。
 
 发布门禁：
+- `pnpm ws15:matrix`：只验证 WS-15 核心矩阵是否具备可执行测试文件。
+- `pnpm ws15:gate`：先跑核心矩阵，再跑支撑矩阵，最后做 workspace typecheck。
 - [ ] P0 用例通过率 100%。
 - [ ] 全量自动化通过率 >= 95%。
 - [ ] 无 P0/P1 已知缺陷。
 - [ ] 无兼容双轨遗留。
+- [ ] 门禁命令可重复执行，且不会把空测试目录当作通过。
 
 ---
 

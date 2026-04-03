@@ -1,5 +1,5 @@
 import { getLogger } from "./logger";
-import type { BashExecutorOptions, BashResult, BashOperations } from "../bash-executor";
+import type { BashExecutorOptions, BashResult, BashOperations } from "./bash-executor";
 
 const logger = getLogger("bash-executor");
 

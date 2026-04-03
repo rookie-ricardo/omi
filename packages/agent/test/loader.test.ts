@@ -7,7 +7,7 @@ import {
   shouldFork,
   getToolRules,
   isCommandAllowed,
-} from "../../src/skills/loader";
+} from "../src/skills/loader";
 
 describe("loader", () => {
   describe("getModelConstraints", () => {

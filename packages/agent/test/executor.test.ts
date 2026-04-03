@@ -5,14 +5,22 @@ import {
   getExecutionPriority,
   canExecuteSkill,
   mergeSkillOutputs,
-} from "../../src/skills/executor";
+} from "../src/skills/executor";
 
 describe("executor", () => {
   describe("SkillExecutor", () => {
     const workspaceRoot = "/tmp/test";
+    const now = new Date().toISOString();
     const providerConfig = {
+      id: "provider-test",
+      name: "Test Provider",
       type: "anthropic" as const,
+      protocol: "anthropic-messages" as const,
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "test-key",
       model: "claude-3-5-sonnet-20241022",
+      createdAt: now,
+      updatedAt: now,
     };
 
     it("should create executor instance", () => {

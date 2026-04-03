@@ -107,6 +107,7 @@ describe("agent session", () => {
       id: createId("provider"),
       name: "Default anthropic",
       type: "anthropic",
+      protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
       model: "claude-sonnet-4-20250514",
@@ -191,7 +192,7 @@ describe("agent session", () => {
       headEntryId: null,
       title: "main",
     });
-    const baseEntry = database.addSessionHistoryEntry({
+    const baseEntry = database.addSessionHistoryEntry!({
       id: createId("hist"),
       sessionId: session.id,
       parentId: null,
@@ -241,7 +242,7 @@ describe("agent session", () => {
     expect(branches).toHaveLength(2);
     const continueBranch = branches[1];
     expect(runtime.snapshot().activeBranchId).toBe(continueBranch.id);
-    const historyEntries = database.listSessionHistoryEntries(session.id);
+    const historyEntries = database.listSessionHistoryEntries!(session.id);
     const checkpointEntry = historyEntries.find(
       (entry) => entry.kind === "branch_summary" && entry.summary === "checkpoint summary",
     );
@@ -990,10 +991,12 @@ function makeSkill(name: string): SkillDescriptor {
 
 function makeProviderConfig(overrides?: Partial<ProviderConfig>): ProviderConfig {
   const now = nowIso();
+  const type = overrides?.type ?? "anthropic";
   return {
     id: overrides?.id ?? createId("provider"),
     name: overrides?.name ?? "Default anthropic",
-    type: overrides?.type ?? "anthropic",
+    type,
+    protocol: overrides?.protocol ?? (type === "anthropic" ? "anthropic-messages" : "openai-chat"),
     baseUrl: overrides?.baseUrl ?? "https://api.anthropic.com",
     apiKey: overrides?.apiKey ?? "test-api-key",
     model: overrides?.model ?? "claude-sonnet-4-20250514",

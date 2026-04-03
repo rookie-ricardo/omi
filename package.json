@@ -7,6 +7,8 @@
     "build": "turbo run build",
     "dev": "pnpm --filter @omi/desktop dev",
     "format": "biome check . --write",
+    "ws15:gate": "tsx scripts/ws15-gate.ts",
+    "ws15:matrix": "tsx scripts/ws15-gate.ts --matrix-only",
     "lint": "biome check .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"

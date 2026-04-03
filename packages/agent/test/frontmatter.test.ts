@@ -5,7 +5,7 @@ import {
   getEffortScore,
   skillFrontmatterSchema,
   type EffortLevel,
-} from "../../src/skills/frontmatter";
+} from "../src/skills/frontmatter";
 
 describe("frontmatter", () => {
   describe("parseSkillFrontmatter", () => {

@@ -22,6 +22,11 @@ export * from "./telemetry";
 export * from "./audit-log";
 
 // Observability
-export * from "./observability";
 export * from "./logger";
+export {
+	createLogger,
+	type LogEntry as ObservabilityLogEntry,
+	type LogLevel as ObservabilityLogLevel,
+	type Logger as ObservabilityLogger,
+} from "./observability";
 export * from "./bash-observability";

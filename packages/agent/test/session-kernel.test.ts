@@ -182,7 +182,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
       });
 
       // 添加历史条目
-      const entry1 = db.addSessionHistoryEntry({
+      const entry1 = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: null,
@@ -195,7 +195,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
         originRunId: null,
       });
 
-      const entry2 = db.addSessionHistoryEntry({
+      const entry2 = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: entry1.id,
@@ -220,7 +220,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
       });
 
       // 在新分支上添加条目
-      const branchEntry = db.addSessionHistoryEntry({
+      const branchEntry = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: entry1.id,
@@ -251,7 +251,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
       const session = db.createSession("Lineage Depth");
 
       // 添加多层嵌套条目
-      const entry0 = db.addSessionHistoryEntry({
+      const entry0 = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: null,
@@ -264,7 +264,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
         originRunId: null,
       });
 
-      const entry1 = db.addSessionHistoryEntry({
+      const entry1 = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: entry0.id,
@@ -277,7 +277,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
         originRunId: null,
       });
 
-      const entry2 = db.addSessionHistoryEntry({
+      const entry2 = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: entry1.id,
@@ -309,7 +309,7 @@ describe("WS-01 Session Kernel 验收测试", () => {
         recoveryMode: "start",
       });
 
-      const entryFromRun1 = db.addSessionHistoryEntry({
+      const entryFromRun1 = db.addSessionHistoryEntry!({
         id: createId("hist"),
         sessionId: session.id,
         parentId: null,
@@ -606,11 +606,12 @@ function createMockDatabase(): AppStore {
     },
     createRun(input) {
       const now = nowIso();
+      const runId = (input as { id?: string }).id ?? createId("run");
       const run: Run = {
-        id: input.id ?? createId("run"),
+        ...input,
+        id: runId,
         createdAt: now,
         updatedAt: now,
-        ...input,
       };
       runs.set(run.id, run);
       return run;
@@ -636,6 +637,9 @@ function createMockDatabase(): AppStore {
       const entry: SessionHistoryEntry = {
         id: input.id ?? createId("hist"),
         ...input,
+        branchId: input.branchId ?? null,
+        lineageDepth: input.lineageDepth ?? 0,
+        originRunId: input.originRunId ?? null,
         createdAt: now,
         updatedAt: now,
       };
@@ -653,7 +657,8 @@ function createMockDatabase(): AppStore {
     listEvents: (runId) => events.filter((e) => e.runId === runId),
     createToolCall(input) {
       const now = nowIso();
-      const tc: ToolCall = { id: input.id ?? createId("tool"), createdAt: now, updatedAt: now, ...input };
+      const toolCallId = input.id ?? createId("tool");
+      const tc: ToolCall = { ...input, id: toolCallId, createdAt: now, updatedAt: now };
       toolCalls.set(tc.id, tc);
       return tc;
     },

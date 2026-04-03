@@ -322,19 +322,20 @@ export class Swarm {
     this.currentDepth++;
 
     // Spawn SubAgent
-    const subAgent = this.config.subAgentManager.spawn({
-      name: `${role}-${createId("swarm").slice(0, 6)}`,
+    const subAgentName = `${role}-${createId("swarm").slice(0, 6)}`;
+    const subAgentId = this.config.subAgentManager.spawn({
+      name: subAgentName,
       task: subtask,
     });
 
     // Register in swarm
     const swarmAgent = this.registerAgent({
       id: createId("swarm"),
-      name: subAgent.config.name,
+      name: subAgentName,
       role,
       expertise,
       parentId: parentAgentId,
-      subAgentId: subAgent.config.id,
+      subAgentId,
       status: "active",
     });
 

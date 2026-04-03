@@ -162,6 +162,7 @@ describe("session manager", () => {
       lastUserPrompt: null,
       lastAssistantResponse: null,
       lastActivityAt: nowIso(),
+      activeBranchId: null,
       compaction: {
         status: "idle",
         reason: null,
@@ -192,6 +193,7 @@ describe("session manager", () => {
     const database = createMockDatabase();
     const session = database.createSession("Legacy Runtime");
     const legacyState: SessionRuntimeState = {
+      version: 1,
       sessionId: session.id,
       activeRunId: null,
       pendingRunIds: [],
@@ -204,6 +206,7 @@ describe("session manager", () => {
       lastUserPrompt: "legacy prompt",
       lastAssistantResponse: "legacy response",
       lastActivityAt: "2025-03-30T00:00:00.000Z",
+      activeBranchId: null,
       compaction: {
         status: "completed",
         reason: null,
@@ -765,6 +768,9 @@ function makeHistoryEntry(
     messageId,
     summary,
     details: null,
+    branchId: null,
+    lineageDepth: 0,
+    originRunId: null,
     createdAt,
     updatedAt: createdAt,
   };

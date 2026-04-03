@@ -11,6 +11,7 @@ import { handleRunnerRequest } from "../src/request-handler";
 describe("runner request handler", () => {
   it("returns structured payloads for runtime, branches, run state, and mode control", async () => {
     const runtimeState: SessionRuntimeState = {
+      version: 1,
       sessionId: "session_1",
       activeRunId: null,
       pendingRunIds: [],
@@ -23,6 +24,7 @@ describe("runner request handler", () => {
       lastUserPrompt: null,
       lastAssistantResponse: null,
       lastActivityAt: "2025-03-30T00:00:00.000Z",
+      activeBranchId: null,
       compaction: {
         status: "idle",
         reason: null,

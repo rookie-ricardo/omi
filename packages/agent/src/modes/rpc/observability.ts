@@ -1,7 +1,7 @@
 /**
  * RPC 模式观测性支持
  */
-import type { Logger } from "../observability";
+import type { Logger } from "../../logger";
 import type { RpcCommand, RpcResponse } from "./rpc-types";
 
 export interface RpcObservabilityOptions {
@@ -55,7 +55,7 @@ export function recordCommandSuccess(
     commandType,
     durationMs: Math.round(duration),
     success: true,
-    hasData: response && "data" in response && !!response.data,
+    hasData: response ? "data" in response && !!response.data : false,
   });
 }
 

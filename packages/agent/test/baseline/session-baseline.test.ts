@@ -48,10 +48,12 @@ function waitFor(predicate: () => boolean, timeoutMs = 2500): Promise<void> {
 
 function makeProviderConfig(overrides?: Partial<ProviderConfig>): ProviderConfig {
   const now = nowIso();
+  const type = overrides?.type ?? "anthropic";
   return {
     id: overrides?.id ?? createId("provider"),
     name: overrides?.name ?? "Test Provider",
-    type: overrides?.type ?? "anthropic",
+    type,
+    protocol: overrides?.protocol ?? (type === "anthropic" ? "anthropic-messages" : "openai-chat"),
     baseUrl: overrides?.baseUrl ?? "https://api.anthropic.com",
     apiKey: overrides?.apiKey ?? "test-key",
     model: overrides?.model ?? "claude-sonnet-4-20250514",
@@ -159,6 +161,7 @@ function createMemoryDatabase(): AppStore {
       historyEntries.push({
         id: createId("hist"), sessionId: msg.sessionId, parentId,
         kind: "message", messageId: msg.id, summary: null, details: null,
+        branchId: null, lineageDepth: 0, originRunId: null,
         createdAt: msg.createdAt, updatedAt: msg.createdAt,
       });
       return msg;
@@ -167,8 +170,18 @@ function createMemoryDatabase(): AppStore {
     addSessionHistoryEntry(input) {
       const now = nowIso();
       const entry: SessionHistoryEntry = {
-        id: input.id ?? createId("hist"), ...input,
-        createdAt: now, updatedAt: now,
+        id: input.id ?? createId("hist"),
+        sessionId: input.sessionId,
+        parentId: input.parentId,
+        kind: input.kind,
+        messageId: input.messageId ?? null,
+        summary: input.summary ?? null,
+        details: input.details ?? null,
+        branchId: input.branchId ?? null,
+        lineageDepth: input.lineageDepth ?? 0,
+        originRunId: input.originRunId ?? null,
+        createdAt: now,
+        updatedAt: now,
       };
       historyEntries.push(entry);
       return entry;
@@ -181,9 +194,9 @@ function createMemoryDatabase(): AppStore {
     },
     listEvents: (runId) => events.filter((e) => e.runId === runId),
     createToolCall(input) {
-      const tc: ToolCall = {
-        id: input.id ?? createId("tool"), createdAt: nowIso(), updatedAt: nowIso(), ...input,
-      };
+      const toolCallId = input.id ?? createId("tool");
+      const createdAt = nowIso();
+      const tc: ToolCall = { ...input, id: toolCallId, createdAt, updatedAt: createdAt };
       toolCalls.set(tc.id, tc);
       return tc;
     },
