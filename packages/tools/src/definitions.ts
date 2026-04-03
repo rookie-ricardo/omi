@@ -2,13 +2,13 @@
  * Tool Surface Governance - Unified Tool Definitions
  *
  * Provides a standardized schema for all tools with:
- * - Structured schemas (zod)
+ * - Structured schemas
  * - Risk classification and concurrency safety
  * - Error codes and audit fields
  * - Idempotency policies for write operations
  */
 
-import { z } from "zod";
+import type { TSchema } from "@mariozechner/pi-ai";
 
 // ============================================================================
 // Risk Level
@@ -158,8 +158,8 @@ export interface ToolDefinition {
   name: string;
   /** Human-readable description. */
   description: string;
-  /** Zod input schema for validation. */
-  inputSchema: z.ZodType<unknown>;
+  /** Input schema for validation. */
+  schema: TSchema;
   /** Whether this tool modifies state (vs. read-only). */
   isReadOnly: boolean;
   /** Whether this tool can run concurrently with itself. */

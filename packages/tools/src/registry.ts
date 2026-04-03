@@ -94,16 +94,17 @@ export const CORE_TOOL_NAMES = new Set([
   "read",
   "ls",
   "grep",
-  "find",
+  "glob",
   "bash",
   "edit",
+  "notebook_edit",
   "write",
 ]);
 
 /**
  * Safe tools (no approval required).
  */
-export const SAFE_TOOL_NAMES = new Set(["read", "ls", "grep", "find"]);
+export const SAFE_TOOL_NAMES = new Set(["read", "ls", "grep", "glob"]);
 
 /**
  * Write tools (always require approval).
@@ -113,7 +114,7 @@ export const WRITE_TOOL_NAMES = new Set(["bash", "edit", "write"]);
 /**
  * Tools available in plan mode (read-only).
  */
-export const PLAN_MODE_TOOL_NAMES = new Set(["read", "ls", "grep", "find"]);
+export const PLAN_MODE_TOOL_NAMES = new Set(["read", "ls", "grep", "glob"]);
 
 // ============================================================================
 // Registry

@@ -268,7 +268,7 @@ describe("permissions/rules", () => {
       const readRule = DEFAULT_RULES.find((r) => r.id === "default:allow-read");
       const lsRule = DEFAULT_RULES.find((r) => r.id === "default:allow-ls");
       const grepRule = DEFAULT_RULES.find((r) => r.id === "default:allow-grep");
-      const findRule = DEFAULT_RULES.find((r) => r.id === "default:allow-find");
+      const findRule = DEFAULT_RULES.find((r) => r.id === "default:allow-glob");
 
       expect(readRule?.decision).toBe("allow");
       expect(lsRule?.decision).toBe("allow");
@@ -310,7 +310,7 @@ describe("permissions/rules", () => {
       expect(READ_TOOLS.has("read")).toBe(true);
       expect(READ_TOOLS.has("ls")).toBe(true);
       expect(READ_TOOLS.has("grep")).toBe(true);
-      expect(READ_TOOLS.has("find")).toBe(true);
+      expect(READ_TOOLS.has("glob")).toBe(true);
     });
 
     it("WRITE_TOOLS 和 READ_TOOLS 应该互斥", () => {

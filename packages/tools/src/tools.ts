@@ -1,14 +1,11 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 
-import { createReadTool } from "./read.js";
-import { createBashTool } from "./bash.js";
-import { createEditTool } from "./edit.js";
-import { createWriteTool } from "./write.js";
-import { createLsTool } from "./ls.js";
-import { createGrepTool } from "./grep.js";
-import { createFindTool } from "./find.js";
-import { createEnterPlanTool } from "./enter-plan/index.js";
-import { createExitPlanTool } from "./exit-plan/index.js";
+import {
+  createBuiltInToolMap,
+  getBuiltInToolDefinition,
+  getBuiltInToolDefinitions,
+  isBuiltInTool as isBuiltInToolFromRegistry,
+} from "./builtins";
 import { createEnterWorktreeTool } from "./enter-worktree/index.js";
 import { createExitWorktreeTool } from "./exit-worktree/index.js";
 
@@ -20,43 +17,29 @@ export interface ToolContext {
   sessionId?: string;
 }
 
-// Tools that require explicit user approval before execution
-const ALWAYS_APPROVAL_TOOLS = new Set<string>(["bash", "edit", "write"]);
-
-// All known built-in tool names
-const BUILT_IN_TOOL_NAMES = new Set<string>([
-  "read",
-  "bash",
-  "edit",
-  "write",
-  "ls",
-  "grep",
-  "find",
-  "enter_plan",
-  "exit_plan",
-  "enter_worktree",
-  "exit_worktree",
-]);
-
 /**
  * Check if a tool requires user approval before execution.
  */
 export function requiresApproval(toolName: ToolName): boolean {
-  return ALWAYS_APPROVAL_TOOLS.has(toolName);
+  const definition = getBuiltInToolDefinition(toolName);
+  if (!definition) {
+    return false;
+  }
+  return !definition.isReadOnly;
 }
 
 /**
  * Check if a tool name is a known built-in tool.
  */
 export function isBuiltInTool(toolName: string): boolean {
-  return BUILT_IN_TOOL_NAMES.has(toolName);
+  return isBuiltInToolFromRegistry(toolName);
 }
 
 /**
  * Return the built-in tool names in registration order.
  */
 export function listBuiltInToolNames(): ToolName[] {
-  return [...BUILT_IN_TOOL_NAMES];
+  return getBuiltInToolDefinitions().map((definition) => definition.name);
 }
 
 /**
@@ -64,19 +47,10 @@ export function listBuiltInToolNames(): ToolName[] {
  * Returns a Record mapping tool names to AgentTool instances.
  */
 export function createAllTools(cwd: string, sessionId?: string): Record<string, AgentTool> {
-  return {
-    read: createReadTool(cwd),
-    bash: createBashTool(cwd),
-    edit: createEditTool(cwd),
-    write: createWriteTool(cwd),
-    ls: createLsTool(cwd),
-    grep: createGrepTool(cwd),
-    find: createFindTool(cwd),
-    enter_plan: createEnterPlanTool(sessionId ?? "") as AgentTool,
-    exit_plan: createExitPlanTool(sessionId ?? "") as AgentTool,
-    enter_worktree: createEnterWorktreeTool(cwd, sessionId ?? "") as AgentTool,
-    exit_worktree: createExitWorktreeTool(sessionId ?? "") as AgentTool,
-  };
+  const tools = createBuiltInToolMap(cwd);
+  tools.enter_worktree = createEnterWorktreeTool(cwd, sessionId ?? "") as AgentTool;
+  tools.exit_worktree = createExitWorktreeTool(sessionId ?? "") as AgentTool;
+  return tools;
 }
 
 /**
@@ -92,13 +66,6 @@ export function createToolArray(cwd: string): AgentTool[] {
 
 /**
  * @deprecated Use isBuiltInTool() instead.
- */
-export const toolRegistry = {
-  has: isBuiltInTool,
-};
-
-/**
- * @deprecated Use createAllTools() or createToolArray() instead.
  */
 export async function executeTool(
   toolName: ToolName,

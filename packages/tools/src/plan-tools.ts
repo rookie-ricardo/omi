@@ -13,8 +13,8 @@ import type { TextContent } from "@mariozechner/pi-ai";
 // Tool Names
 // ============================================================================
 
-export const ENTER_PLAN_TOOL = "enter_plan";
-export const EXIT_PLAN_TOOL = "exit_plan";
+export const ENTER_PLAN_TOOL = "plan.enter";
+export const EXIT_PLAN_TOOL = "plan.exit";
 export const APPROVE_PLAN_TOOL = "approve_plan";
 export const REJECT_PLAN_TOOL = "reject_plan";
 export const LIST_PLAN_STEPS_TOOL = "list_plan_steps";

@@ -710,8 +710,8 @@ export function createSubAgentTools(
 
 function createSpawnTool(manager: SubAgentManager): AgentTool {
   return {
-    name: "subagent_spawn",
-    label: "subagent_spawn",
+    name: "subagent.spawn",
+    label: "subagent.spawn",
     description:
       "Spawn a new SubAgent to execute a task in parallel with the main agent.",
     parameters: spawnSchema,
@@ -741,8 +741,8 @@ function createSpawnTool(manager: SubAgentManager): AgentTool {
 
 function createSendTool(manager: SubAgentManager): AgentTool {
   return {
-    name: "subagent_send",
-    label: "subagent_send",
+    name: "subagent.send",
+    label: "subagent.send",
     description: "Send a message to a running SubAgent.",
     parameters: sendSchema,
     execute: async (_toolCallId, params: unknown) => {
@@ -783,8 +783,8 @@ function createSendTool(manager: SubAgentManager): AgentTool {
 
 function createWaitTool(manager: SubAgentManager): AgentTool {
   return {
-    name: "subagent_wait",
-    label: "subagent_wait",
+    name: "subagent.wait",
+    label: "subagent.wait",
     description: "Wait for a SubAgent to complete its task.",
     parameters: waitSchema,
     execute: async (_toolCallId, params: unknown) => {
@@ -827,8 +827,8 @@ function createWaitTool(manager: SubAgentManager): AgentTool {
 
 function createCloseTool(manager: SubAgentManager): AgentTool {
   return {
-    name: "subagent_close",
-    label: "subagent_close",
+    name: "subagent.close",
+    label: "subagent.close",
     description: "Close a SubAgent, optionally forcing termination.",
     parameters: closeSchema,
     execute: async (_toolCallId, params: unknown) => {

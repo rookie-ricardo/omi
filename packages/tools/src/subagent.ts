@@ -145,13 +145,13 @@ export type SubagentDelegateInput = Static<typeof subagentDelegateSchema>;
 // Tool Name Constants
 // ============================================================================
 
-export const SUBAGENT_SPAWN_TOOL = "subagent_spawn";
-export const SUBAGENT_SEND_TOOL = "subagent_send";
-export const SUBAGENT_WAIT_TOOL = "subagent_wait";
-export const SUBAGENT_CLOSE_TOOL = "subagent_close";
-export const SUBAGENT_LIST_TOOL = "subagent_list";
-export const SUBAGENT_GET_TOOL = "subagent_get";
-export const SUBAGENT_DELEGATE_TOOL = "subagent_delegate";
+export const SUBAGENT_SPAWN_TOOL = "subagent.spawn";
+export const SUBAGENT_SEND_TOOL = "subagent.send";
+export const SUBAGENT_WAIT_TOOL = "subagent.wait";
+export const SUBAGENT_CLOSE_TOOL = "subagent.close";
+export const SUBAGENT_LIST_TOOL = "subagent.list";
+export const SUBAGENT_GET_TOOL = "subagent.get";
+export const SUBAGENT_DELEGATE_TOOL = "subagent.delegate";
 
 // ============================================================================
 // SubAgent Manager Interface (for tools to use)
@@ -213,10 +213,10 @@ export function createSubagentSpawnTool(
   return {
     name: SUBAGENT_SPAWN_TOOL,
     label: SUBAGENT_SPAWN_TOOL,
-    description: "Spawn a new SubAgent to execute a task in parallel. The SubAgent will start working immediately after spawning. Use subagent_wait to wait for completion or subagent_list to monitor progress.",
+    description: "Spawn a new SubAgent to execute a task in parallel. The SubAgent will start working immediately after spawning. Use subagent.wait to wait for completion or subagent.list to monitor progress.",
     parameters: subagentSpawnSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = params as SubagentSpawnInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -257,7 +257,7 @@ export function createSubagentSendTool(
     description: "Send a message to a running SubAgent. Use this to provide additional instructions or context to the subagent.",
     parameters: subagentSendSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = params as SubagentSendInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -307,7 +307,7 @@ export function createSubagentWaitTool(
     description: "Wait for a SubAgent to complete its task. Returns the result when the subagent finishes or reports back. Optionally accepts a timeout.",
     parameters: subagentWaitSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = params as SubagentWaitInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -360,7 +360,7 @@ export function createSubagentCloseTool(
     description: "Close a SubAgent, optionally forcing termination. Use force=true to immediately terminate without waiting for the current task to complete.",
     parameters: subagentCloseSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = params as SubagentCloseInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -403,7 +403,7 @@ export function createSubagentListTool(
     description: "List all SubAgents, optionally filtered by status or parent agent. Use this to monitor the status of spawned subagents.",
     parameters: subagentListSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = (params || {}) as SubagentListInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -469,7 +469,7 @@ export function createSubagentGetTool(
     description: "Get detailed information about a specific SubAgent by its ID.",
     parameters: subagentGetSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = params as SubagentGetInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -535,7 +535,7 @@ export function createSubagentDelegateTool(
     description: "Delegate a task to a SubAgent and optionally wait for completion. This is a convenience tool that combines spawn and wait into a single operation. Returns the subagent's result when complete or on timeout.",
     parameters: subagentDelegateSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams = params as SubagentDelegateInput;
+      const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
         return {
@@ -585,7 +585,7 @@ export function createSubagentDelegateTool(
 
         return {
           content: [makeTextContent(
-            `Task delegated to SubAgent ${spawnResult.name} (${spawnResult.subAgentId}). Use subagent_wait to wait for completion or subagent_list to monitor progress.`
+            `Task delegated to SubAgent ${spawnResult.name} (${spawnResult.subAgentId}). Use subagent.wait to wait for completion or subagent.list to monitor progress.`
           )],
           details: { subAgentId: spawnResult.subAgentId, completed: false },
         };

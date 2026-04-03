@@ -82,8 +82,8 @@ function validateAllowedPrompt(prompt: AllowedPrompt): boolean {
  */
 export function createExitPlanTool(sessionId: string): AgentTool {
 	return {
-		name: "exit_plan",
-		label: "exit_plan",
+		name: "plan.exit",
+		label: "plan.exit",
 		description:
 			"Exit plan mode and submit the plan for user approval. The plan will be reviewed by the user, and if approved, you will be able to execute the planned changes. Optionally, you can declare allowed_prompts to auto-approve specific command categories.",
 
@@ -100,7 +100,7 @@ export function createExitPlanTool(sessionId: string): AgentTool {
 					content: [
 						{
 							type: "text" as const,
-							text: "Not in plan mode. Use enter_plan first.",
+							text: "Not in plan mode. Use plan.enter first.",
 						},
 					],
 					details: {},

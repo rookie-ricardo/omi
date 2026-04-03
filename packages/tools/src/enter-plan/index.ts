@@ -49,10 +49,10 @@ export function setPlanStateManager(manager: PlanStateManager): void {
  */
 export function createEnterPlanTool(sessionId: string): AgentTool {
 	return {
-		name: "enter_plan",
-		label: "enter_plan",
+		name: "plan.enter",
+		label: "plan.enter",
 		description:
-			"Enter plan mode to explore the codebase and create a plan before making changes. In plan mode, you can only use read-only tools (read, grep, glob, find, ls, agent). This is useful when a task is complex or affects multiple files. Use this when you need to understand the codebase structure before implementing.",
+			"Enter plan mode to explore the codebase and create a plan before making changes. In plan mode, you can only use read-only tools (read, grep, glob, ls, tool.search, ask_user). This is useful when a task is complex or affects multiple files. Use this when you need to understand the codebase structure before implementing.",
 
 		parameters: enterPlanSchema,
 
@@ -67,7 +67,7 @@ export function createEnterPlanTool(sessionId: string): AgentTool {
 					content: [
 						{
 							type: "text" as const,
-							text: "Already in plan mode. Use exit_plan to exit.",
+							text: "Already in plan mode. Use plan.exit to exit.",
 						},
 					],
 					details: {},
@@ -81,7 +81,7 @@ export function createEnterPlanTool(sessionId: string): AgentTool {
 				content: [
 					{
 						type: "text" as const,
-						text: `Entered plan mode. Reason: ${reason}\n\nYou can now use read-only tools to explore the codebase. When ready, call exit_plan with your plan.`,
+						text: `Entered plan mode. Reason: ${reason}\n\nYou can now use read-only tools to explore the codebase. When ready, call plan.exit with your plan.`,
 					},
 				],
 				details: {

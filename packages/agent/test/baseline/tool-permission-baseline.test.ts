@@ -11,11 +11,11 @@
 import { describe, it, expect } from "vitest";
 import type { ProviderRunInput, ProviderRunResult } from "@omi/provider";
 import { AgentSession, SessionManager } from "../../src/index";
-import type { ResourceLoader, RunnerEventEnvelope } from "../../src/index";
+import type { ResourceLoader } from "../../src/index";
 import type { AppStore } from "@omi/store";
 import type {
-  EventRecord, MemoryRecord, ProviderConfig, ReviewRequest,
-  Run, Session, SessionHistoryEntry, SessionMessage, Task, ToolCall,
+  EventRecord, MemoryRecord, ProviderConfig, ReviewRequest, RunCheckpoint,
+  Run, Session, SessionBranch, SessionHistoryEntry, SessionMessage, Task, ToolCall,
 } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
 import { requiresApproval, isBuiltInTool, createAllTools } from "@omi/tools";
@@ -34,7 +34,7 @@ function waitFor(predicate: () => boolean, timeoutMs = 2500): Promise<void> {
 function makeProviderConfig(): ProviderConfig {
   const now = nowIso();
   return {
-    id: createId("provider"), name: "Test", type: "anthropic",
+    id: createId("provider"), name: "Test", type: "anthropic", protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com", apiKey: "test-key",
     model: "claude-sonnet-4-20250514", createdAt: now, updatedAt: now,
   };
@@ -63,6 +63,7 @@ function createMemoryDatabase(): AppStore {
   const memories = new Map<string, MemoryRecord>();
   const providerConfigs = new Map<string, ProviderConfig>();
   const historyEntries: SessionHistoryEntry[] = [];
+  const checkpoints: RunCheckpoint[] = [];
   const runtimeRows = new Map<string, { sessionId: string; snapshot: string; updatedAt: string }>();
 
   return {
@@ -117,6 +118,29 @@ function createMemoryDatabase(): AppStore {
     getProviderConfig(pid) { if (pid) return providerConfigs.get(pid) ?? null; return providerConfigs.values().next().value ?? null; },
     loadSessionRuntimeSnapshot(sid) { return runtimeRows.get(sid) ?? null; },
     saveSessionRuntimeSnapshot(input) { runtimeRows.set(input.sessionId, input); },
+    createBranch(input) {
+      const now = nowIso();
+      const branch: SessionBranch = { ...input, createdAt: now, updatedAt: now };
+      return branch;
+    },
+    getBranch() { return null; },
+    listBranches() { return []; },
+    updateBranch() { throw new Error("Not implemented"); },
+    createCheckpoint(input) {
+      const cp: RunCheckpoint = { ...input, createdAt: nowIso() };
+      checkpoints.push(cp);
+      return cp;
+    },
+    listCheckpoints(runId) {
+      return checkpoints.filter((checkpoint) => checkpoint.runId === runId);
+    },
+    getLatestCheckpoint(runId) {
+      return checkpoints.filter((checkpoint) => checkpoint.runId === runId).at(-1) ?? null;
+    },
+    getHistoryEntry() { return null; },
+    getBranchHistory() { return []; },
+    getActiveBranchId() { return null; },
+    setActiveBranchId() {},
   };
 }
 
@@ -128,7 +152,7 @@ describe("Tool & Permission baseline", () => {
     expect(requiresApproval("read")).toBe(false);
     expect(requiresApproval("ls")).toBe(false);
     expect(requiresApproval("grep")).toBe(false);
-    expect(requiresApproval("find")).toBe(false);
+    expect(requiresApproval("glob")).toBe(false);
   });
 
   it("all built-in tools are recognized", () => {
@@ -138,7 +162,7 @@ describe("Tool & Permission baseline", () => {
     expect(isBuiltInTool("write")).toBe(true);
     expect(isBuiltInTool("ls")).toBe(true);
     expect(isBuiltInTool("grep")).toBe(true);
-    expect(isBuiltInTool("find")).toBe(true);
+    expect(isBuiltInTool("glob")).toBe(true);
     expect(isBuiltInTool("unknown")).toBe(false);
   });
 
@@ -148,7 +172,6 @@ describe("Tool & Permission baseline", () => {
     const runtime = new SessionManager().getOrCreate(session.id);
     const providerConfig = db.upsertProviderConfig(makeProviderConfig());
     runtime.setSelectedProviderConfig(providerConfig.id);
-    const events: RunnerEventEnvelope[] = [];
     let latestToolCallId: string | null = null;
     let gateResolve!: () => void;
     const gate = new Promise<void>((r) => { gateResolve = r; });
@@ -174,22 +197,29 @@ describe("Tool & Permission baseline", () => {
 
     const agentSession = new AgentSession({
       database: db, sessionId: session.id, workspaceRoot: process.cwd(),
-      emit: (e) => events.push(e), resources: makeStaticResources(), runtime, provider,
+      emit: () => {}, resources: makeStaticResources(), runtime, provider,
     });
 
     const run = agentSession.startRun({ prompt: "run bash", providerConfig, taskId: null });
-    await waitFor(() => runtime.snapshot().blockedToolCallId !== null);
-    expect(latestToolCallId).toBeTruthy();
+    await waitFor(() => latestToolCallId !== null);
+    expect(latestToolCallId).not.toBeNull();
 
     agentSession.approveTool(latestToolCallId!);
     await waitFor(() => db.getRun(run.id)?.status === "completed");
 
     const toolCall = db.getToolCall(latestToolCallId!);
     expect(toolCall?.approvalState).toBe("approved");
-    expect(events.some((e) => e.type === "run.tool_requested")).toBe(true);
-    expect(events.some((e) => e.type === "run.tool_started")).toBe(true);
-    expect(events.some((e) => e.type === "run.tool_finished")).toBe(true);
-    expect(events.some((e) => e.type === "run.blocked")).toBe(true);
+    const eventTypes = db.listEvents(run.id).map((event) => event.type);
+    expect(eventTypes).toEqual(expect.arrayContaining([
+      "query_loop.transition",
+      "run.started",
+      "run.tool_requested",
+      "run.blocked",
+      "run.tool_started",
+      "run.tool_finished",
+      "run.tool_decided",
+      "run.completed",
+    ]));
   });
 
   it("tool rejection cancels the run", async () => {
@@ -221,20 +251,50 @@ describe("Tool & Permission baseline", () => {
 
     const agentSession = new AgentSession({
       database: db, sessionId: session.id, workspaceRoot: process.cwd(),
-      emit: () => {}, resources: makeStaticResources(), runtime, provider,
+      emit: () => {},
+      resources: makeStaticResources(), runtime, provider,
     });
 
     const run = agentSession.startRun({ prompt: "dangerous", providerConfig, taskId: null });
-    await waitFor(() => runtime.snapshot().blockedToolCallId !== null);
+    await waitFor(() => latestToolCallId !== null);
     agentSession.rejectTool(latestToolCallId!);
     await waitFor(() => db.getRun(run.id)?.status === "canceled");
 
     expect(db.getRun(run.id)?.status).toBe("canceled");
   });
 
-  it("createAllTools returns all 7 built-in tools", () => {
+  it("createAllTools returns the WS-06 built-in tool surface", () => {
     const tools = createAllTools(process.cwd());
     const names = Object.keys(tools).sort();
-    expect(names).toEqual(["bash", "edit", "find", "grep", "ls", "read", "write"]);
+    expect(names).toEqual([
+      "ask_user",
+      "bash",
+      "edit",
+      "enter_worktree",
+      "exit_worktree",
+      "glob",
+      "grep",
+      "ls",
+      "mcp.resource.list",
+      "mcp.resource.read",
+      "notebook_edit",
+      "plan.enter",
+      "plan.exit",
+      "read",
+      "subagent.close",
+      "subagent.send",
+      "subagent.spawn",
+      "subagent.wait",
+      "task.create",
+      "task.get",
+      "task.list",
+      "task.output",
+      "task.stop",
+      "task.update",
+      "tool.search",
+      "web.fetch",
+      "web.search",
+      "write",
+    ]);
   });
 });

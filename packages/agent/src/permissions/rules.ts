@@ -5,6 +5,8 @@
  * for the permission evaluation system.
  */
 
+import { getBuiltInToolDefinitions } from "@omi/tools";
+
 // ============================================================================
 // Decision Types
 // ============================================================================
@@ -289,11 +291,11 @@ export const DEFAULT_RULES: PermissionRule[] = [
     active: true,
   },
   {
-    id: "default:allow-find",
+    id: "default:allow-glob",
     source: "default",
     decision: "allow",
-    matchers: [{ type: "tool_name", pattern: "find" }],
-    description: "Allow find search",
+    matchers: [{ type: "tool_name", pattern: "glob" }],
+    description: "Allow glob search",
     active: true,
   },
   {
@@ -309,9 +311,13 @@ export const DEFAULT_RULES: PermissionRule[] = [
 /**
  * Tools that are considered write operations (blocked in plan mode).
  */
-export const WRITE_TOOLS = new Set(["bash", "edit", "write"]);
+export const WRITE_TOOLS = new Set(
+  getBuiltInToolDefinitions().filter((definition) => !definition.isReadOnly).map((definition) => definition.name),
+);
 
 /**
  * Tools that are read-only (allowed in plan mode).
  */
-export const READ_TOOLS = new Set(["read", "ls", "grep", "find"]);
+export const READ_TOOLS = new Set(
+  getBuiltInToolDefinitions().filter((definition) => definition.isReadOnly).map((definition) => definition.name),
+);

@@ -63,8 +63,8 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 	const customOps = options?.operations;
 
 	return {
-		name: "find",
-		label: "find",
+		name: "glob",
+		label: "glob",
 		description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
 		parameters: findSchema,
 		execute: async (
@@ -329,5 +329,5 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 	};
 }
 
-/** Default find tool using process.cwd() - for backwards compatibility */
+/** Default glob tool using process.cwd() */
 export const findTool: AgentTool<typeof findSchema, FindToolDetails> = createFindTool(process.cwd());

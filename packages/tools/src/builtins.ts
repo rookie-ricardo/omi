@@ -1,0 +1,717 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@mariozechner/pi-ai";
+
+import {
+  type ToolDefinition,
+  type ToolErrorCode,
+  type ToolIdempotencyPolicy,
+  type ToolRiskLevel,
+  TOOL_ERROR_CODES,
+} from "./definitions";
+import {
+  createToolRegistry,
+  setGlobalRegistry,
+  type ToolRegistry,
+} from "./registry";
+import { createReadTool, readSchema } from "./read";
+import { createBashTool, bashSchema } from "./bash";
+import { createEditTool, editSchema } from "./edit";
+import { createWriteTool, writeSchema } from "./write";
+import { createLsTool, lsSchema } from "./ls";
+import { createGrepTool, grepSchema } from "./grep";
+import { createFindTool, findSchema } from "./find";
+import { createEnterPlanTool, enterPlanSchema } from "./enter-plan/index";
+import { createExitPlanTool, exitPlanSchema } from "./exit-plan/index";
+import {
+  createMcpResourceListTool,
+  createMcpResourceReadTool,
+  mcpResourceListSchema,
+  mcpResourceReadSchema,
+} from "./mcp-resource-tools";
+import {
+  createSubagentSpawnTool,
+  createSubagentSendTool,
+  createSubagentWaitTool,
+  createSubagentCloseTool,
+  subagentSpawnSchema,
+  subagentSendSchema,
+  subagentWaitSchema,
+  subagentCloseSchema,
+} from "./subagent";
+import {
+  createTaskCreateTool,
+  createTaskUpdateTool,
+  createTaskGetTool,
+  createTaskListTool,
+  createTaskStopTool,
+  createTaskOutputTool,
+  taskCreateSchema,
+  taskUpdateSchema,
+  taskGetSchema,
+  taskListSchema,
+  taskStopSchema,
+  taskOutputSchema,
+} from "./task-tools";
+import {
+  createWebFetchTool,
+  createWebSearchTool,
+  createAskUserTool,
+  webFetchSchema,
+  webSearchSchema,
+  askUserSchema,
+} from "./web-tools";
+import { getMcpRegistryRuntime, getSubAgentClientRuntime } from "./runtime";
+
+// ============================================================================
+// Tool Search
+// ============================================================================
+
+export const toolSearchSchema = Type.Object({
+  query: Type.String({ description: "Search query for tool name or description" }),
+});
+
+export interface ToolSearchInput {
+  query: string;
+}
+
+function createToolSearchTool(): AgentTool {
+  return {
+    name: "tool.search",
+    label: "tool.search",
+    description: "Search registered tools by name or description.",
+    parameters: toolSearchSchema,
+    execute: async (_toolCallId: string, params: unknown) => {
+      const { query } = params as ToolSearchInput;
+      const matches = findTools(query);
+
+      const text = matches.length
+        ? matches.map((definition) => `- ${definition.name}: ${definition.description}`).join("\n")
+        : "No tools matched";
+
+      return {
+        content: [{ type: "text" as const, text }],
+        details: { query, matches },
+      };
+    },
+  };
+}
+
+// ============================================================================
+// Shared Helpers
+// ============================================================================
+
+type BuiltInToolFactory = (cwd: string) => AgentTool;
+
+const READ_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash"];
+const WRITE_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash", "retryCount"];
+const CACHED_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash", "cached"];
+
+function renameTool<T extends AgentTool>(tool: T, name: string): T {
+  return {
+    ...tool,
+    name,
+    label: name,
+  } as T;
+}
+
+function defineTool(
+  name: string,
+  description: string,
+  schema: ToolDefinition["schema"],
+  options: {
+    isReadOnly: boolean;
+    isConcurrencySafe: boolean;
+    riskLevel: ToolRiskLevel;
+    idempotencyPolicy: ToolIdempotencyPolicy;
+    enabledByDefault?: boolean;
+    errorCodes: ToolErrorCode[];
+    auditFields?: ToolDefinition["auditFields"];
+  },
+): ToolDefinition {
+  return {
+    name,
+    description,
+    schema,
+    isReadOnly: options.isReadOnly,
+    isConcurrencySafe: options.isConcurrencySafe,
+    riskLevel: options.riskLevel,
+    idempotencyPolicy: options.idempotencyPolicy,
+    enabledByDefault: options.enabledByDefault ?? true,
+    errorCodes: options.errorCodes,
+    auditFields: options.auditFields ?? [...READ_AUDIT_FIELDS],
+  };
+}
+
+interface BuiltInEntry {
+  definition: ToolDefinition;
+  factory: BuiltInToolFactory;
+}
+
+const ENTRIES: BuiltInEntry[] = [
+  {
+    definition: defineTool(
+      "read",
+      "Read the contents of a file.",
+      readSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.FILE_NOT_FOUND,
+          TOOL_ERROR_CODES.DIRECTORY_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_PATH,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+          TOOL_ERROR_CODES.FILE_TOO_LARGE,
+        ],
+      },
+    ),
+    factory: (cwd) => createReadTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "bash",
+      "Execute a bash command in the working directory.",
+      bashSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "none",
+        errorCodes: [
+          TOOL_ERROR_CODES.COMMAND_FAILED,
+          TOOL_ERROR_CODES.COMMAND_TIMEOUT,
+          TOOL_ERROR_CODES.PROCESS_KILLED,
+          TOOL_ERROR_CODES.INVALID_COMMAND,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createBashTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "edit",
+      "Edit a file by replacing exact text.",
+      editSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.FILE_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_PATH,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createEditTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "notebook_edit",
+      "Edit notebook or JSON-like content with an explicit notebook tool name.",
+      editSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.FILE_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_PATH,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => renameTool(createEditTool(cwd), "notebook_edit"),
+  },
+  {
+    definition: defineTool(
+      "write",
+      "Write content to a file.",
+      writeSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.FILE_ALREADY_EXISTS,
+          TOOL_ERROR_CODES.INVALID_PATH,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+          TOOL_ERROR_CODES.DIRECTORY_NOT_FOUND,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createWriteTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "ls",
+      "List files and directories.",
+      lsSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.DIRECTORY_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_PATH,
+        ],
+      },
+    ),
+    factory: (cwd) => createLsTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "grep",
+      "Search file contents for a pattern.",
+      grepSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.SEARCH_ERROR,
+          TOOL_ERROR_CODES.FILE_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+          TOOL_ERROR_CODES.OUTPUT_TRUNCATED,
+        ],
+      },
+    ),
+    factory: (cwd) => createGrepTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "glob",
+      "Search for files by glob pattern.",
+      findSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.SEARCH_ERROR,
+          TOOL_ERROR_CODES.FILE_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.OUTPUT_TRUNCATED,
+        ],
+      },
+    ),
+    factory: (cwd) => renameTool(createFindTool(cwd), "glob"),
+  },
+  {
+    definition: defineTool(
+      "plan.enter",
+      "Enter plan mode.",
+      enterPlanSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.PLAN_NOT_ACTIVE,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => renameTool(createEnterPlanTool(""), "plan.enter"),
+  },
+  {
+    definition: defineTool(
+      "plan.exit",
+      "Exit plan mode.",
+      exitPlanSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.PLAN_NOT_ACTIVE,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => renameTool(createExitPlanTool(""), "plan.exit"),
+  },
+  {
+    definition: defineTool(
+      "mcp.resource.list",
+      "List available MCP resources.",
+      mcpResourceListSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.MCP_ERROR,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(createMcpResourceListTool({ registry: getMcpRegistryRuntime() ?? createEmptyMcpRegistry() }), "mcp.resource.list"),
+  },
+  {
+    definition: defineTool(
+      "mcp.resource.read",
+      "Read a single MCP resource by URI.",
+      mcpResourceReadSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.MCP_ERROR,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(createMcpResourceReadTool({ registry: getMcpRegistryRuntime() ?? createEmptyMcpRegistry() }), "mcp.resource.read"),
+  },
+  {
+    definition: defineTool(
+      "subagent.spawn",
+      "Spawn a subagent to execute a task in parallel.",
+      subagentSpawnSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => renameTool(createSubagentSpawnTool(() => getSubAgentClientRuntime()), "subagent.spawn"),
+  },
+  {
+    definition: defineTool(
+      "subagent.send",
+      "Send a message to a running subagent.",
+      subagentSendSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => renameTool(createSubagentSendTool(() => getSubAgentClientRuntime()), "subagent.send"),
+  },
+  {
+    definition: defineTool(
+      "subagent.wait",
+      "Wait for a subagent to complete.",
+      subagentWaitSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(createSubagentWaitTool(() => getSubAgentClientRuntime()), "subagent.wait"),
+  },
+  {
+    definition: defineTool(
+      "subagent.close",
+      "Close a subagent.",
+      subagentCloseSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => renameTool(createSubagentCloseTool(() => getSubAgentClientRuntime()), "subagent.close"),
+  },
+  {
+    definition: defineTool(
+      "task.create",
+      "Create a task record.",
+      taskCreateSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createTaskCreateTool(),
+  },
+  {
+    definition: defineTool(
+      "task.update",
+      "Update a task record.",
+      taskUpdateSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createTaskUpdateTool(),
+  },
+  {
+    definition: defineTool(
+      "task.get",
+      "Get a task record by ID.",
+      taskGetSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => createTaskGetTool(),
+  },
+  {
+    definition: defineTool(
+      "task.list",
+      "List task records.",
+      taskListSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => createTaskListTool(),
+  },
+  {
+    definition: defineTool(
+      "task.stop",
+      "Stop a task record.",
+      taskStopSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createTaskStopTool(),
+  },
+  {
+    definition: defineTool(
+      "task.output",
+      "Attach output to a task record.",
+      taskOutputSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_NOT_FOUND,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createTaskOutputTool(),
+  },
+  {
+    definition: defineTool(
+      "web.fetch",
+      "Fetch a web page and return its text content.",
+      webFetchSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "medium",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.NETWORK_ERROR,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.OUTPUT_TRUNCATED,
+        ],
+        auditFields: [...CACHED_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createWebFetchTool(),
+  },
+  {
+    definition: defineTool(
+      "web.search",
+      "Search the web and return top results.",
+      webSearchSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "medium",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.NETWORK_ERROR,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.SEARCH_ERROR,
+        ],
+        auditFields: [...CACHED_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createWebSearchTool(),
+  },
+  {
+    definition: defineTool(
+      "tool.search",
+      "Search registered tools by name or description.",
+      toolSearchSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: () => createToolSearchTool(),
+  },
+  {
+    definition: defineTool(
+      "ask_user",
+      "Ask the user a clarifying question.",
+      askUserSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: () => createAskUserTool(),
+  },
+];
+
+function createEmptyMcpRegistry() {
+  return {
+    getResources: () => [],
+    getAllResources: () => [],
+    getServer: () => undefined,
+    readResourceByUri: async (_uri: string) => {
+      throw new Error("No MCP registry is available");
+    },
+  } as never;
+}
+
+// ============================================================================
+// Registry Initialization
+// ============================================================================
+
+let builtInRegistry: ToolRegistry | null = null;
+
+export function getBuiltInToolRegistry(): ToolRegistry {
+  if (!builtInRegistry) {
+    const registry = createToolRegistry();
+    for (const entry of ENTRIES) {
+      registry.register(entry);
+    }
+    builtInRegistry = registry;
+    setGlobalRegistry(registry);
+  }
+  return builtInRegistry;
+}
+
+export function createBuiltInToolRegistry(): ToolRegistry {
+  return getBuiltInToolRegistry();
+}
+
+export function getBuiltInToolDefinitions(): ToolDefinition[] {
+  return getBuiltInToolRegistry().listAll();
+}
+
+export function getBuiltInToolDefinition(name: string): ToolDefinition | undefined {
+  return getBuiltInToolRegistry().get(name);
+}
+
+export function isBuiltInTool(name: string): boolean {
+  return getBuiltInToolRegistry().has(name);
+}
+
+export function findTools(query: string): ToolDefinition[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+
+  return getBuiltInToolDefinitions().filter((definition) => {
+    return (
+      definition.name.toLowerCase().includes(normalized) ||
+      definition.description.toLowerCase().includes(normalized)
+    );
+  });
+}
+
+export function createBuiltInToolMap(cwd: string): Record<string, AgentTool> {
+  return getBuiltInToolRegistry().createMap(cwd);
+}

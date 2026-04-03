@@ -17,14 +17,14 @@ import {
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  type JSONRPCMessage,
   ListResourcesResultSchema,
   ListToolsResultSchema,
   type ListToolsResult,
   type ListResourcesResult,
   type ListPromptsResult,
   ListPromptsResultSchema,
-  type McpError,
+  ResourceListChangedNotificationSchema,
+  ToolListChangedNotificationSchema,
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 
@@ -370,7 +370,12 @@ export class McpClientImpl implements McpClient {
         _meta: result._meta,
       };
     } catch (error) {
-      if (error instanceof McpError && error.code === ErrorCode.ConnectionClosed) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code?: unknown }).code === ErrorCode.ConnectionClosed
+      ) {
         this.setState("disconnected");
         throw new Error(`MCP server ${this.config.id}: connection closed`);
       }
@@ -447,14 +452,12 @@ export class McpClientImpl implements McpClient {
   private setupNotificationHandlers(): void {
     if (!this.client) return;
 
-    // Handle tools list changed
-    this.client.notificationHandler = (message: JSONRPCMessage) => {
-      if (message.method === "notifications/tools/list_changed") {
-        void this.refreshTools();
-      } else if (message.method === "notifications/resources/list_changed") {
-        void this.refreshResources();
-      }
-    };
+    this.client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      void this.refreshTools();
+    });
+    this.client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+      void this.refreshResources();
+    });
   }
 
   private async createTransport(): Promise<Transport> {

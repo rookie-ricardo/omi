@@ -10,6 +10,8 @@ describe("tools", () => {
   it("marks mutating and shell tools as approval-required", () => {
     expect(requiresApproval("write")).toBe(true);
     expect(requiresApproval("edit")).toBe(true);
+    expect(requiresApproval("notebook_edit")).toBe(true);
+    expect(requiresApproval("plan.enter")).toBe(true);
     expect(requiresApproval("bash")).toBe(true);
     expect(requiresApproval("read")).toBe(false);
     expect(requiresApproval("grep")).toBe(false);
@@ -22,7 +24,9 @@ describe("tools", () => {
     expect(isBuiltInTool("write")).toBe(true);
     expect(isBuiltInTool("ls")).toBe(true);
     expect(isBuiltInTool("grep")).toBe(true);
-    expect(isBuiltInTool("find")).toBe(true);
+    expect(isBuiltInTool("glob")).toBe(true);
+    expect(isBuiltInTool("plan.enter")).toBe(true);
+    expect(isBuiltInTool("subagent.spawn")).toBe(true);
     expect(isBuiltInTool("unknown_tool")).toBe(false);
   });
 
@@ -33,12 +37,29 @@ describe("tools", () => {
       "read",
       "bash",
       "edit",
+      "notebook_edit",
       "write",
       "ls",
       "grep",
-      "find",
-      "enter_plan",
-      "exit_plan",
+      "glob",
+      "plan.enter",
+      "plan.exit",
+      "mcp.resource.list",
+      "mcp.resource.read",
+      "subagent.spawn",
+      "subagent.send",
+      "subagent.wait",
+      "subagent.close",
+      "task.create",
+      "task.update",
+      "task.get",
+      "task.list",
+      "task.stop",
+      "task.output",
+      "web.fetch",
+      "web.search",
+      "tool.search",
+      "ask_user",
       "enter_worktree",
       "exit_worktree",
     ]);

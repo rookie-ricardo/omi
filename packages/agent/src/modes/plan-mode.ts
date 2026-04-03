@@ -8,6 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import { nowIso } from "@omi/core";
+import { READ_TOOLS } from "../permissions/rules";
 
 // ============================================================================
 // Types
@@ -245,19 +246,7 @@ export class PlanStateManager {
  * 判断工具是否是只读的（可以在 Plan Mode 下使用）
  */
 export function isReadOnlyTool(toolName: string): boolean {
-	const readOnlyTools = new Set([
-		"read",
-		"grep",
-		"glob",
-		"find",
-		"ls",
-		"agent",
-		"TodoRead",
-		"WebSearch",
-		"WebFetch",
-	]);
-
-	return readOnlyTools.has(toolName);
+	return READ_TOOLS.has(toolName);
 }
 
 /**

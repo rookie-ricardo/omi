@@ -1,5 +1,13 @@
 export * from "./tools";
-export { SAFE_TOOL_NAMES, PLAN_MODE_TOOL_NAMES } from "./registry";
+export {
+  createBuiltInToolRegistry,
+  getBuiltInToolDefinition,
+  getBuiltInToolDefinitions,
+  getBuiltInToolRegistry,
+  findTools,
+  isBuiltInTool,
+} from "./builtins";
+export { createToolRegistry, getGlobalRegistry, setGlobalRegistry, resetGlobalRegistry } from "./registry";
 export * from "./frontmatter";
 export * from "./truncate";
 export * from "./path-utils";
@@ -17,6 +25,8 @@ export * from "./tools-manager";
 export * from "./read";
 export * from "./mcp-resource-tools";
 export * from "./subagent";
+export * from "./task-tools";
+export * from "./web-tools";
 
 // Plan Mode Tools
 export { createEnterPlanTool, enterPlanTool, type EnterPlanInput } from "./enter-plan/index.js";

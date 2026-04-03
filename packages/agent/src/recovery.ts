@@ -6,6 +6,7 @@ import {
   extractRetryAfterDelay,
 } from "@omi/memory";
 import type { AppStore } from "@omi/store";
+import { WRITE_TOOLS } from "./permissions/rules";
 import type { QueryLoopMutableState, TerminalReason } from "./query-state";
 
 // ============================================================================
@@ -383,18 +384,11 @@ export function filterAlreadyExecutedWrites(
  * Registry of which tool names are considered "write" operations.
  * Used by replay protection to decide which tools must not be re-executed.
  */
-const WRITE_TOOL_NAMES = new Set([
-  "bash",
-  "edit",
-  "write",
-  "notebook_edit",
-]);
-
 /**
  * Check if a tool name is a write tool.
  */
 export function isWriteTool(toolName: string): boolean {
-  return WRITE_TOOL_NAMES.has(toolName);
+  return WRITE_TOOLS.has(toolName);
 }
 
 // ============================================================================

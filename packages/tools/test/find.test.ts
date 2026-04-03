@@ -26,7 +26,7 @@ describe("find 工具", () => {
     it("应该创建一个 AgentTool 对象", () => {
       const tool = createFindTool(testDir);
       expect(tool).toBeDefined();
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
       expect(typeof tool.execute).toBe("function");
     });
 
@@ -185,7 +185,7 @@ describe("find 工具", () => {
   describe("find 工具参数验证", () => {
     it("pattern 是必需的", async () => {
       const tool = createFindTool(testDir);
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
       expect(tool.parameters).toBeDefined();
     });
   });
@@ -193,8 +193,8 @@ describe("find 工具", () => {
   describe("find 工具描述", () => {
     it("应该包含工具名称", () => {
       const tool = createFindTool(testDir);
-      expect(tool.name).toBe("find");
-      expect(tool.label).toBe("find");
+      expect(tool.name).toBe("glob");
+      expect(tool.label).toBe("glob");
     });
 
     it("应该描述 glob 搜索功能", () => {
@@ -226,7 +226,7 @@ describe("find 工具", () => {
       };
 
       const tool = createFindTool(testDir, { operations: customOps });
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
       expect(customOps.exists).not.toHaveBeenCalled();
     });
 
@@ -237,7 +237,7 @@ describe("find 工具", () => {
       };
 
       const tool = createFindTool(testDir, { operations: customOps });
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
       expect(customOps.glob).not.toHaveBeenCalled();
     });
 
@@ -248,7 +248,7 @@ describe("find 工具", () => {
       };
 
       const tool = createFindTool(testDir, { operations: customOps });
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
     });
 
     it("应该处理 glob 返回 Promise", async () => {
@@ -258,24 +258,24 @@ describe("find 工具", () => {
       };
 
       const tool = createFindTool(testDir, { operations: customOps });
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
     });
   });
 
   describe("工作目录", () => {
     it("应该使用传入的 cwd", () => {
       const tool = createFindTool(testDir);
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
     });
 
     it("应该支持相对路径", () => {
       const tool = createFindTool("/tmp");
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
     });
 
     it("应该支持绝对路径", () => {
       const tool = createFindTool(testDir);
-      expect(tool.name).toBe("find");
+      expect(tool.name).toBe("glob");
     });
   });
 
@@ -316,7 +316,7 @@ describe("find 工具", () => {
 describe("find 模块导出", () => {
   it("应该导出 findTool", () => {
     expect(findTool).toBeDefined();
-    expect(findTool.name).toBe("find");
+    expect(findTool.name).toBe("glob");
   });
 
   it("应该导出 createFindTool", () => {
@@ -335,7 +335,7 @@ describe("find 模块导出", () => {
 describe("find 工具与 fd 集成", () => {
   it("应该在 fd 不可用时提供清晰的错误", async () => {
     const tool = createFindTool("/tmp");
-    expect(tool.name).toBe("find");
+    expect(tool.name).toBe("glob");
   });
 
   it("应该使用 fd 的 --glob 参数", () => {

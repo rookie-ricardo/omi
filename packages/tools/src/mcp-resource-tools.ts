@@ -41,8 +41,8 @@ export interface McpResourceToolDetails {
 /**
  * Tool name constants.
  */
-export const MCP_RESOURCE_LIST_TOOL = "mcp_resource_list";
-export const MCP_RESOURCE_READ_TOOL = "mcp_resource_read";
+export const MCP_RESOURCE_LIST_TOOL = "mcp.resource.list";
+export const MCP_RESOURCE_READ_TOOL = "mcp.resource.read";
 
 /**
  * Schema for MCP resource list tool.
@@ -142,7 +142,7 @@ export function createMcpResourceListTool(
         const output = lines.join("\n");
         return {
           content: [{ type: "text", text: output || "No resources found." } as TextContent],
-          details: {} as McpResourceToolDetails,
+          details: { items: filtered.map((item) => item.resource), serverId } as McpResourceToolDetails & { items: typeof filtered[number]["resource"][] },
         };
       } catch (error) {
         return {
@@ -196,7 +196,7 @@ export function createMcpResourceReadTool(
 
         return {
           content: [{ type: "text", text } as TextContent],
-          details: { serverId, uri },
+          details: { serverId, uri, contentType: content.text ? "text" : "binary", truncated } as McpResourceToolDetails & { contentType: string; truncated: boolean },
         };
       } catch (error) {
         return {
