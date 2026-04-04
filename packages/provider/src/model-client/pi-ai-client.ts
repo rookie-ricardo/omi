@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { createModelFromConfig } from "../model-registry";
 import type { ToolName } from "@omi/tools";
 import { createToolArray, isBuiltInTool, requiresApproval } from "@omi/tools";
+import { ALLOW_TOOL_PREFLIGHT_DECISION } from "./types";
 import type {
   ModelClient,
   ModelClientCallbacks,
@@ -16,6 +17,7 @@ import type {
   ModelClientRunResult,
   ModelStopReason,
   ModelStreamEvent,
+  ToolPreflightDecision,
 } from "./types";
 import { routeProtocol } from "./protocol-router";
 import {
@@ -176,16 +178,18 @@ export class PiAiModelClient implements ModelClient {
         if (toolEventId) {
           context.toolCallIdMap.set(toolEventId, toolCallId);
         }
-        const preflightReason = await preflightToolCheck?.(toolName, args);
-        if (preflightReason) {
+        const preflight: ToolPreflightDecision =
+          (await preflightToolCheck?.(toolName, args))
+          ?? ALLOW_TOOL_PREFLIGHT_DECISION;
+        if (preflight.decision === "deny") {
           await callbacks.onToolDecision?.(toolCallId, "rejected");
           return {
             block: true,
-            reason: preflightReason,
+            reason: preflight.reason ?? `Tool '${toolName}' is denied by policy.`,
           };
         }
 
-        const requiresReview = this.requiresApproval(toolName);
+        const requiresReview = preflight.decision === "ask" || this.requiresApproval(toolName);
 
         toolCalls.push({
           toolCallId,

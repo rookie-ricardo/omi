@@ -188,8 +188,18 @@ export interface ModelClientRunInput {
   preflightToolCheck?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => string | null | Promise<string | null>;
+  ) => ToolPreflightDecision | Promise<ToolPreflightDecision>;
 }
+
+export interface ToolPreflightDecision {
+  decision: "allow" | "ask" | "deny";
+  reason: string | null;
+}
+
+export const ALLOW_TOOL_PREFLIGHT_DECISION: ToolPreflightDecision = {
+  decision: "allow",
+  reason: null,
+};
 
 export interface ModelClientRunResult {
   assistantText: string;

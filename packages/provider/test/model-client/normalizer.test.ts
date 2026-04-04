@@ -38,7 +38,7 @@ describe("normalizeEvent", () => {
         toolName: "bash",
         partialResult: { chunk: "partial" },
         args: {},
-      } as AgentEvent,
+      } as unknown as AgentEvent,
       context,
     );
 
@@ -61,7 +61,7 @@ describe("normalizeEvent", () => {
         id: "evt-a",
         toolName: "bash",
         partialResult: { chunk: "a" },
-      } as AgentEvent,
+      } as unknown as AgentEvent,
       context,
     );
     const second = normalizeEvent(
@@ -70,7 +70,7 @@ describe("normalizeEvent", () => {
         id: "evt-b",
         toolName: "bash",
         partialResult: { chunk: "b" },
-      } as AgentEvent,
+      } as unknown as AgentEvent,
       context,
     );
 

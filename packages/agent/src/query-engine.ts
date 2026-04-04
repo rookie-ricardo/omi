@@ -635,7 +635,10 @@ export class QueryEngine {
                 reason: replayReason,
               },
             });
-            return replayReason;
+            return {
+              decision: "deny",
+              reason: replayReason,
+            };
           }
           if (preflight.decision === "deny") {
             const reason = preflight.reason ?? `Tool '${toolName}' is denied by permission policy.`;
@@ -648,12 +651,24 @@ export class QueryEngine {
                 reason,
               },
             });
-            return reason;
+            return {
+              decision: "deny",
+              reason,
+            };
+          }
+          if (preflight.decision === "ask") {
+            return {
+              decision: "ask",
+              reason: preflight.reason ?? `Tool '${toolName}' requires approval before execution.`,
+            };
           }
           const queue = pendingToolInputsByName.get(toolName) ?? [];
           queue.push(toolInput);
           pendingToolInputsByName.set(toolName, queue);
-          return null;
+          return {
+            decision: "allow",
+            reason: null,
+          };
         },
         onTextDelta: (delta) => {
           this.emitEvent({

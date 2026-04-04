@@ -319,7 +319,7 @@ export function classifyPiAiError(error: unknown): ModelErrorClass {
   if (statusCode === 429) {
     return "rate_limit";
   }
-  if (statusCode >= 500 && statusCode <= 599) {
+  if (statusCode !== null && statusCode >= 500 && statusCode <= 599) {
     return "network";
   }
 

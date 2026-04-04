@@ -5,7 +5,7 @@ import type { ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
 import { PiAiModelClient } from "./model-client/pi-ai-client";
-import type { ModelClientCallbacks } from "./model-client/types";
+import type { ModelClientCallbacks, ToolPreflightDecision } from "./model-client/types";
 import { type ToolName, requiresApproval, isBuiltInTool, createAllTools } from "@omi/tools";
 
 export interface ProviderAdapter {
@@ -29,7 +29,7 @@ export interface ProviderRunInput {
   preflightToolCheck?: (
     toolName: string,
     input: Record<string, unknown>,
-  ) => string | null | Promise<string | null>;
+  ) => ToolPreflightDecision | Promise<ToolPreflightDecision>;
   convertToLlm?: (messages: Message[]) => Message[];
   onTextDelta?: (delta: string) => void;
   onToolRequested?: (event: ProviderToolRequestedEvent) => Promise<string>;

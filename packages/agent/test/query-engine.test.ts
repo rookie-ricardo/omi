@@ -476,11 +476,14 @@ describe("QueryEngine", () => {
       const run = createTestRun(session.id);
       const database = createTestDatabase(session, run);
       const mockRuntime = createMockRuntime(session.id);
-      const preflightResults: Array<string | null> = [];
+      const preflightResults: Array<{ decision: string; reason: string | null }> = [];
 
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-          preflightResults.push(await input.preflightToolCheck?.("write", {}) ?? null);
+          preflightResults.push(await input.preflightToolCheck?.("write", {}) ?? {
+            decision: "allow",
+            reason: null,
+          });
           return { assistantText: "done" };
         },
         cancel() {},
@@ -510,7 +513,10 @@ describe("QueryEngine", () => {
         checkpointDetails: null,
       });
 
-      expect(preflightResults[0]).toBeNull();
+      expect(preflightResults[0]).toMatchObject({
+        decision: "ask",
+      });
+      expect(preflightResults[0]?.reason).toContain("requires approval");
 
       planState.enterPlanMode("default");
       await engine.execute({
@@ -523,7 +529,10 @@ describe("QueryEngine", () => {
         checkpointSummary: null,
         checkpointDetails: null,
       });
-      expect(preflightResults[1]).toContain("not allowed in plan mode");
+      expect(preflightResults[1]).toMatchObject({
+        decision: "deny",
+      });
+      expect(preflightResults[1]?.reason).toContain("not allowed in plan mode");
       planState.exitPlanMode();
     });
 
@@ -581,7 +590,8 @@ describe("QueryEngine", () => {
           && (event.payload as { toolCallId?: string }).toolCallId === toolCallId,
       );
       expect(toolRequestedEvent).toBeDefined();
-      expect((toolRequestedEvent?.payload as { requiresApproval?: boolean }).requiresApproval).toBe(true);
+      const toolRequestedPayload = (toolRequestedEvent as { payload?: { requiresApproval?: boolean } }).payload;
+      expect(toolRequestedPayload?.requiresApproval).toBe(true);
       expect(mockRuntime.blockOnTool).toHaveBeenCalledWith(run.id, toolCallId);
     });
 
@@ -808,10 +818,13 @@ describe("QueryEngine", () => {
         resumeFromCheckpoint: checkpoint.id,
       });
 
-      const preflightReasons: Array<string | null> = [];
+      const preflightReasons: Array<{ decision: string; reason: string | null }> = [];
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-          preflightReasons.push(await input.preflightToolCheck?.("bash", blockedInput) ?? null);
+          preflightReasons.push(await input.preflightToolCheck?.("bash", blockedInput) ?? {
+            decision: "allow",
+            reason: null,
+          });
           return { assistantText: "done" };
         },
         cancel() {},
@@ -847,7 +860,10 @@ describe("QueryEngine", () => {
       });
 
       expect(preflightReasons).toHaveLength(1);
-      expect(preflightReasons[0]).toContain("Skipped replayed write tool: bash");
+      expect(preflightReasons[0]).toMatchObject({
+        decision: "deny",
+      });
+      expect(preflightReasons[0]?.reason).toContain("Skipped replayed write tool: bash");
       expect(
         events.some(
           (event) =>

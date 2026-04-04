@@ -225,6 +225,7 @@ describe("Tool & Permission baseline", () => {
         onToolDecision = input.onToolDecision ?? null;
         const tcId = (await input.onToolRequested?.({
           runId: input.runId, sessionId: input.sessionId,
+          toolCallId: "tc-1",
           toolName: "bash", input: { command: "echo" }, requiresApproval: true,
         })) ?? "tc-1";
         latestToolCallId = tcId;
@@ -281,6 +282,7 @@ describe("Tool & Permission baseline", () => {
         onToolDecision = input.onToolDecision ?? null;
         const tcId = (await input.onToolRequested?.({
           runId: input.runId, sessionId: input.sessionId,
+          toolCallId: "tc-2",
           toolName: "bash", input: { command: "rm" }, requiresApproval: true,
         })) ?? "tc-2";
         latestToolCallId = tcId;

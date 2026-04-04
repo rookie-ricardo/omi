@@ -72,7 +72,10 @@ describe("PiAiModelClient permission integration", () => {
         prompt: "test",
         historyMessages: [],
         providerConfig: config,
-        preflightToolCheck: async () => "blocked by policy",
+        preflightToolCheck: async () => ({
+          decision: "deny",
+          reason: "blocked by policy",
+        }),
       },
       {
         onToolCallStart,
@@ -110,7 +113,10 @@ describe("PiAiModelClient permission integration", () => {
         prompt: "test",
         historyMessages: [],
         providerConfig: config,
-        preflightToolCheck: async () => "blocked by policy",
+        preflightToolCheck: async () => ({
+          decision: "deny",
+          reason: "blocked by policy",
+        }),
       },
       {
         onToolDecision,
@@ -166,6 +172,48 @@ describe("PiAiModelClient permission integration", () => {
       reason: "Tool execution rejected by user.",
     });
     expect(onToolDecision).toHaveBeenCalledWith("run_4:tool:approval-event", "rejected");
+  });
+
+  it("forces approval wait when preflight decision is ask even for read-only tools", async () => {
+    const client = new PiAiModelClient();
+    const config = makeProviderConfig();
+    const onToolDecision = vi.fn();
+    let beforeToolCallResult: { block?: boolean; reason?: string } | null = null;
+
+    nextPrompt = async (agentConfig: any) => {
+      beforeToolCallResult = await agentConfig.beforeToolCall({
+        toolCall: { name: "read", id: "read-ask-event" },
+        args: { path: "README.md" },
+      });
+    };
+
+    await client.run(
+      {
+        runId: "run_5",
+        sessionId: "session_1",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: config,
+        preflightToolCheck: async () => ({
+          decision: "ask",
+          reason: "requires approval by rule",
+        }),
+      },
+      {
+        onToolCallStart: (toolCallId) => {
+          setTimeout(() => {
+            client.rejectTool(toolCallId);
+          }, 0);
+        },
+        onToolDecision,
+      },
+    );
+
+    expect(beforeToolCallResult).toEqual({
+      block: true,
+      reason: "Tool execution rejected by user.",
+    });
+    expect(onToolDecision).toHaveBeenCalledWith("run_5:tool:read-ask-event", "rejected");
   });
 });
 
