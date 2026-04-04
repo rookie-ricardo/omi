@@ -55,6 +55,7 @@ import {
   DEFAULT_RECOVERY_SETTINGS,
   type RecoveryEngineEvent,
 } from "./recovery";
+import { getPlanStateManager } from "./modes/plan-mode";
 
 // ============================================================================
 // Types
@@ -179,6 +180,7 @@ export class QueryEngine {
   private currentRunId: string | null = null;
   private canceled = false;
   private recoveryEngine: RecoveryEngine | null = null;
+  private readonly planStateManager = getPlanStateManager();
 
   constructor(private readonly deps: QueryEngineDeps) {
     this.provider = deps.provider ?? new PiAiProvider();
@@ -276,6 +278,59 @@ export class QueryEngine {
           return this.terminate("canceled", null);
         }
 
+        // Gate model calls when context health indicates the run is unsafe.
+        const contextHealth = this.checkContextHealth(currentHistoryMessages, input.providerConfig);
+        if (contextHealth.needsAttention) {
+          this.emitEvent({
+            type: "run.context_health",
+            payload: {
+              runId: input.run.id,
+              sessionId: input.session.id,
+              usageTokens: contextHealth.usageTokens,
+              warningState: contextHealth.warningState,
+            },
+          });
+          const shouldGate =
+            contextHealth.warningState.isAtBlockingLimit ||
+            contextHealth.warningState.isAboveErrorThreshold;
+          if (shouldGate) {
+            this.transition("recovering", "context_health_gate");
+
+            const mode: CompactionMode = contextHealth.warningState.isAtBlockingLimit
+              ? "overflow"
+              : "threshold";
+            const compacted = await this.compactHistoricalContext({
+              session: input.session,
+              providerConfig: input.providerConfig,
+              mode,
+              prompt: input.prompt,
+              runId: input.run.id,
+              historyEnvelopes: this.buildHistoricalRuntimeMessageEnvelopes(
+                input.session.id,
+                prepared.branchLeafEntryId,
+              ),
+            });
+
+            if (compacted) {
+              currentHistoryMessages = this.buildHistoricalRuntimeMessages(
+                input.session.id,
+                prepared.branchLeafEntryId,
+              );
+              this.state.messages = currentHistoryMessages;
+            }
+
+            const postGateHealth = this.checkContextHealth(currentHistoryMessages, input.providerConfig);
+            if (postGateHealth.warningState.isAtBlockingLimit) {
+              return this.terminate(
+                "budget_exceeded",
+                "Context health gate blocked model call after compaction",
+              );
+            }
+
+            this.transition("calling_model", "context_health_recovered");
+          }
+        }
+
         // Checkpoint: before_model_call
         this.recoveryEngine.saveCheckpoint("before_model_call", {
           turnCount: this.state.turnCount,
@@ -355,7 +410,11 @@ export class QueryEngine {
           if (action.kind === "max_output_recovery") {
             this.transition("recovering", "max_output_recovery");
             this.state.compactTracking.maxOutputRecoveryCount++;
-            // Max output recovery continues the conversation with a meta message
+            currentHistoryMessages = [
+              ...currentHistoryMessages,
+              this.createMaxOutputContinuationMessage(),
+            ];
+            this.state.messages = currentHistoryMessages;
             this.transition("calling_model", "max_output_retry");
             continue;
           }
@@ -1079,6 +1138,8 @@ export class QueryEngine {
         this.deps.database.getActiveBranchId(input.session.id) ??
         this.deps.database.listBranches(input.session.id).at(-1)?.id ??
         null;
+      const parentHistoryEntry =
+        this.deps.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
       const details = {
         mode: input.mode,
         prompt: input.prompt,
@@ -1090,13 +1151,13 @@ export class QueryEngine {
 
       this.deps.database.addSessionHistoryEntry!({
         sessionId: input.session.id,
-        parentId: null,
+        parentId: parentHistoryEntry?.id ?? null,
         kind: "branch_summary",
         messageId: null,
         summary: snapshot.summary.goal,
         details: normalizeHistoryDetails(details),
         branchId,
-        lineageDepth: 0,
+        lineageDepth: parentHistoryEntry ? parentHistoryEntry.lineageDepth + 1 : 0,
         originRunId: input.runId,
       });
     }
@@ -1145,6 +1206,8 @@ export class QueryEngine {
           this.deps.database.getActiveBranchId(session.id) ??
           this.deps.database.listBranches(session.id).at(-1)?.id ??
           null;
+        const parentHistoryEntry =
+          this.deps.database.listSessionHistoryEntries?.(session.id).at(-1) ?? null;
         const details = {
           mode: "pipeline",
           tokensBefore: result.usageEstimate.tokens,
@@ -1154,13 +1217,13 @@ export class QueryEngine {
 
         this.deps.database.addSessionHistoryEntry!({
           sessionId: session.id,
-          parentId: null,
+          parentId: parentHistoryEntry?.id ?? null,
           kind: "branch_summary",
           messageId: null,
           summary: result.compactionSnapshot.summary.goal,
           details: normalizeHistoryDetails(details),
           branchId,
-          lineageDepth: 0,
+          lineageDepth: parentHistoryEntry ? parentHistoryEntry.lineageDepth + 1 : 0,
           originRunId: runId,
         });
       }
@@ -1180,13 +1243,32 @@ export class QueryEngine {
   private checkContextHealth(
     messages: RuntimeMessage[],
     providerConfig: ProviderConfig,
-  ): { warningState: TokenWarningState; budget: ContextBudget; needsAttention: boolean } {
+  ): {
+    warningState: TokenWarningState;
+    budget: ContextBudget;
+    needsAttention: boolean;
+    usageTokens: number;
+  } {
     const budget = createContextBudget(providerConfig);
     const usage = estimateContextTokens(messages);
+    if (budget.effectiveContextWindow <= 0) {
+      return {
+        warningState: {
+          percentLeft: 100,
+          isAboveAutoCompactThreshold: false,
+          isAboveWarningThreshold: false,
+          isAboveErrorThreshold: false,
+          isAtBlockingLimit: false,
+        },
+        budget,
+        needsAttention: false,
+        usageTokens: usage.tokens,
+      };
+    }
     const warningState = calculateTokenWarningState(usage.tokens, budget);
     const needsAttention = needsContextAttention(usage.tokens, budget);
 
-    return { warningState, budget, needsAttention };
+    return { warningState, budget, needsAttention, usageTokens: usage.tokens };
   }
 
   // ==========================================================================
@@ -1194,22 +1276,15 @@ export class QueryEngine {
   // ==========================================================================
 
   private isPlanMode(): boolean {
-    const session = this.deps.database.getSession(this.deps.sessionId);
-    const runtime = this.deps.runtime?.snapshot();
+    return this.planStateManager.isInPlanMode();
+  }
 
-    // Plan mode is active when:
-    // 1. No active run is running
-    // 2. Session has never received user input (brand new session)
-    // This prevents false positives when session is "idle" between runs.
-    if (runtime?.activeRunId !== null) {
-      return false; // Active run in progress
-    }
-
-    if (session?.latestUserMessage !== null && session?.latestUserMessage !== undefined) {
-      return false; // Session has history, not plan mode
-    }
-
-    return true; // New session without prior input = plan mode
+  private createMaxOutputContinuationMessage(): RuntimeMessage {
+    return {
+      role: "user",
+      content: "Continue from your last response without repeating completed parts.",
+      timestamp: Date.now(),
+    };
   }
 
   private requireSession(): Session {

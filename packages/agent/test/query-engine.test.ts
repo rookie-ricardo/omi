@@ -14,6 +14,7 @@ import {
   nextTaskStatus,
   normalizeHistoryDetails,
 } from "../src/query-engine";
+import { createPlanStateManager } from "../src/modes/plan-mode";
 import type { SessionRuntime } from "../src/session-manager";
 import type { ResourceLoader } from "../src/resource-loader";
 import {
@@ -208,6 +209,26 @@ function createMockRuntime(sessionId: string): SessionRuntime {
     setSelectedProviderConfig: vi.fn(),
     setActiveBranchId: vi.fn(),
   } as unknown as SessionRuntime;
+}
+
+function contentToText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+        if (part && typeof part === "object" && "text" in part && typeof part.text === "string") {
+          return part.text;
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
 }
 
 // ============================================================================
@@ -432,6 +453,174 @@ describe("QueryEngine", () => {
         sessionId: session.id,
         reason: "completed",
       });
+    });
+
+    it("uses explicit plan state as the single source of truth for preflight checks", async () => {
+      const planState = createPlanStateManager();
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const mockRuntime = createMockRuntime(session.id);
+      const preflightResults: Array<string | null> = [];
+
+      const provider = {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+          preflightResults.push(await input.preflightToolCheck?.("write", {}) ?? null);
+          return { assistantText: "done" };
+        },
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: () => {},
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "first",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(preflightResults[0]).toBeNull();
+
+      planState.enterPlanMode("default");
+      await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "second",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+      expect(preflightResults[1]).toContain("not allowed in plan mode");
+      planState.exitPlanMode();
+    });
+
+    it("gates model calls when context health remains unsafe", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      database.addMessage({
+        sessionId: session.id,
+        role: "user",
+        content: "x".repeat(1_200_000),
+        parentHistoryEntryId: null,
+        branchId: null,
+        originRunId: null,
+      });
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+      const provider = {
+        run: vi.fn(async () => ({ assistantText: "should not run" })),
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+        contextPipelineConfig: {
+          enableMicroCompact: false,
+          enableContextCollapse: false,
+        },
+      };
+
+      const engine = new QueryEngine(deps);
+      const result = await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "gate this",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(result.terminalReason).toBe("budget_exceeded");
+      expect(provider.run).not.toHaveBeenCalled();
+      expect(
+        events.some(
+          (event) =>
+            event.type === "run.context_health" &&
+            (event as { payload?: { usageTokens?: number } }).payload?.usageTokens !== undefined,
+        ),
+      ).toBe(true);
+    });
+
+    it("injects a real continuation message on max-output recovery", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const mockRuntime = createMockRuntime(session.id);
+      const providerCalls: ProviderRunInput[] = [];
+
+      const provider = {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+          providerCalls.push(input);
+          if (providerCalls.length === 1) {
+            throw new Error("max_output tokens exceeded");
+          }
+          return { assistantText: "continued" };
+        },
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: () => {},
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      const result = await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "continue please",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(result.terminalReason).toBe("completed");
+      expect(providerCalls).toHaveLength(2);
+      expect(
+        providerCalls[1]?.historyMessages.some(
+          (message) =>
+            message.role === "user" &&
+            contentToText(message.content).includes("Continue from your last response"),
+        ),
+      ).toBe(true);
     });
   });
 
