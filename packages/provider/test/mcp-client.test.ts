@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createMcpClient,
@@ -6,6 +7,14 @@ import {
 } from "../src/mcp-client";
 
 describe("mcp-client", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("createMcpClient factory", () => {
     it("creates McpClient instance", () => {
       const client = createMcpClient({
@@ -151,7 +160,7 @@ describe("mcp-client", () => {
     });
 
     describe("dispose", () => {
-      it("calls disconnect", () => {
+      it("awaits disconnect", async () => {
         const client = new McpClientImpl({
           server: {
             id: "test-server",
@@ -160,7 +169,73 @@ describe("mcp-client", () => {
             command: "echo",
           },
         });
-        expect(() => client.dispose()).not.toThrow();
+
+        let disconnected = false;
+        vi.spyOn(client, "disconnect").mockImplementation(async () => {
+          await Promise.resolve();
+          disconnected = true;
+        });
+
+        await expect(client.dispose()).resolves.not.toThrow();
+        expect(disconnected).toBe(true);
+      });
+    });
+
+    describe("state transitions", () => {
+      it("transitions to needs_auth on auth errors", async () => {
+        const client = new McpClientImpl({
+          server: {
+            id: "test-server",
+            name: "Test Server",
+            transport: "stdio",
+            command: "echo",
+          },
+        });
+
+        (client as unknown as { state: string }).state = "connected";
+        (client as unknown as { client: { request: ReturnType<typeof vi.fn> } }).client = {
+          request: vi.fn().mockRejectedValue(new Error("401 Unauthorized")),
+        };
+
+        await expect(client.callTool("tool1", {})).rejects.toThrow("Unauthorized");
+        expect(client.getState()).toBe("needs_auth");
+      });
+
+      it("transitions to degraded when connection is closed", async () => {
+        const client = new McpClientImpl({
+          server: {
+            id: "test-server",
+            name: "Test Server",
+            transport: "stdio",
+            command: "echo",
+          },
+        });
+
+        (client as unknown as { state: string }).state = "connected";
+        (client as unknown as { client: { request: ReturnType<typeof vi.fn> } }).client = {
+          request: vi.fn().mockRejectedValue({
+            code: ErrorCode.ConnectionClosed,
+            message: "Connection closed",
+          }),
+        };
+
+        await expect(client.callTool("tool1", {})).rejects.toThrow("connection closed");
+        expect(client.getState()).toBe("degraded");
+      });
+    });
+
+    describe("transport support", () => {
+      it("rejects unsupported transports at connect time", async () => {
+        const client = new McpClientImpl({
+          server: {
+            id: "test-server",
+            name: "Test Server",
+            transport: "websocket",
+            url: "ws://localhost:3000",
+          } as any,
+        });
+
+        await expect(client.connect()).rejects.toThrow("Unsupported transport type");
       });
     });
 

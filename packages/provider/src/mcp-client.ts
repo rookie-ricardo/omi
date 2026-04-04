@@ -42,6 +42,9 @@ export type McpConnectionState =
   | "degraded"
   | "needs_auth";
 
+export const SUPPORTED_MCP_TRANSPORTS = ["stdio", "http", "sse"] as const;
+export type McpTransport = (typeof SUPPORTED_MCP_TRANSPORTS)[number];
+
 /**
  * MCP server configuration.
  */
@@ -51,19 +54,17 @@ export interface McpServerConfig {
   /** Display name */
   name: string;
   /** Transport type */
-  transport: "stdio" | "http" | "sse" | "websocket";
+  transport: McpTransport;
   /** Command for stdio transport (e.g., "npx", "/path/to/server") */
   command?: string;
   /** Arguments for stdio transport */
   args?: string[];
-  /** URL for http/sse/websocket transports */
+  /** URL for http/sse transports */
   url?: string;
   /** Environment variables for stdio transport */
   env?: Record<string, string>;
-  /** Request headers for http/sse/websocket transports */
+  /** Request headers for http/sse transports */
   headers?: Record<string, string>;
-  /** Auth token for websocket transports */
-  authToken?: string;
   /** Whether to enable automatic reconnection */
   autoReconnect?: boolean;
   /** Reconnection delay in milliseconds */
@@ -188,7 +189,7 @@ export interface McpClient {
   /** List resources with optional filter */
   listResources(uriPattern?: string): Promise<McpResource[]>;
   /** Dispose of the client */
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 // ============================================================================
@@ -202,7 +203,6 @@ export interface McpClient {
  * - stdio: Local subprocess communication
  * - http: Streamable HTTP transport
  * - sse: Server-Sent Events transport
- * - websocket: WebSocket transport
  */
 export class McpClientImpl implements McpClient {
   private state: McpConnectionState = "disconnected";
@@ -221,6 +221,7 @@ export class McpClientImpl implements McpClient {
   private readonly onError?: (error: Error, serverId: string) => void;
   private readonly onToolsChanged?: (tools: McpTool[], serverId: string) => void;
   private readonly onResourcesChanged?: (resources: McpResource[], serverId: string) => void;
+  private disconnectPromise: Promise<void> | null = null;
 
   constructor(options: McpClientOptions) {
     this.config = options.server;
@@ -257,7 +258,6 @@ export class McpClientImpl implements McpClient {
       return;
     }
 
-    const prevState = this.state;
     this.setState("connecting");
 
     try {
@@ -317,32 +317,38 @@ export class McpClientImpl implements McpClient {
       // Set up notification handlers for list changes
       this.setupNotificationHandlers();
 
+      this.setState("connected");
+
       // Fetch initial tools and resources
       await this.refreshTools();
       await this.refreshResources();
-
-      this.setState("connected");
     } catch (error) {
-      this.setState("disconnected");
-      this.handleError(error instanceof Error ? error : new Error(String(error)));
+      await this.closeClientAndTransport();
+      this.applyErrorState(error, "disconnected");
+      this.handleError(this.normalizeError(error));
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
-    try {
-      if (this.client) {
-        await this.client.close();
-      }
-      if (this.transport) {
-        await this.transport.close();
-      }
-    } catch (error) {
-      console.error(`[MCP ${this.config.id}] Error during disconnect:`, error);
-    } finally {
-      this.client = null;
-      this.transport = null;
+    if (this.disconnectPromise) {
+      return this.disconnectPromise;
+    }
+
+    this.disconnectPromise = (async () => {
+      await this.closeClientAndTransport();
+      this.capabilities = null;
+      this.serverInfo = null;
+      this.instructions = null;
+      this.tools = [];
+      this.resources = [];
       this.setState("disconnected");
+    })();
+
+    try {
+      await this.disconnectPromise;
+    } finally {
+      this.disconnectPromise = null;
     }
   }
 
@@ -376,9 +382,12 @@ export class McpClientImpl implements McpClient {
         "code" in error &&
         (error as { code?: unknown }).code === ErrorCode.ConnectionClosed
       ) {
-        this.setState("disconnected");
+        this.setState("degraded");
+        this.handleError(this.normalizeError(error));
         throw new Error(`MCP server ${this.config.id}: connection closed`);
       }
+      this.applyErrorState(error);
+      this.handleError(this.normalizeError(error));
       throw error;
     }
   }
@@ -404,6 +413,8 @@ export class McpClientImpl implements McpClient {
 
       return result.contents[0];
     } catch (error) {
+      this.applyErrorState(error);
+      this.handleError(this.normalizeError(error));
       throw error;
     }
   }
@@ -424,12 +435,14 @@ export class McpClientImpl implements McpClient {
 
       return result.resources ?? [];
     } catch (error) {
+      this.applyErrorState(error);
+      this.handleError(this.normalizeError(error));
       throw error;
     }
   }
 
-  dispose(): void {
-    this.disconnect();
+  async dispose(): Promise<void> {
+    await this.disconnect();
   }
 
   // --------------------------------------------------------------------------
@@ -445,6 +458,7 @@ export class McpClientImpl implements McpClient {
   }
 
   private handleError(error: Error): void {
+    this.applyErrorState(error);
     console.error(`[MCP ${this.config.id}] Error:`, error.message);
     this.onError?.(error, this.config.id);
   }
@@ -468,10 +482,11 @@ export class McpClientImpl implements McpClient {
         return this.createHttpTransport();
       case "sse":
         return this.createSseTransport();
-      case "websocket":
-        return this.createWebsocketTransport();
       default:
-        throw new Error(`Unsupported transport type: ${this.config.transport}`);
+        throw new Error(
+          `Unsupported transport type: ${String(this.config.transport)}. ` +
+          `Supported transports: ${SUPPORTED_MCP_TRANSPORTS.join(", ")}`
+        );
     }
   }
 
@@ -532,15 +547,6 @@ export class McpClientImpl implements McpClient {
     );
   }
 
-  private async createWebsocketTransport(): Promise<Transport> {
-    // WebSocket support requires custom transport or ws library
-    // For now, throw an error indicating this needs implementation
-    throw new Error(
-      `WebSocket transport for ${this.config.id} requires additional setup. ` +
-      `Use http or sse transport, or implement WebSocket transport with a custom solution.`
-    );
-  }
-
   private async refreshTools(): Promise<void> {
     if (this.state !== "connected" || !this.client) return;
 
@@ -562,6 +568,7 @@ export class McpClientImpl implements McpClient {
         this.onToolsChanged?.(this.tools, this.config.id);
       }
     } catch (error) {
+      this.applyErrorState(error);
       console.error(`[MCP ${this.config.id}] Failed to refresh tools:`, error);
     }
   }
@@ -587,8 +594,106 @@ export class McpClientImpl implements McpClient {
         this.onResourcesChanged?.(this.resources, this.config.id);
       }
     } catch (error) {
+      this.applyErrorState(error);
       console.error(`[MCP ${this.config.id}] Failed to refresh resources:`, error);
     }
+  }
+
+  private async closeClientAndTransport(): Promise<void> {
+    const client = this.client;
+    const transport = this.transport;
+
+    this.client = null;
+    this.transport = null;
+
+    const closeOps: Promise<unknown>[] = [];
+    if (client) {
+      closeOps.push(client.close());
+    }
+    if (transport) {
+      closeOps.push(transport.close());
+    }
+
+    if (closeOps.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(closeOps);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.error(`[MCP ${this.config.id}] Error during disconnect:`, result.reason);
+      }
+    }
+  }
+
+  private normalizeError(error: unknown): Error {
+    if (error instanceof Error) {
+      return error;
+    }
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string"
+    ) {
+      return new Error((error as { message: string }).message);
+    }
+    return new Error(String(error));
+  }
+
+  private applyErrorState(
+    error: unknown,
+    fallback: Extract<McpConnectionState, "disconnected" | "degraded"> | null = null
+  ): void {
+    const inferredState = this.classifyErrorState(error) ?? fallback;
+    if (!inferredState) {
+      return;
+    }
+    if (this.state === "disconnected" && inferredState !== "needs_auth") {
+      return;
+    }
+    this.setState(inferredState);
+  }
+
+  private classifyErrorState(
+    error: unknown
+  ): Extract<McpConnectionState, "degraded" | "needs_auth"> | null {
+    const message = this.normalizeError(error).message.toLowerCase();
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+
+    if (
+      code === 401 ||
+      code === 403 ||
+      message.includes("unauthorized") ||
+      message.includes("forbidden") ||
+      message.includes("authentication") ||
+      message.includes("auth required") ||
+      message.includes("needs auth") ||
+      message.includes("invalid token")
+    ) {
+      return "needs_auth";
+    }
+
+    if (
+      code === ErrorCode.ConnectionClosed ||
+      message.includes("connection closed") ||
+      message.includes("connection lost") ||
+      message.includes("disconnected") ||
+      message.includes("timed out") ||
+      message.includes("timeout") ||
+      message.includes("econnreset") ||
+      message.includes("econnrefused") ||
+      message.includes("ehostunreach") ||
+      message.includes("network") ||
+      message.includes("maximum reconnection attempts")
+    ) {
+      return "degraded";
+    }
+
+    return null;
   }
 }
 

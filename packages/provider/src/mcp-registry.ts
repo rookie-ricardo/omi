@@ -73,6 +73,10 @@ export interface McpAggregatedCatalog {
 export class McpRegistry {
   private readonly servers = new Map<string, McpServerEntry>();
   private readonly options: McpRegistryOptions;
+  private readonly reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly reconnectAttempts = new Map<string, number>();
+  private readonly reconnectLocks = new Set<string>();
+  private readonly reconnectSuppressed = new Set<string>();
 
   constructor(options: McpRegistryOptions = {}) {
     this.options = {
@@ -125,9 +129,13 @@ export class McpRegistry {
       return;
     }
 
-    await entry.client.disconnect();
-    entry.client.dispose();
+    this.reconnectSuppressed.add(serverId);
+    this.clearReconnectTimer(serverId);
+    this.reconnectAttempts.delete(serverId);
+    await entry.client.dispose();
     this.servers.delete(serverId);
+    this.reconnectLocks.delete(serverId);
+    this.reconnectSuppressed.delete(serverId);
   }
 
   /**
@@ -164,6 +172,8 @@ export class McpRegistry {
       throw new Error(`MCP server ${serverId} is not registered`);
     }
 
+    this.reconnectSuppressed.delete(serverId);
+    this.clearReconnectTimer(serverId);
     await entry.client.connect();
   }
 
@@ -171,11 +181,13 @@ export class McpRegistry {
    * Connect to all registered servers.
    */
   async connectAll(): Promise<void> {
-    const promises = Array.from(this.servers.values()).map((entry) =>
-      entry.client.connect().catch((error) => {
+    const promises = Array.from(this.servers.entries()).map(([serverId, entry]) => {
+      this.reconnectSuppressed.delete(serverId);
+      this.clearReconnectTimer(serverId);
+      return entry.client.connect().catch((error) => {
         console.error(`Failed to connect to MCP server ${entry.config.id}:`, error);
-      })
-    );
+      });
+    });
     await Promise.all(promises);
   }
 
@@ -188,6 +200,9 @@ export class McpRegistry {
       return;
     }
 
+    this.reconnectSuppressed.add(serverId);
+    this.clearReconnectTimer(serverId);
+    this.reconnectAttempts.delete(serverId);
     await entry.client.disconnect();
   }
 
@@ -195,11 +210,14 @@ export class McpRegistry {
    * Disconnect from all servers.
    */
   async disconnectAll(): Promise<void> {
-    const promises = Array.from(this.servers.values()).map((entry) =>
-      entry.client.disconnect().catch((error) => {
+    const promises = Array.from(this.servers.entries()).map(([serverId, entry]) => {
+      this.reconnectSuppressed.add(serverId);
+      this.clearReconnectTimer(serverId);
+      this.reconnectAttempts.delete(serverId);
+      return entry.client.disconnect().catch((error) => {
         console.error(`Failed to disconnect from MCP server ${entry.config.id}:`, error);
-      })
-    );
+      });
+    });
     await Promise.all(promises);
   }
 
@@ -212,6 +230,9 @@ export class McpRegistry {
       throw new Error(`MCP server ${serverId} is not registered`);
     }
 
+    this.reconnectSuppressed.delete(serverId);
+    this.clearReconnectTimer(serverId);
+    this.reconnectAttempts.delete(serverId);
     await entry.client.disconnect();
     await entry.client.connect();
   }
@@ -434,11 +455,15 @@ export class McpRegistry {
    * Dispose of all servers and cleanup.
    */
   async dispose(): Promise<void> {
-    await this.disconnectAll();
-
-    for (const entry of this.servers.values()) {
-      entry.client.dispose();
-    }
+    const disposePromises = Array.from(this.servers.entries()).map(async ([serverId, entry]) => {
+      this.reconnectSuppressed.add(serverId);
+      this.clearReconnectTimer(serverId);
+      this.reconnectAttempts.delete(serverId);
+      await entry.client.dispose();
+      this.reconnectLocks.delete(serverId);
+      this.reconnectSuppressed.delete(serverId);
+    });
+    await Promise.all(disposePromises);
 
     this.servers.clear();
   }
@@ -455,8 +480,19 @@ export class McpRegistry {
 
     this.options.onStateChange?.(serverId, state);
 
-    // Handle auto-reconnect for disconnected state
-    if (state === "disconnected" && this.options.autoReconnect) {
+    if (state === "connected") {
+      this.clearReconnectTimer(serverId);
+      this.reconnectAttempts.delete(serverId);
+      return;
+    }
+
+    if (state === "needs_auth") {
+      this.clearReconnectTimer(serverId);
+      return;
+    }
+
+    // Handle auto-reconnect for disconnected/degraded states
+    if ((state === "disconnected" || state === "degraded") && this.options.autoReconnect) {
       this.scheduleReconnect(serverId);
     }
   }
@@ -471,19 +507,77 @@ export class McpRegistry {
   }
 
   private scheduleReconnect(serverId: string): void {
-    setTimeout(async () => {
-      const entry = this.servers.get(serverId);
-      if (!entry || entry.state === "connected") {
-        return;
-      }
+    if (this.reconnectSuppressed.has(serverId)) {
+      return;
+    }
+    if (this.reconnectTimers.has(serverId)) {
+      return;
+    }
+    if (this.reconnectLocks.has(serverId)) {
+      return;
+    }
 
-      try {
-        await entry.client.connect();
-      } catch (error) {
-        console.error(`Auto-reconnect failed for MCP server ${serverId}:`, error);
-        // Will be rescheduled by state change handler
+    const nextAttempt = (this.reconnectAttempts.get(serverId) ?? 0) + 1;
+    this.reconnectAttempts.set(serverId, nextAttempt);
+
+    const baseDelay = this.options.reconnectDelayMs ?? 5000;
+    const backoffDelay = Math.min(baseDelay * 2 ** (nextAttempt - 1), 60000);
+    const jitter = Math.floor(backoffDelay * 0.2 * Math.random());
+    const reconnectDelay = backoffDelay + jitter;
+
+    const timer = setTimeout(() => {
+      this.reconnectTimers.delete(serverId);
+      void this.runReconnectAttempt(serverId);
+    }, reconnectDelay);
+
+    this.reconnectTimers.set(serverId, timer);
+  }
+
+  private async runReconnectAttempt(serverId: string): Promise<void> {
+    if (this.reconnectSuppressed.has(serverId)) {
+      return;
+    }
+    if (this.reconnectLocks.has(serverId)) {
+      return;
+    }
+
+    const entry = this.servers.get(serverId);
+    if (!entry || entry.state === "connected" || entry.state === "needs_auth") {
+      return;
+    }
+
+    let shouldRetry = false;
+    this.reconnectLocks.add(serverId);
+    try {
+      await entry.client.connect();
+    } catch (error) {
+      console.error(`Auto-reconnect failed for MCP server ${serverId}:`, error);
+
+      const latestEntry = this.servers.get(serverId);
+      if (
+        latestEntry &&
+        latestEntry.state !== "connected" &&
+        latestEntry.state !== "needs_auth" &&
+        !this.reconnectSuppressed.has(serverId)
+      ) {
+        shouldRetry = true;
       }
-    }, this.options.reconnectDelayMs);
+    } finally {
+      this.reconnectLocks.delete(serverId);
+    }
+
+    if (shouldRetry) {
+      this.scheduleReconnect(serverId);
+    }
+  }
+
+  private clearReconnectTimer(serverId: string): void {
+    const timer = this.reconnectTimers.get(serverId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.reconnectTimers.delete(serverId);
   }
 }
 
