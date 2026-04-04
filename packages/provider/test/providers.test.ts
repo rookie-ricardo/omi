@@ -330,6 +330,7 @@ describe("ProviderToolRequestedEvent 接口", () => {
     const event = {
       runId: "run-1",
       sessionId: "session-1",
+      toolCallId: "run-1:tool:event-1",
       toolName: "bash",
       input: { command: "ls" },
       requiresApproval: true,

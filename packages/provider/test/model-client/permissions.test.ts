@@ -122,6 +122,51 @@ describe("PiAiModelClient permission integration", () => {
       ["run_3:tool:event-a", "rejected"],
     ]);
   });
+
+  it("awaits async onToolCallStart and blocks when approval is rejected", async () => {
+    const client = new PiAiModelClient();
+    const config = makeProviderConfig();
+    const callOrder: string[] = [];
+    const onToolDecision = vi.fn();
+    let beforeToolCallResult: { block?: boolean; reason?: string } | null = null;
+
+    nextPrompt = async (agentConfig: any) => {
+      callOrder.push("before");
+      beforeToolCallResult = await agentConfig.beforeToolCall({
+        toolCall: { name: "bash", id: "approval-event" },
+        args: { command: "echo denied" },
+      });
+      callOrder.push("after");
+    };
+
+    await client.run(
+      {
+        runId: "run_4",
+        sessionId: "session_1",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: config,
+      },
+      {
+        onToolCallStart: async (toolCallId) => {
+          callOrder.push("callback-start");
+          await Promise.resolve();
+          callOrder.push("callback-end");
+          setTimeout(() => {
+            client.rejectTool(toolCallId);
+          }, 0);
+        },
+        onToolDecision,
+      },
+    );
+
+    expect(callOrder).toEqual(["before", "callback-start", "callback-end", "after"]);
+    expect(beforeToolCallResult).toEqual({
+      block: true,
+      reason: "Tool execution rejected by user.",
+    });
+    expect(onToolDecision).toHaveBeenCalledWith("run_4:tool:approval-event", "rejected");
+  });
 });
 
 function makeProviderConfig(): ProviderConfig {

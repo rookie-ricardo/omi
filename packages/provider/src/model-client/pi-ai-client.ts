@@ -8,7 +8,7 @@ import type { Message } from "@mariozechner/pi-ai";
 import { createHash } from "node:crypto";
 import { createModelFromConfig } from "../model-registry";
 import type { ToolName } from "@omi/tools";
-import { createToolArray } from "@omi/tools";
+import { createToolArray, isBuiltInTool, requiresApproval } from "@omi/tools";
 import type {
   ModelClient,
   ModelClientCallbacks,
@@ -141,6 +141,13 @@ export class PiAiModelClient implements ModelClient {
 
     const toolCalls: RuntimeToolCall[] = [];
     this.toolCallsByRun.set(runId, toolCalls);
+    const context = {
+      runId,
+      sessionId,
+      currentToolCallId: undefined as string | undefined,
+      toolCallIdMap: new Map<string, string>(),
+      messageIdCounter: 0,
+    };
 
     const agent = new Agent({
       initialState: {
@@ -164,9 +171,14 @@ export class PiAiModelClient implements ModelClient {
       }) => {
         const toolName = toolCall.name;
         const toolCallId = buildStableToolCallId(runId, toolCall, toolName, args);
+        context.currentToolCallId = toolCallId;
+        const toolEventId = extractToolEventId(toolCall);
+        if (toolEventId) {
+          context.toolCallIdMap.set(toolEventId, toolCallId);
+        }
         const preflightReason = await preflightToolCheck?.(toolName, args);
         if (preflightReason) {
-          callbacks.onToolDecision?.(toolCallId, "rejected");
+          await callbacks.onToolDecision?.(toolCallId, "rejected");
           return {
             block: true,
             reason: preflightReason,
@@ -182,7 +194,7 @@ export class PiAiModelClient implements ModelClient {
         });
 
         // Emit normalized tool call start event
-        callbacks.onToolCallStart?.(toolCallId, toolName, args);
+        await callbacks.onToolCallStart?.(toolCallId, toolName, args);
 
         if (!requiresReview) {
           return undefined;
@@ -198,11 +210,11 @@ export class PiAiModelClient implements ModelClient {
         this.pendingApprovals.delete(toolCallId);
 
         if (decision === "approved") {
-          callbacks.onToolDecision?.(toolCallId, "approved");
+          await callbacks.onToolDecision?.(toolCallId, "approved");
           return undefined;
         }
 
-        callbacks.onToolDecision?.(toolCallId, "rejected");
+        await callbacks.onToolDecision?.(toolCallId, "rejected");
         return {
           block: true,
           reason: "Tool execution rejected by user.",
@@ -211,7 +223,7 @@ export class PiAiModelClient implements ModelClient {
     } as never);
 
     this.activeAgents.set(runId, agent);
-    callbacks.onRequestStart?.(runId, sessionId);
+    await callbacks.onRequestStart?.(runId, sessionId);
 
     let latestAssistantText = "";
     let finalStopReason: ModelStopReason = "end_turn";
@@ -219,19 +231,11 @@ export class PiAiModelClient implements ModelClient {
     let finalUsage = { inputTokens: 0, outputTokens: 0 };
     let finalError: string | null = null;
 
-    const context = {
-      runId,
-      sessionId,
-      currentToolCallId: undefined as string | undefined,
-      toolCallIdMap: new Map<string, string>(),
-      messageIdCounter: 0,
-    };
-
     agent.subscribe((event: AgentEvent) => {
       const normalizedEvents = normalizeEvent(event, context);
 
       for (const normalized of normalizedEvents) {
-        this.emitNormalizedEvent(normalized, callbacks);
+        void this.emitNormalizedEvent(normalized, callbacks);
 
         if (normalized.type === "assistant_delta") {
           latestAssistantText += normalized.delta;
@@ -247,6 +251,9 @@ export class PiAiModelClient implements ModelClient {
         if (normalized.type === "tool_call_start") {
           context.currentToolCallId = normalized.toolCallId;
         }
+        if (normalized.type === "tool_call_end") {
+          context.currentToolCallId = undefined;
+        }
       }
     });
 
@@ -256,7 +263,7 @@ export class PiAiModelClient implements ModelClient {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorClass = classifyPiAiError(error);
       const recoverable = isRecoverableError(errorClass);
-      callbacks.onError?.(errorMessage, errorClass, recoverable);
+      await callbacks.onError?.(errorMessage, errorClass, recoverable);
       finalError = errorMessage;
     } finally {
       this.activeAgents.delete(runId);
@@ -304,31 +311,49 @@ export class PiAiModelClient implements ModelClient {
     pending.resolve("rejected");
   }
 
-  private emitNormalizedEvent(event: ModelStreamEvent, callbacks: ModelClientCallbacks): void {
+  private async emitNormalizedEvent(
+    event: ModelStreamEvent,
+    callbacks: ModelClientCallbacks,
+  ): Promise<void> {
     switch (event.type) {
       case "assistant_delta":
-        callbacks.onTextDelta?.(event.delta);
+        await callbacks.onTextDelta?.(event.delta);
         break;
       case "tool_call_start":
-        callbacks.onToolCallStart?.(event.toolCallId, event.toolName, event.input);
+        await callbacks.onToolCallStart?.(event.toolCallId, event.toolName, event.input);
         break;
       case "tool_call_end":
-        callbacks.onToolCallEnd?.(event.toolCallId, event.toolName, event.result, event.isError);
+        await callbacks.onToolCallEnd?.(
+          event.toolCallId,
+          event.toolName,
+          event.result,
+          event.isError,
+        );
         break;
       case "tool_result":
-        callbacks.onToolResult?.(event.toolCallId, event.toolName, event.output, event.isError);
+        await callbacks.onToolResult?.(
+          event.toolCallId,
+          event.toolName,
+          event.output,
+          event.isError,
+        );
         break;
       case "update":
-        callbacks.onUpdate?.(event.toolCallId, event.toolName, event.delta, event.partialResult);
+        await callbacks.onUpdate?.(
+          event.toolCallId,
+          event.toolName,
+          event.delta,
+          event.partialResult,
+        );
         break;
       case "usage":
-        callbacks.onUsage?.(event.usage);
+        await callbacks.onUsage?.(event.usage);
         break;
       case "error":
-        callbacks.onError?.(event.error, event.errorClass, event.recoverable);
+        await callbacks.onError?.(event.error, event.errorClass, event.recoverable);
         break;
       case "request_start":
-        callbacks.onRequestStart?.(event.runId, event.sessionId);
+        await callbacks.onRequestStart?.(event.runId, event.sessionId);
         break;
       case "complete":
         break;
@@ -346,7 +371,7 @@ export class PiAiModelClient implements ModelClient {
   }
 
   private requiresApproval(toolName: string): boolean {
-    return false;
+    return isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
   }
 
   private buildTools(enabledTools?: ToolName[]): AgentTool[] {

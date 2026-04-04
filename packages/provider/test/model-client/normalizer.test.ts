@@ -28,11 +28,12 @@ describe("normalizeEvent", () => {
 
   it("normalizes tool execution updates to update events", () => {
     const context = createContext();
-    context.toolCallIdMap.set("bash", "run-1:tool:1");
+    context.toolCallIdMap.set("evt-1", "run-1:tool:1");
 
     const events = normalizeEvent(
       {
         type: "tool_execution_update",
+        id: "evt-1",
         toolCallId: "run-1:tool:1",
         toolName: "bash",
         partialResult: { chunk: "partial" },
@@ -50,6 +51,34 @@ describe("normalizeEvent", () => {
         partialResult: { chunk: "partial" },
       },
     ]);
+  });
+
+  it("uses event-level ids so same-name tools do not collide", () => {
+    const context = createContext();
+    const first = normalizeEvent(
+      {
+        type: "tool_execution_update",
+        id: "evt-a",
+        toolName: "bash",
+        partialResult: { chunk: "a" },
+      } as AgentEvent,
+      context,
+    );
+    const second = normalizeEvent(
+      {
+        type: "tool_execution_update",
+        id: "evt-b",
+        toolName: "bash",
+        partialResult: { chunk: "b" },
+      } as AgentEvent,
+      context,
+    );
+
+    const firstId = (first[0] as { toolCallId?: string }).toolCallId;
+    const secondId = (second[0] as { toolCallId?: string }).toolCallId;
+    expect(firstId).toBeDefined();
+    expect(secondId).toBeDefined();
+    expect(firstId).not.toBe(secondId);
   });
 
   it("emits usage and complete events for the final message", () => {

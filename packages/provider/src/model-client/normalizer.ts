@@ -31,9 +31,14 @@ export function normalizeEvent(
 
   // Tool execution start
   if (event.type === "tool_execution_start") {
+    const toolEventKey = getToolEventKey(event);
+    const toolCallId = context.currentToolCallId ?? generateToolCallId(context);
+    if (toolEventKey) {
+      context.toolCallIdMap.set(toolEventKey, toolCallId);
+    }
     events.push({
       type: "tool_call_start",
-      toolCallId: context.currentToolCallId ?? generateToolCallId(context),
+      toolCallId,
       toolName: event.toolName,
       input: (event as Record<string, unknown>).args as Record<string, unknown> ?? {},
     });
@@ -41,7 +46,7 @@ export function normalizeEvent(
   }
 
   if (event.type === "tool_execution_update") {
-    const toolCallId = findToolCallId(context, event.toolName);
+    const toolCallId = findToolCallId(context, event);
     const partialResult = (event as Record<string, unknown>).partialResult;
     const delta =
       typeof partialResult === "string"
@@ -60,7 +65,7 @@ export function normalizeEvent(
 
   // Tool execution end
   if (event.type === "tool_execution_end") {
-    const toolCallId = findToolCallId(context, event.toolName);
+    const toolCallId = findToolCallId(context, event);
     events.push({
       type: "tool_call_end",
       toolCallId,
@@ -121,13 +126,34 @@ function generateToolCallId(context: NormalizationContext): string {
   return `${context.runId}:tool:${++globalToolCallCounter}`;
 }
 
-function findToolCallId(context: NormalizationContext, toolName: string): string {
-  const existing = context.toolCallIdMap.get(toolName);
-  if (existing) {
-    return existing;
+function getToolEventKey(event: AgentEvent): string | null {
+  const record = event as Record<string, unknown>;
+  const rawId =
+    (typeof record.toolCallId === "string" && record.toolCallId)
+    || (typeof record.id === "string" && record.id)
+    || (typeof record.callId === "string" && record.callId)
+    || null;
+  if (!rawId || rawId.trim().length === 0) {
+    return null;
+  }
+  return rawId;
+}
+
+function findToolCallId(context: NormalizationContext, event: AgentEvent): string {
+  const toolEventKey = getToolEventKey(event);
+  if (toolEventKey) {
+    const existing = context.toolCallIdMap.get(toolEventKey);
+    if (existing) {
+      return existing;
+    }
+  }
+  if (context.currentToolCallId) {
+    return context.currentToolCallId;
   }
   const newId = generateToolCallId(context);
-  context.toolCallIdMap.set(toolName, newId);
+  if (toolEventKey) {
+    context.toolCallIdMap.set(toolEventKey, newId);
+  }
   return newId;
 }
 

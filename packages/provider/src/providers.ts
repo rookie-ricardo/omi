@@ -97,13 +97,20 @@ export class PiAiProvider implements ProviderAdapter {
   }
 
   async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+    const pendingRequested = new Set<string>();
     const callbacks: ModelClientCallbacks = {
       onTextDelta: input.onTextDelta,
       onUpdate: (toolCallId, toolName, delta) => {
         input.onToolUpdate?.(toolCallId, delta);
       },
       onToolCallStart: async (toolCallId, toolName, toolInput) => {
+        if (pendingRequested.has(toolCallId)) {
+          pendingRequested.delete(toolCallId);
+          input.onToolStarted?.(toolCallId, toolName);
+          return;
+        }
         const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
+        pendingRequested.add(toolCallId);
         await input.onToolRequested?.({
           runId: input.runId,
           sessionId: input.sessionId,
@@ -112,7 +119,6 @@ export class PiAiProvider implements ProviderAdapter {
           input: toolInput,
           requiresApproval: requiresReview,
         });
-        input.onToolStarted?.(toolCallId, toolName);
       },
       onToolDecision: input.onToolDecision,
       onToolCallEnd: (toolCallId, toolName, result, isError) => {
