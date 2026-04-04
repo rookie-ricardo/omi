@@ -905,11 +905,17 @@ describe("QueryEngine", () => {
       expect(fallbackRecovery.version).toBe(1);
       expect(fallbackRecovery.mode).toBe("overflow");
       expect(Array.isArray(fallbackRecovery.summarizedMessages)).toBe(true);
-      const fallbackTokens = [
-        ...((fallbackRecovery.summarizedMessages as string[] | undefined) ?? []),
-        ...((fallbackRecovery.keptMessages as string[] | undefined) ?? []),
-      ];
-      expect(fallbackTokens.some((token) => token.includes("user:"))).toBe(true);
+      const summarized = (
+        (fallbackRecovery.summarizedMessages as Array<{ role?: string; token?: string }> | undefined)
+        ?? []
+      );
+      const kept = (
+        (fallbackRecovery.keptMessages as Array<{ role?: string; token?: string }> | undefined)
+        ?? []
+      );
+      expect(summarized.every((entry) => typeof entry.role === "string" && typeof entry.token === "string")).toBe(true);
+      const fallbackTokens = [...summarized, ...kept].map((entry) => `${entry.role}:${entry.token}`);
+      expect(fallbackTokens.some((token) => token.startsWith("user:"))).toBe(true);
     });
   });
 

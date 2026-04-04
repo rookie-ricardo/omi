@@ -144,8 +144,13 @@ interface FallbackCompactionRecoveryBundle {
   generatedAt: string;
   firstKeptHistoryEntryId: string | null;
   firstKeptTimestamp: string | null;
-  summarizedMessages: string[];
-  keptMessages: string[];
+  summarizedMessages: FallbackCompactionRecoveryMessage[];
+  keptMessages: FallbackCompactionRecoveryMessage[];
+}
+
+interface FallbackCompactionRecoveryMessage {
+  role: RuntimeMessage["role"];
+  token: string;
 }
 
 // ============================================================================
@@ -1245,8 +1250,12 @@ export class QueryEngine {
       criticalContext: [
         `first_kept_history_entry_id=${fallbackRecoveryBundle.firstKeptHistoryEntryId ?? "null"}`,
         `first_kept_timestamp=${fallbackRecoveryBundle.firstKeptTimestamp ?? "null"}`,
-        ...fallbackRecoveryBundle.summarizedMessages.slice(0, 8).map((entry) => `summarized:${entry}`),
-        ...fallbackRecoveryBundle.keptMessages.slice(0, 8).map((entry) => `kept:${entry}`),
+        ...fallbackRecoveryBundle.summarizedMessages
+          .slice(0, 8)
+          .map((entry) => `summarized:${entry.role}:${entry.token}`),
+        ...fallbackRecoveryBundle.keptMessages
+          .slice(0, 8)
+          .map((entry) => `kept:${entry.role}:${entry.token}`),
       ],
     };
   }
@@ -1264,29 +1273,52 @@ export class QueryEngine {
       generatedAt: nowIso(),
       firstKeptHistoryEntryId: input.firstKeptHistoryEntryId,
       firstKeptTimestamp: input.firstKeptTimestamp,
-      summarizedMessages: input.summaryMessages.map((message) => this.toFallbackRecoveryToken(message)),
-      keptMessages: input.keptMessages.map((message) => this.toFallbackRecoveryToken(message)),
+      summarizedMessages: input.summaryMessages.map((message) =>
+        this.toFallbackRecoveryMessage(message)
+      ),
+      keptMessages: input.keptMessages.map((message) => this.toFallbackRecoveryMessage(message)),
     };
   }
 
-  private toFallbackRecoveryToken(message: RuntimeMessage): string {
+  private toFallbackRecoveryMessage(message: RuntimeMessage): FallbackCompactionRecoveryMessage {
     switch (message.role) {
       case "user":
-        return `user:${this.truncateFallbackToken(this.runtimeContentToText(message.content))}`;
+        return {
+          role: message.role,
+          token: this.truncateFallbackToken(this.runtimeContentToText(message.content)),
+        };
       case "assistantTranscript":
-        return `assistant:${this.truncateFallbackToken(message.content)}`;
+        return {
+          role: message.role,
+          token: this.truncateFallbackToken(message.content),
+        };
       case "runtimeToolOutput":
-        return `${message.toolName}:${message.isError ? "error" : "ok"}:${this.truncateFallbackToken(
-          this.runtimeContentToText(message.content),
-        )}`;
+        return {
+          role: message.role,
+          token: `${message.toolName}:${message.isError ? "error" : "ok"}:${this.truncateFallbackToken(
+            this.runtimeContentToText(message.content),
+          )}`,
+        };
       case "compactionSummary":
-        return `compaction:${this.truncateFallbackToken(message.summary.goal)}`;
+        return {
+          role: message.role,
+          token: this.truncateFallbackToken(message.summary.goal),
+        };
       case "branchSummary":
-        return `branch:${this.truncateFallbackToken(message.summary)}`;
+        return {
+          role: message.role,
+          token: this.truncateFallbackToken(message.summary),
+        };
       case "bashExecution":
-        return `bash:${this.truncateFallbackToken(message.command)}`;
+        return {
+          role: message.role,
+          token: this.truncateFallbackToken(message.command),
+        };
       default:
-        return `${message.role}:${this.truncateFallbackToken(JSON.stringify(message))}`;
+        return {
+          role: message.role,
+          token: this.truncateFallbackToken(JSON.stringify(message)),
+        };
     }
   }
 
