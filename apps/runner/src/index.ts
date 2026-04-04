@@ -7,7 +7,7 @@ import { type RpcRequest, rpcRequestSchema } from "@omi/protocol";
 import { getLogger } from "@omi/agent";
 
 import { normalizeResult } from "./protocol";
-import { handleRunnerRequest } from "./request-handler";
+import { collectRunEventDeliveries, handleRunnerRequest } from "./request-handler";
 
 const logger = getLogger("runner:main");
 
@@ -62,6 +62,15 @@ async function handleRequest(request: RpcRequest): Promise<unknown> {
 
 function emitEvent(event: { type: string; payload: Record<string, unknown> }) {
   logger.debug("Runner emitting event", { eventType: event.type });
+
+  const deliveries = collectRunEventDeliveries(event.type, event.payload);
+  for (const delivery of deliveries) {
+    process.send?.({
+      type: "run.event",
+      event: delivery,
+    });
+  }
+
   process.send?.({
     type: "event",
     event,

@@ -12,13 +12,13 @@ import {
 export const rpcRequestSchema = z.object({
   id: z.string(),
   method: z.string(),
-  params: z.record(z.any()).default({}),
+  params: z.record(z.unknown()).default({}),
 });
 
 export const rpcSuccessSchema = z.object({
   id: z.string(),
   ok: z.literal(true),
-  result: z.any(),
+  result: z.unknown(),
 });
 
 export const rpcErrorSchema = z.object({
@@ -149,7 +149,7 @@ export const sessionHistoryContinueParamsSchema = z.object({
   prompt: z.string().min(1),
   taskId: z.string().nullable().default(null),
   checkpointSummary: z.string().nullable().default(null),
-  checkpointDetails: z.record(z.any()).nullable().default(null),
+  checkpointDetails: z.record(z.unknown()).nullable().default(null),
 });
 
 export const sessionRuntimeCompactionStateSchema = z.object({
@@ -176,7 +176,7 @@ export const sessionRuntimeStateSchema = z.object({
       mode: z.enum(["start", "retry", "resume"]),
       historyEntryId: z.string().nullable().default(null),
       checkpointSummary: z.string().nullable().default(null),
-      checkpointDetails: z.record(z.any()).nullable().default(null),
+      checkpointDetails: z.record(z.unknown()).nullable().default(null),
     }),
   ),
   blockedRunId: z.string().nullable(),
@@ -278,7 +278,7 @@ export const commandMap = {
   "session.mode.enter": z.object({
     sessionId: z.string(),
     mode: z.enum(["plan", "auto"]),
-    config: z.record(z.any()).optional(),
+    config: z.record(z.unknown()).optional(),
   }),
   "session.mode.exit": z.object({
     sessionId: z.string(),
@@ -326,7 +326,7 @@ export const commandMap = {
       name: z.string(),
       toolPattern: z.string(),
       action: z.enum(["allow", "deny", "require_approval"]),
-      conditions: z.record(z.any()).optional(),
+      conditions: z.record(z.unknown()).optional(),
       priority: z.number().optional(),
     }),
   }),
@@ -516,7 +516,7 @@ export const permissionRuleSchema = z.object({
   name: z.string(),
   toolPattern: z.string(),
   action: z.enum(["allow", "deny", "require_approval"]),
-  conditions: z.record(z.any()).optional(),
+  conditions: z.record(z.unknown()).optional(),
   priority: z.number(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -579,7 +579,7 @@ export const subagentTaskSchema = z.object({
   createdAt: z.string(),
   startedAt: z.string().nullable(),
   completedAt: z.string().nullable(),
-  output: z.any().nullable(),
+  output: z.unknown().nullable(),
   error: z.string().nullable(),
 });
 
@@ -756,7 +756,7 @@ export const eventSchemas = {
     toolCallId: z.string(),
     toolName: z.string(),
     requiresApproval: z.boolean(),
-    input: z.record(z.any()),
+    input: z.record(z.unknown()),
   }),
   "run.tool_started": z.object({ runId: z.string(), toolCallId: z.string(), toolName: z.string() }),
   "run.tool_decided": z.object({
@@ -769,7 +769,7 @@ export const eventSchemas = {
     runId: z.string(),
     toolCallId: z.string(),
     toolName: z.string(),
-    output: z.record(z.any()),
+    output: z.record(z.unknown()),
   }),
   "run.blocked": z.object({ runId: z.string(), toolCallId: z.string(), reason: z.string() }),
   "run.review_required": z.object({
@@ -795,7 +795,7 @@ export const eventSchemas = {
   }),
   "subagent.completed": z.object({
     taskId: z.string(),
-    output: z.any(),
+    output: z.unknown(),
   }),
   "subagent.failed": z.object({
     taskId: z.string(),
@@ -913,7 +913,7 @@ export type RunEventsSubscribeResult = z.infer<typeof runEventsSubscribeResultSc
 
 export const skillRefreshResultSchema = z.object({
   refreshedAt: z.string(),
-  skills: z.array(z.any()),
+  skills: z.array(z.unknown()),
 });
 export type SkillRefreshResult = z.infer<typeof skillRefreshResultSchema>;
 

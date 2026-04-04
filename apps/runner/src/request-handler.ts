@@ -1,6 +1,5 @@
 import type { AppOrchestrator, SessionManager, SubAgentState } from "@omi/agent";
-import { getLogger } from "@omi/agent";
-import { SubAgentManager } from "../../../packages/agent/src/subagent-manager";
+import { getLogger, SubAgentManager } from "@omi/agent";
 import type {
   AgentCloseResult,
   AgentSendResult,
@@ -78,10 +77,21 @@ const sessionModeStates = new Map<string, SessionModeState>();
 const permissionRuleState = new Map<string, PermissionRule[]>();
 const mcpServers = new Map<string, McpServer>();
 const subAgentManagers = new WeakMap<object, SubAgentManager>();
-const runEventSubscriptions = new Map<
-  string,
-  Array<{ subscriptionId: string; events: string[]; createdAt: string }>
->();
+type RunEventSubscription = {
+  subscriptionId: string;
+  events: string[];
+  createdAt: string;
+};
+
+export interface RunEventDelivery {
+  runId: string;
+  subscriptionId: string;
+  event: string;
+  payload: Record<string, unknown>;
+  deliveredAt: string;
+}
+
+const runEventSubscriptions = new Map<string, RunEventSubscription[]>();
 
 export async function handleRunnerRequest(
   orchestrator: RunnerRequestOrchestrator,
@@ -476,10 +486,14 @@ function subscribeRunEvents(
   events: string[],
 ): { runId: string; subscriptionId: string; events: string[] } {
   const subscriptionId = createId("sub");
+  const normalizedEvents = [...new Set(events.map((eventName) => eventName.trim()).filter(Boolean))];
+  if (normalizedEvents.length === 0) {
+    normalizedEvents.push("*");
+  }
   const subscriptions = runEventSubscriptions.get(runId) ?? [];
   subscriptions.push({
     subscriptionId,
-    events: [...events],
+    events: normalizedEvents,
     createdAt: nowIso(),
   });
   runEventSubscriptions.set(runId, subscriptions);
@@ -487,8 +501,49 @@ function subscribeRunEvents(
   return {
     runId,
     subscriptionId,
-    events: [...events],
+    events: normalizedEvents,
   };
+}
+
+function matchesSubscriptionEvent(eventPattern: string, eventName: string): boolean {
+  if (eventPattern === "*" || eventPattern === eventName) {
+    return true;
+  }
+  if (eventPattern.endsWith(".*")) {
+    const prefix = eventPattern.slice(0, -1);
+    return eventName.startsWith(prefix);
+  }
+  return false;
+}
+
+export function collectRunEventDeliveries(
+  eventName: string,
+  payload: Record<string, unknown>,
+): RunEventDelivery[] {
+  const runId = typeof payload.runId === "string" ? payload.runId : null;
+  if (!runId) {
+    return [];
+  }
+
+  const subscriptions = runEventSubscriptions.get(runId) ?? [];
+  if (subscriptions.length === 0) {
+    return [];
+  }
+
+  return subscriptions
+    .filter((subscription) =>
+      subscription.events.some((eventPattern) => matchesSubscriptionEvent(eventPattern, eventName)))
+    .map((subscription) => ({
+      runId,
+      subscriptionId: subscription.subscriptionId,
+      event: eventName,
+      payload: { ...payload },
+      deliveredAt: nowIso(),
+    }));
+}
+
+export function resetRunEventSubscriptions(): void {
+  runEventSubscriptions.clear();
 }
 
 function mapRunStatus(status: string): RunState["status"] {

@@ -6,10 +6,16 @@ import type { CompactionSummaryDocument } from "@omi/memory";
 import { parseResult } from "@omi/protocol";
 
 import { normalizeResult } from "../src/protocol";
-import { handleRunnerRequest } from "../src/request-handler";
+import {
+  collectRunEventDeliveries,
+  handleRunnerRequest,
+  resetRunEventSubscriptions,
+} from "../src/request-handler";
 
 describe("runner request handler", () => {
   it("returns structured payloads for runtime, branches, run state, and mode control", async () => {
+    resetRunEventSubscriptions();
+
     const runtimeState: SessionRuntimeState = {
       version: 1,
       sessionId: "session_1",
@@ -318,6 +324,33 @@ describe("runner request handler", () => {
     expect(normalizeResult("run.events.subscribe", runEventsResponse)).toEqual(
       parseResult("run.events.subscribe", runEventsResponse),
     );
+
+    const runEventSubscription = runEventsResponse as { subscriptionId: string };
+    const deliveries = collectRunEventDeliveries("run.completed", {
+      runId: "run_1",
+      sessionId: "session_1",
+      summary: "done",
+    });
+    expect(deliveries).toEqual([
+      {
+        runId: "run_1",
+        subscriptionId: runEventSubscription.subscriptionId,
+        event: "run.completed",
+        payload: {
+          runId: "run_1",
+          sessionId: "session_1",
+          summary: "done",
+        },
+        deliveredAt: expect.any(String),
+      },
+    ]);
+
+    expect(
+      collectRunEventDeliveries("run.delta", {
+        runId: "run_1",
+        sessionId: "session_1",
+      }),
+    ).toEqual([]);
 
     const refreshedSkillsResponse = await handleRunnerRequest(orchestrator, {
       id: "rpc_5c",
