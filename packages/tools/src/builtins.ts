@@ -33,10 +33,16 @@ import {
   createSubagentSendTool,
   createSubagentWaitTool,
   createSubagentCloseTool,
+  createSubagentListTool,
+  createSubagentGetTool,
+  createSubagentDelegateTool,
   subagentSpawnSchema,
   subagentSendSchema,
   subagentWaitSchema,
   subagentCloseSchema,
+  subagentListSchema,
+  subagentGetSchema,
+  subagentDelegateSchema,
 } from "./subagent";
 import {
   createTaskCreateTool,
@@ -470,6 +476,62 @@ const ENTRIES: BuiltInEntry[] = [
       },
     ),
     factory: () => renameTool(createSubagentCloseTool(() => getSubAgentClientRuntime()), "subagent.close"),
+  },
+  {
+    definition: defineTool(
+      "subagent.list",
+      "List spawned subagents.",
+      subagentListSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(createSubagentListTool(() => getSubAgentClientRuntime()), "subagent.list"),
+  },
+  {
+    definition: defineTool(
+      "subagent.get",
+      "Get subagent details by id.",
+      subagentGetSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(createSubagentGetTool(() => getSubAgentClientRuntime()), "subagent.get"),
+  },
+  {
+    definition: defineTool(
+      "subagent.delegate",
+      "Delegate a task to a subagent.",
+      subagentDelegateSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "conflict",
+        errorCodes: [
+          TOOL_ERROR_CODES.TASK_FAILED,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => renameTool(createSubagentDelegateTool(() => getSubAgentClientRuntime()), "subagent.delegate"),
   },
   {
     definition: defineTool(

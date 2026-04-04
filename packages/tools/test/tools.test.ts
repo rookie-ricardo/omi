@@ -27,6 +27,9 @@ describe("tools", () => {
     expect(isBuiltInTool("glob")).toBe(true);
     expect(isBuiltInTool("plan.enter")).toBe(true);
     expect(isBuiltInTool("subagent.spawn")).toBe(true);
+    expect(isBuiltInTool("subagent.list")).toBe(true);
+    expect(isBuiltInTool("subagent.get")).toBe(true);
+    expect(isBuiltInTool("subagent.delegate")).toBe(true);
     expect(isBuiltInTool("unknown_tool")).toBe(false);
   });
 
@@ -50,6 +53,9 @@ describe("tools", () => {
       "subagent.send",
       "subagent.wait",
       "subagent.close",
+      "subagent.list",
+      "subagent.get",
+      "subagent.delegate",
       "task.create",
       "task.update",
       "task.get",

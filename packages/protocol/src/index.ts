@@ -58,6 +58,62 @@ export const gitDiffParamsSchema = z.object({
   path: z.string().min(1),
 });
 
+export const webSearchParamsSchema = z.object({
+  query: z.string().min(1),
+  limit: z.number().int().positive().max(20).optional(),
+});
+
+export const webFetchParamsSchema = z.object({
+  url: z.string().url(),
+  maxChars: z.number().int().positive().optional(),
+});
+
+export const mcpResourceListParamsSchema = z.object({
+  serverId: z.string().optional(),
+  pattern: z.string().optional(),
+});
+
+export const mcpResourceReadParamsSchema = z.object({
+  uri: z.string().min(1),
+  maxLength: z.number().int().positive().optional(),
+});
+
+export const planApproveParamsSchema = z.object({
+  sessionId: z.string(),
+  stepIds: z.array(z.string()).optional(),
+  reason: z.string().optional(),
+});
+
+export const planRejectParamsSchema = z.object({
+  sessionId: z.string(),
+  stepIds: z.array(z.string()).optional(),
+  reason: z.string().optional(),
+});
+
+export const planStepsListParamsSchema = z.object({
+  sessionId: z.string(),
+  filter: z.enum(["all", "pending", "approved", "rejected"]).optional(),
+});
+
+export const agentListParamsSchema = z.object({
+  ownerId: z.string().optional(),
+  status: z.string().optional(),
+});
+
+export const agentGetParamsSchema = z.object({
+  taskId: z.string(),
+});
+
+export const agentDelegateParamsSchema = z.object({
+  ownerId: z.string(),
+  prompt: z.string(),
+  waitForCompletion: z.boolean().default(false),
+  timeout: z.number().optional(),
+  writeScope: z.enum(["shared", "isolated"]).default("shared"),
+  deadline: z.number().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
 export const runRetryParamsSchema = z.object({
   runId: z.string(),
 });
@@ -228,11 +284,16 @@ export const commandMap = {
     sessionId: z.string(),
     discard: z.boolean().default(false),
   }),
+  "plan.approve": planApproveParamsSchema,
+  "plan.reject": planRejectParamsSchema,
+  "plan.steps.list": planStepsListParamsSchema,
   "skill.list": z.object({}).default({}),
   "skill.search": skillSearchParamsSchema,
   "skill.refresh": z.object({}).default({}),
   "task.list": z.object({}).default({}),
   "task.update": taskUpdateParamsSchema,
+  "web.search": webSearchParamsSchema,
+  "web.fetch": webFetchParamsSchema,
   "git.status": z.object({}).default({}),
   "git.diff": gitDiffParamsSchema,
   "run.start": runStartParamsSchema,
@@ -280,6 +341,8 @@ export const commandMap = {
   "mcp.server.disconnect": z.object({
     serverId: z.string(),
   }),
+  "mcp.resource.list": mcpResourceListParamsSchema,
+  "mcp.resource.read": mcpResourceReadParamsSchema,
   "agent.spawn": z.object({
     ownerId: z.string(),
     prompt: z.string(),
@@ -299,6 +362,9 @@ export const commandMap = {
   "agent.close": z.object({
     taskId: z.string(),
   }),
+  "agent.list": agentListParamsSchema,
+  "agent.get": agentGetParamsSchema,
+  "agent.delegate": agentDelegateParamsSchema,
 } as const;
 
 export const resultSchemas = {
@@ -327,6 +393,15 @@ export const resultSchemas = {
   get "session.mode.exit"() {
     return sessionModeExitResultSchema;
   },
+  get "plan.approve"() {
+    return planApproveResultSchema;
+  },
+  get "plan.reject"() {
+    return planRejectResultSchema;
+  },
+  get "plan.steps.list"() {
+    return planStepsListResultSchema;
+  },
   get "permission.rule.list"() {
     return permissionRuleListResultSchema;
   },
@@ -345,6 +420,12 @@ export const resultSchemas = {
   get "mcp.server.disconnect"() {
     return mcpServerDisconnectResultSchema;
   },
+  get "mcp.resource.list"() {
+    return mcpResourceListResultSchema;
+  },
+  get "mcp.resource.read"() {
+    return mcpResourceReadResultSchema;
+  },
   get "agent.spawn"() {
     return agentSpawnResultSchema;
   },
@@ -356,6 +437,21 @@ export const resultSchemas = {
   },
   get "agent.close"() {
     return agentCloseResultSchema;
+  },
+  get "agent.list"() {
+    return agentListResultSchema;
+  },
+  get "agent.get"() {
+    return agentGetResultSchema;
+  },
+  get "agent.delegate"() {
+    return agentDelegateResultSchema;
+  },
+  get "web.search"() {
+    return webSearchResultSchema;
+  },
+  get "web.fetch"() {
+    return webFetchResultSchema;
   },
   get "run.state.get"() {
     return runStateGetResultSchema;
@@ -532,6 +628,90 @@ export const agentCloseResultSchema = z.object({
   closed: z.boolean(),
 });
 
+export const agentListResultSchema = z.object({
+  tasks: z.array(subagentTaskSchema),
+});
+
+export const agentGetResultSchema = z.object({
+  task: subagentTaskSchema.nullable(),
+});
+
+export const agentDelegateResultSchema = z.object({
+  task: subagentTaskSchema,
+  timedOut: z.boolean().default(false),
+});
+
+export const mcpResourceSchema = z.object({
+  uri: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  mimeType: z.string().optional(),
+});
+
+export const mcpResourceContentSchema = z.object({
+  uri: z.string(),
+  mimeType: z.string().optional(),
+  text: z.string().optional(),
+  blob: z.string().optional(),
+});
+
+export const mcpResourceListResultSchema = z.object({
+  serverId: z.string().nullable().default(null),
+  resources: z.array(mcpResourceSchema),
+});
+
+export const mcpResourceReadResultSchema = z.object({
+  serverId: z.string(),
+  uri: z.string(),
+  content: mcpResourceContentSchema,
+});
+
+export const webSearchResultSchema = z.object({
+  query: z.string(),
+  results: z.array(
+    z.object({
+      title: z.string(),
+      url: z.string(),
+      snippet: z.string().optional(),
+    }),
+  ),
+});
+
+export const webFetchResultSchema = z.object({
+  url: z.string(),
+  status: z.number().optional(),
+  contentType: z.string().optional(),
+  title: z.string().optional(),
+  body: z.string(),
+});
+
+export const planStepSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+  status: z.enum(["pending", "approved", "rejected", "completed"]),
+  tool: z.string().optional(),
+  reason: z.string().optional(),
+});
+
+export const planApproveResultSchema = z.object({
+  sessionId: z.string(),
+  status: z.enum(["planning", "reviewing", "approved", "rejected"]),
+  steps: z.array(planStepSchema).default([]),
+});
+
+export const planRejectResultSchema = z.object({
+  sessionId: z.string(),
+  status: z.enum(["planning", "reviewing", "approved", "rejected"]),
+  steps: z.array(planStepSchema).default([]),
+});
+
+export const planStepsListResultSchema = z.object({
+  sessionId: z.string(),
+  status: z.enum(["planning", "reviewing", "approved", "rejected", "inactive"]),
+  steps: z.array(planStepSchema).default([]),
+  totalSteps: z.number().int().nonnegative().default(0),
+});
+
 export const eventSchemas = {
   "run.extensions_loaded": z.object({
     runId: z.string(),
@@ -656,6 +836,16 @@ export type TaskUpdateParams = z.infer<typeof taskUpdateParamsSchema>;
 export type ToolApprovalParams = z.infer<typeof toolApprovalParamsSchema>;
 export type SkillSearchParams = z.infer<typeof skillSearchParamsSchema>;
 export type GitDiffParams = z.infer<typeof gitDiffParamsSchema>;
+export type WebSearchParams = z.infer<typeof webSearchParamsSchema>;
+export type WebFetchParams = z.infer<typeof webFetchParamsSchema>;
+export type McpResourceListParams = z.infer<typeof mcpResourceListParamsSchema>;
+export type McpResourceReadParams = z.infer<typeof mcpResourceReadParamsSchema>;
+export type PlanApproveParams = z.infer<typeof planApproveParamsSchema>;
+export type PlanRejectParams = z.infer<typeof planRejectParamsSchema>;
+export type PlanStepsListParams = z.infer<typeof planStepsListParamsSchema>;
+export type AgentListParams = z.infer<typeof agentListParamsSchema>;
+export type AgentGetParams = z.infer<typeof agentGetParamsSchema>;
+export type AgentDelegateParams = z.infer<typeof agentDelegateParamsSchema>;
 export type RunRetryParams = z.infer<typeof runRetryParamsSchema>;
 export type RunResumeParams = z.infer<typeof runResumeParamsSchema>;
 export type SessionModelSwitchParams = z.infer<typeof sessionModelSwitchParamsSchema>;
@@ -693,6 +883,10 @@ export type McpServer = z.infer<typeof mcpServerSchema>;
 export type McpServerListResult = z.infer<typeof mcpServerListResultSchema>;
 export type McpServerConnectResult = z.infer<typeof mcpServerConnectResultSchema>;
 export type McpServerDisconnectResult = z.infer<typeof mcpServerDisconnectResultSchema>;
+export type McpResource = z.infer<typeof mcpResourceSchema>;
+export type McpResourceContent = z.infer<typeof mcpResourceContentSchema>;
+export type McpResourceListResult = z.infer<typeof mcpResourceListResultSchema>;
+export type McpResourceReadResult = z.infer<typeof mcpResourceReadResultSchema>;
 
 // Subagent types
 export type SubagentTask = z.infer<typeof subagentTaskSchema>;
@@ -700,6 +894,17 @@ export type AgentSpawnResult = z.infer<typeof agentSpawnResultSchema>;
 export type AgentSendResult = z.infer<typeof agentSendResultSchema>;
 export type AgentWaitResult = z.infer<typeof agentWaitResultSchema>;
 export type AgentCloseResult = z.infer<typeof agentCloseResultSchema>;
+export type AgentListResult = z.infer<typeof agentListResultSchema>;
+export type AgentGetResult = z.infer<typeof agentGetResultSchema>;
+export type AgentDelegateResult = z.infer<typeof agentDelegateResultSchema>;
+
+// Web and plan-control types
+export type WebSearchResult = z.infer<typeof webSearchResultSchema>;
+export type WebFetchResult = z.infer<typeof webFetchResultSchema>;
+export type PlanStep = z.infer<typeof planStepSchema>;
+export type PlanApproveResult = z.infer<typeof planApproveResultSchema>;
+export type PlanRejectResult = z.infer<typeof planRejectResultSchema>;
+export type PlanStepsListResult = z.infer<typeof planStepsListResultSchema>;
 
 // Run state types
 export type RunState = z.infer<typeof runStateSchema>;
