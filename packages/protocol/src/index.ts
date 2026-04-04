@@ -920,6 +920,83 @@ export type SkillRefreshResult = z.infer<typeof skillRefreshResultSchema>;
 export type RunnerCommandName = keyof typeof commandMap;
 export type RunnerEventName = keyof typeof eventSchemas;
 export type RunnerResultName = keyof typeof resultSchemas;
+export const RUNNER_PROTOCOL_VERSION = "1.0.0";
+
+export const runEventDeliverySchema = z.object({
+  runId: z.string(),
+  subscriptionId: z.string(),
+  event: z.string(),
+  payload: z.record(z.unknown()),
+  deliveredAt: z.string(),
+});
+export type RunEventDelivery = z.infer<typeof runEventDeliverySchema>;
+
+export const RUN_EVENT_SUBSCRIPTION_CONVENTION = {
+  version: RUNNER_PROTOCOL_VERSION,
+  channel: "run.event",
+  wildcardEventPattern: ["*", "namespace.*"],
+  delivery: "at-least-once",
+  schema: runEventDeliverySchema,
+} as const;
+
+const CORE_COMMAND_PREFIXES = ["session.", "task.", "run.", "tool.", "git.", "web."] as const;
+const CONTROL_COMMAND_PREFIXES = [
+  "session.mode.",
+  "plan.",
+  "permission.rule.",
+  "mcp.",
+  "agent.",
+  "skill.",
+  "provider.config.",
+  "session.model.",
+  "extension.",
+  "model.",
+] as const;
+
+function hasPrefix(name: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => name.startsWith(prefix));
+}
+
+function buildSchemaSubset(
+  source: Record<string, z.ZodTypeAny>,
+  prefixes: readonly string[],
+): Record<string, z.ZodTypeAny> {
+  return Object.fromEntries(
+    Object.entries(source).filter(([name]) => hasPrefix(name, prefixes)),
+  );
+}
+
+export const coreCommandSchemas = buildSchemaSubset(
+  commandMap as unknown as Record<string, z.ZodTypeAny>,
+  CORE_COMMAND_PREFIXES,
+);
+
+export const controlCommandSchemas = buildSchemaSubset(
+  commandMap as unknown as Record<string, z.ZodTypeAny>,
+  CONTROL_COMMAND_PREFIXES,
+);
+
+export const coreResultSchemas = buildSchemaSubset(
+  resultSchemas as unknown as Record<string, z.ZodTypeAny>,
+  CORE_COMMAND_PREFIXES,
+);
+
+export const controlResultSchemas = buildSchemaSubset(
+  resultSchemas as unknown as Record<string, z.ZodTypeAny>,
+  CONTROL_COMMAND_PREFIXES,
+);
+
+export type RunnerCommandParamsByName = {
+  [K in RunnerCommandName]: z.infer<(typeof commandMap)[K]>;
+};
+
+export type RunnerResultByName = {
+  [K in RunnerResultName]: z.infer<(typeof resultSchemas)[K]>;
+};
+
+export type RunnerEventByName = {
+  [K in RunnerEventName]: z.infer<(typeof eventSchemas)[K]>;
+};
 
 export function parseCommand(method: string, params: unknown): unknown {
   const schema = commandMap[method as RunnerCommandName];
