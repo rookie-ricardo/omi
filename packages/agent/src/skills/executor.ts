@@ -40,6 +40,14 @@ export interface ExecutionContext {
   enabledTools: ToolName[];
 }
 
+export interface SkillExecutorOptions {
+  /**
+   * Fork execution is experimental and disabled by default.
+   * Set true only when the runtime can provide isolated execution semantics.
+   */
+  enableExperimentalFork?: boolean;
+}
+
 export interface ExecutionResult {
   success: boolean;
   output: string;
@@ -63,14 +71,17 @@ export interface ExecutionPlan {
 export class SkillExecutor {
   private readonly workspaceRoot: string;
   private readonly providerConfig: ProviderConfig;
+  private readonly enableExperimentalFork: boolean;
   private activeForks: Map<string, ForkContext> = new Map();
 
   constructor(
     workspaceRoot: string,
     providerConfig: ProviderConfig,
+    options: SkillExecutorOptions = {},
   ) {
     this.workspaceRoot = workspaceRoot;
     this.providerConfig = providerConfig;
+    this.enableExperimentalFork = options.enableExperimentalFork ?? false;
   }
 
   /**
@@ -190,6 +201,17 @@ export class SkillExecutor {
    * Execute a skill in a forked (isolated) context.
    */
   async executeInFork(skill: LoadedSkill, context: ExecutionContext): Promise<ExecutionResult> {
+    if (!this.enableExperimentalFork) {
+      return {
+        success: false,
+        output: "",
+        error: "Fork execution is experimental and disabled by default.",
+        tokensUsed: 0,
+        mode: "fork",
+        skillName: skill.skill.descriptor.name,
+      };
+    }
+
     const forkId = `skill-fork-${Date.now()}`;
 
     try {
@@ -203,16 +225,17 @@ export class SkillExecutor {
 
       this.activeForks.set(forkId, forkContext);
 
-      // In a real implementation, this would spawn an isolated agent
-      // For now, we simulate the fork execution
-      const modelConstraints = getModelConstraints(skill.skill);
-
+      const isolatedContext: ExecutionContext = {
+        sessionId: context.sessionId,
+        workspaceRoot: context.workspaceRoot,
+        prompt: context.prompt,
+        providerConfig: { ...context.providerConfig },
+        enabledTools: [...context.enabledTools],
+      };
+      const inlineResult = await this.executeInline(skill, isolatedContext);
       return {
-        success: true,
-        output: `[Fork execution: ${skill.skill.descriptor.name}]\n\nSkill context:\n${skill.injectedPrompt}`,
-        tokensUsed: skill.contextTokens,
+        ...inlineResult,
         mode: "fork",
-        skillName: skill.skill.descriptor.name,
       };
     } catch (error) {
       return {

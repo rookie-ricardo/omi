@@ -81,6 +81,92 @@ describe("executor", () => {
       expect(executor.isForkActive("nonexistent")).toBe(false);
       expect(executor.terminateFork("nonexistent")).toBe(false);
     });
+
+    it("disables fork execution by default and marks it as experimental", async () => {
+      const executor = new SkillExecutor(workspaceRoot, providerConfig);
+      const plan = executor.prepareExecutionPlan({
+        skills: [
+          {
+            skill: {
+              descriptor: { name: "fork-skill" } as any,
+              frontmatter: { execution_mode: "fork" } as any,
+              activationConditions: null,
+              executionMode: "fork",
+              effort: "simple",
+              priority: 3,
+              identity: "fork-1",
+            },
+            injectedPrompt: "fork context",
+            enabledToolNames: [],
+            referencedFiles: [],
+            contextTokens: 120,
+            diagnostics: [],
+          },
+        ],
+        totalContextTokens: 120,
+        remainingBudgetTokens: 10000,
+        diagnostics: [],
+        exceeded: false,
+      });
+
+      const results = await executor.executeSkills(plan, {
+        sessionId: "session-1",
+        workspaceRoot,
+        prompt: "run fork",
+        providerConfig,
+        enabledTools: ["read"],
+      });
+
+      expect(plan.mode).toBe("fork");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.success).toBe(false);
+      expect(results[0]?.mode).toBe("fork");
+      expect(results[0]?.error).toContain("experimental");
+    });
+
+    it("runs fork execution with real lifecycle when experimental fork is enabled", async () => {
+      const executor = new SkillExecutor(workspaceRoot, providerConfig, {
+        enableExperimentalFork: true,
+      });
+      const plan = executor.prepareExecutionPlan({
+        skills: [
+          {
+            skill: {
+              descriptor: { name: "fork-skill" } as any,
+              frontmatter: { execution_mode: "fork" } as any,
+              activationConditions: null,
+              executionMode: "fork",
+              effort: "simple",
+              priority: 3,
+              identity: "fork-2",
+            },
+            injectedPrompt: "fork injected",
+            enabledToolNames: [],
+            referencedFiles: [],
+            contextTokens: 90,
+            diagnostics: [],
+          },
+        ],
+        totalContextTokens: 90,
+        remainingBudgetTokens: 10000,
+        diagnostics: [],
+        exceeded: false,
+      });
+
+      const results = await executor.executeSkills(plan, {
+        sessionId: "session-2",
+        workspaceRoot,
+        prompt: "execute isolated task",
+        providerConfig,
+        enabledTools: ["read"],
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.success).toBe(true);
+      expect(results[0]?.mode).toBe("fork");
+      expect(results[0]?.output).toContain("## Current Task");
+      expect(executor.getActiveForks()).toEqual([]);
+    });
   });
 
   describe("shouldDeferExecution", () => {
