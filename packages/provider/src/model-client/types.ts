@@ -234,15 +234,30 @@ export interface ModelClient {
  * Callbacks for receiving stream events from the model client.
  */
 export interface ModelClientCallbacks {
-  onTextDelta?: (delta: string) => void;
-  onToolCallStart?: (toolCallId: string, toolName: string, input: Record<string, unknown>) => void;
-  onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void;
-  onToolCallEnd?: (toolCallId: string, toolName: string, result: Record<string, unknown>, isError: boolean) => void;
-  onToolResult?: (toolCallId: string, toolName: string, output: Record<string, unknown>, isError: boolean) => void;
-  onUpdate?: (toolCallId: string, toolName: string, delta: string, partialResult: unknown) => void;
-  onUsage?: (usage: ModelUsage) => void;
-  onError?: (error: string, errorClass: ModelErrorClass, recoverable: boolean) => void;
-  onRequestStart?: (runId: string, sessionId: string) => void;
+  onTextDelta?: (delta: string) => void | Promise<void>;
+  onToolCallStart?: (toolCallId: string, toolName: string, input: Record<string, unknown>) => void | Promise<void>;
+  onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void | Promise<void>;
+  onToolCallEnd?: (
+    toolCallId: string,
+    toolName: string,
+    result: Record<string, unknown>,
+    isError: boolean
+  ) => void | Promise<void>;
+  onToolResult?: (
+    toolCallId: string,
+    toolName: string,
+    output: Record<string, unknown>,
+    isError: boolean
+  ) => void | Promise<void>;
+  onUpdate?: (
+    toolCallId: string,
+    toolName: string,
+    delta: string,
+    partialResult: unknown
+  ) => void | Promise<void>;
+  onUsage?: (usage: ModelUsage) => void | Promise<void>;
+  onError?: (error: string, errorClass: ModelErrorClass, recoverable: boolean) => void | Promise<void>;
+  onRequestStart?: (runId: string, sessionId: string) => void | Promise<void>;
 }
 
 // ============================================================================

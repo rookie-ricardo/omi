@@ -51,6 +51,7 @@ export interface ProviderRunResult {
 export interface ProviderToolRequestedEvent {
   runId: string;
   sessionId: string;
+  toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
   requiresApproval: boolean;
@@ -81,18 +82,6 @@ export function buildAgentInitialState(input: ProviderRunInput) {
   };
 }
 
-interface PendingApproval {
-  runId: string;
-  toolCallId: string;
-  resolve: (decision: "approved" | "rejected") => void;
-}
-
-interface RuntimeToolCall {
-  toolCallId: string;
-  toolName: string;
-  phase: "requested" | "started" | "finished";
-}
-
 /**
  * PiAiProvider - unified provider implementation backed by PiAiModelClient.
  *
@@ -101,8 +90,6 @@ interface RuntimeToolCall {
  * encapsulated in the pi-ai abstraction layer.
  */
 export class PiAiProvider implements ProviderAdapter {
-  private readonly pendingApprovals = new Map<string, PendingApproval>();
-  private readonly toolCallsByRun = new Map<string, RuntimeToolCall[]>();
   private readonly modelClient: PiAiModelClient;
 
   constructor() {
@@ -110,21 +97,21 @@ export class PiAiProvider implements ProviderAdapter {
   }
 
   async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-    const toolCalls: RuntimeToolCall[] = [];
-    this.toolCallsByRun.set(input.runId, toolCalls);
-
-    // Build ModelClientCallbacks from ProviderRunInput
-    const callbacks = this.buildCallbacks(input, toolCalls);
-
-    // Normalize tool call start/end to match ProviderRunInput callbacks
-    // (onToolRequested -> before approval, onToolStarted -> after approval)
-    const normalizedCallbacks: ModelClientCallbacks = {
+    const callbacks: ModelClientCallbacks = {
       onTextDelta: input.onTextDelta,
       onUpdate: (toolCallId, toolName, delta) => {
         input.onToolUpdate?.(toolCallId, delta);
       },
-      onToolCallStart: (toolCallId, toolName, toolInput) => {
-        toolCalls.push({ toolCallId, toolName, phase: "requested" });
+      onToolCallStart: async (toolCallId, toolName, toolInput) => {
+        const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
+        await input.onToolRequested?.({
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId,
+          toolName,
+          input: toolInput,
+          requiresApproval: requiresReview,
+        });
         input.onToolStarted?.(toolCallId, toolName);
       },
       onToolDecision: input.onToolDecision,
@@ -142,9 +129,6 @@ export class PiAiProvider implements ProviderAdapter {
       },
     };
 
-    // Wire tool approval through callbacks
-    const approvalCallbacks = this.buildApprovalCallbacks(input, toolCalls);
-
     try {
       const result = await this.modelClient.run(
         {
@@ -159,128 +143,24 @@ export class PiAiProvider implements ProviderAdapter {
           toolExecutionMode: input.toolExecutionMode,
           preflightToolCheck: input.preflightToolCheck,
         },
-        { ...normalizedCallbacks, ...approvalCallbacks },
+        callbacks,
       );
-
-      // Trigger onToolRequested for tools that need approval
-      await this.triggerToolRequests(input, toolCalls);
-
       return { assistantText: result.assistantText };
     } finally {
-      this.toolCallsByRun.delete(input.runId);
+      // no-op
     }
   }
 
   cancel(runId: string): void {
-    this.resolvePendingApprovalsForRun(runId, "rejected");
     this.modelClient.cancel(runId);
-    this.toolCallsByRun.delete(runId);
   }
 
   approveTool(toolCallId: string): void {
-    const pending = this.pendingApprovals.get(toolCallId);
-    if (!pending) {
-      return;
-    }
-    this.pendingApprovals.delete(toolCallId);
-    pending.resolve("approved");
+    this.modelClient.approveTool(toolCallId);
   }
 
   rejectTool(toolCallId: string): void {
-    const pending = this.pendingApprovals.get(toolCallId);
-    if (!pending) {
-      return;
-    }
-    this.pendingApprovals.delete(toolCallId);
-    pending.resolve("rejected");
-  }
-
-  private buildCallbacks(
-    input: ProviderRunInput,
-    toolCalls: RuntimeToolCall[],
-  ): ModelClientCallbacks {
-    return {
-      onTextDelta: input.onTextDelta,
-      onUpdate: (toolCallId, toolName, delta) => {
-        input.onToolUpdate?.(toolCallId, delta);
-      },
-      onToolCallStart: (toolCallId, toolName, toolInput) => {
-        toolCalls.push({ toolCallId, toolName, phase: "requested" });
-        input.onToolStarted?.(toolCallId, toolName);
-      },
-      onToolDecision: input.onToolDecision,
-      onToolCallEnd: (toolCallId, toolName, result, isError) => {
-        input.onToolFinished?.(toolCallId, toolName, result, isError);
-      },
-    };
-  }
-
-  private buildApprovalCallbacks(
-    input: ProviderRunInput,
-    toolCalls: RuntimeToolCall[],
-  ): ModelClientCallbacks {
-    return {
-      onToolCallStart: async (toolCallId, toolName, toolInput) => {
-        const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
-
-        if (requiresReview) {
-          // Trigger onToolRequested for approval
-          const resolvedId =
-            (await input.onToolRequested?.({
-              runId: input.runId,
-              sessionId: input.sessionId,
-              toolName,
-              input: toolInput,
-              requiresApproval: requiresReview,
-            })) ?? toolCallId;
-
-          // Wait for approval
-          const decision = await new Promise<"approved" | "rejected">((resolve) => {
-            this.pendingApprovals.set(resolvedId, {
-              runId: input.runId,
-              toolCallId: resolvedId,
-              resolve,
-            });
-          });
-          this.pendingApprovals.delete(resolvedId);
-
-          input.onToolDecision?.(resolvedId, decision);
-          if (decision === "rejected") {
-            throw new Error("Tool execution rejected by user.");
-          }
-        }
-      },
-    };
-  }
-
-  private async triggerToolRequests(
-    input: ProviderRunInput,
-    toolCalls: RuntimeToolCall[],
-  ): Promise<void> {
-    for (const tc of toolCalls) {
-      if (tc.phase === "requested") {
-        const requiresReview = isBuiltInTool(tc.toolName) ? requiresApproval(tc.toolName) : false;
-        if (!requiresReview) {
-          await input.onToolRequested?.({
-            runId: input.runId,
-            sessionId: input.sessionId,
-            toolName: tc.toolName,
-            input: {},
-            requiresApproval: false,
-          });
-        }
-      }
-    }
-  }
-
-  private resolvePendingApprovalsForRun(runId: string, decision: "approved" | "rejected"): void {
-    for (const [toolCallId, pending] of this.pendingApprovals.entries()) {
-      if (pending.runId !== runId) {
-        continue;
-      }
-      this.pendingApprovals.delete(toolCallId);
-      pending.resolve(decision);
-    }
+    this.modelClient.rejectTool(toolCallId);
   }
 }
 

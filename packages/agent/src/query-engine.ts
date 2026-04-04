@@ -1,5 +1,5 @@
 import type { CompactionSummaryDocument, ProviderConfig, Run, Session, Task, ToolCall } from "@omi/core";
-import { createId, nowIso } from "@omi/core";
+import { nowIso } from "@omi/core";
 import type {
   CompactionMode,
   CompactionSummaryGenerator,
@@ -1011,7 +1011,7 @@ export class QueryEngine {
     taskId: string | null,
     event: ProviderToolRequestedEvent,
   ): Promise<string> {
-    const toolCallId = createId("tool");
+    const toolCallId = event.toolCallId;
     this.deps.database.createToolCall({
       id: toolCallId,
       runId,
