@@ -11,7 +11,6 @@ import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { chdir } from "node:process";
 import { nowIso } from "@omi/core";
 
 // ============================================================================
@@ -162,9 +161,6 @@ export class WorktreeStateManager {
 			hookBased: options.hookBased,
 		};
 
-		// 切换到 worktree 目录
-		chdir(worktreePath);
-
 		const durationMs = Date.now() - startTime;
 
 		this.emitEvent({
@@ -243,13 +239,9 @@ export class WorktreeStateManager {
 	}
 
 	/**
-	 * 保留 worktree，切换回原目录
+	 * 保留 worktree（不切换全局 cwd）
 	 */
 	private keepWorktree(): void {
-		if (this.state.originalCwd) {
-			chdir(this.state.originalCwd);
-		}
-
 		this.emitEvent({
 			type: "keep_worktree",
 			sessionId: this.state.sessionId ?? "",

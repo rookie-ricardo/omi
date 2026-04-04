@@ -55,6 +55,7 @@ describe("PlanStateManager", () => {
       previousMode: "manual",
       allowedPrompts: prompts,
     });
+    expect(planMode.getApprovedPrompts()).toEqual(prompts);
     expect(planMode.isInPlanMode()).toBe(false);
     expect(planMode.getState()).toMatchObject({
       isInPlanMode: false,
@@ -77,6 +78,16 @@ describe("PlanStateManager", () => {
       planFilePath: "/tmp/plan.md",
       planWasEdited: true,
     });
+  });
+
+  it("clears approved prompts when entering a new plan round", () => {
+    planMode.enterPlanMode();
+    planMode.setAllowedPrompts([{ tool: "Bash", prompt: "echo approved" }]);
+    planMode.exitPlanMode();
+    expect(planMode.getApprovedPrompts()).toHaveLength(1);
+
+    planMode.enterPlanMode();
+    expect(planMode.getApprovedPrompts()).toEqual([]);
   });
 
   it("enforces read-only tool execution in plan mode", () => {

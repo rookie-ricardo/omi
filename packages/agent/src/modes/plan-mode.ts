@@ -86,6 +86,7 @@ export class PlanStateManager {
 		allowedPrompts: [],
 		planWasEdited: false,
 	};
+	private approvedPrompts: AllowedPrompt[] = [];
 
 	private eventHandlers: PlanModeEventHandler[] = [];
 
@@ -120,6 +121,7 @@ export class PlanStateManager {
 			allowedPrompts: [],
 			planWasEdited: false,
 		};
+		this.approvedPrompts = [];
 
 		const context: PlanPermissionContext = {
 			mode: "plan",
@@ -152,6 +154,7 @@ export class PlanStateManager {
 
 		const previousMode = this.state.previousMode ?? "default";
 		const allowedPrompts = [...this.state.allowedPrompts];
+		this.approvedPrompts = [...allowedPrompts];
 		const planFilePath = this.state.planFilePath;
 		const planWasEdited = this.state.planWasEdited;
 
@@ -174,6 +177,20 @@ export class PlanStateManager {
 		});
 
 		return { previousMode, allowedPrompts };
+	}
+
+	/**
+	 * 获取最近一次退出 plan mode 后批准的 allowed prompts（用于执行阶段权限裁决）
+	 */
+	getApprovedPrompts(): AllowedPrompt[] {
+		return [...this.approvedPrompts];
+	}
+
+	/**
+	 * 清空已批准 prompts（进入新一轮 plan 前调用）
+	 */
+	clearApprovedPrompts(): void {
+		this.approvedPrompts = [];
 	}
 
 	/**

@@ -55,7 +55,7 @@ import {
   DEFAULT_RECOVERY_SETTINGS,
   type RecoveryEngineEvent,
 } from "./recovery";
-import { getPlanStateManager } from "./modes/plan-mode";
+import { getPlanStateManager, type AllowedPrompt } from "./modes/plan-mode";
 
 // ============================================================================
 // Types
@@ -656,15 +656,32 @@ export class QueryEngine {
               reason,
             };
           }
+          const queue = pendingToolInputsByName.get(toolName) ?? [];
+          queue.push(toolInput);
+          pendingToolInputsByName.set(toolName, queue);
+
+          const matchedAllowedPrompt = this.matchApprovedPrompt(toolName, toolInput);
+          if (matchedAllowedPrompt) {
+            this.emitEvent({
+              type: "run.allowed_prompt_matched",
+              payload: {
+                runId: input.run.id,
+                sessionId: input.session.id,
+                toolName,
+                prompt: matchedAllowedPrompt,
+              },
+            });
+            return {
+              decision: "allow",
+              reason: null,
+            };
+          }
           if (preflight.decision === "ask") {
             return {
               decision: "ask",
               reason: preflight.reason ?? `Tool '${toolName}' requires approval before execution.`,
             };
           }
-          const queue = pendingToolInputsByName.get(toolName) ?? [];
-          queue.push(toolInput);
-          pendingToolInputsByName.set(toolName, queue);
           return {
             decision: "allow",
             reason: null,
@@ -702,7 +719,22 @@ export class QueryEngine {
             });
             return `${input.run.id}:${event.toolName}:denied`;
           }
-          const requiresApproval = event.requiresApproval || preflight.decision === "ask";
+          const matchedAllowedPrompt = this.matchApprovedPrompt(event.toolName, event.input);
+          const requiresApproval =
+            matchedAllowedPrompt
+              ? false
+              : (event.requiresApproval || preflight.decision === "ask");
+          if (matchedAllowedPrompt) {
+            this.emitEvent({
+              type: "run.allowed_prompt_matched",
+              payload: {
+                runId: input.run.id,
+                sessionId: input.session.id,
+                toolName: event.toolName,
+                prompt: matchedAllowedPrompt,
+              },
+            });
+          }
 
           await extensionRunner.emit({
             type: "run.tool_requested",
@@ -1168,18 +1200,20 @@ export class QueryEngine {
       return null;
     }
 
-    const fallbackRecoveryBundle = this.deps.compactionSummarizer
-      ? null
-      : this.buildFallbackCompactionRecoveryBundle({
-          mode: input.mode,
-          firstKeptHistoryEntryId: plan?.firstKeptHistoryEntryId ?? null,
-          firstKeptTimestamp: plan?.firstKeptTimestamp ?? null,
-          summaryMessages: summaryInput.summaryMessages,
-          keptMessages: summaryInput.keptMessages,
-        });
-    const summary = this.deps.compactionSummarizer
-      ? await this.deps.compactionSummarizer.summarize(summaryInput)
-      : this.buildFallbackCompactionSummary(input, summaryInput, fallbackRecoveryBundle);
+    let summary: CompactionSummaryDocument;
+    let fallbackRecoveryBundle: FallbackCompactionRecoveryBundle | null = null;
+    if (this.deps.compactionSummarizer) {
+      summary = await this.deps.compactionSummarizer.summarize(summaryInput);
+    } else {
+      fallbackRecoveryBundle = this.buildFallbackCompactionRecoveryBundle({
+        mode: input.mode,
+        firstKeptHistoryEntryId: plan?.firstKeptHistoryEntryId ?? null,
+        firstKeptTimestamp: plan?.firstKeptTimestamp ?? null,
+        summaryMessages: summaryInput.summaryMessages,
+        keptMessages: summaryInput.keptMessages,
+      });
+      summary = this.buildFallbackCompactionSummary(input, summaryInput, fallbackRecoveryBundle);
+    }
 
     const snapshot = sessionCompactionSnapshotSchema.parse({
       version: 1,
@@ -1485,6 +1519,55 @@ export class QueryEngine {
 
   private isPlanMode(): boolean {
     return this.planStateManager.isInPlanMode();
+  }
+
+  private matchApprovedPrompt(
+    toolName: string,
+    input: Record<string, unknown>,
+  ): string | null {
+    if (this.isPlanMode()) {
+      return null;
+    }
+    const approvedPrompts = this.planStateManager.getApprovedPrompts();
+    if (approvedPrompts.length === 0) {
+      return null;
+    }
+    const normalizedToolName = toolName.toLowerCase();
+    const serializedInput = JSON.stringify(input).toLowerCase();
+
+    for (const approvedPrompt of approvedPrompts) {
+      if (!this.allowedPromptMatchesTool(approvedPrompt, normalizedToolName)) {
+        continue;
+      }
+      const promptNeedle = approvedPrompt.prompt.trim().toLowerCase();
+      if (promptNeedle.length === 0) {
+        continue;
+      }
+      if (serializedInput.includes(promptNeedle)) {
+        return approvedPrompt.prompt;
+      }
+    }
+    return null;
+  }
+
+  private allowedPromptMatchesTool(
+    prompt: AllowedPrompt,
+    normalizedToolName: string,
+  ): boolean {
+    const category = prompt.tool.trim().toLowerCase();
+    if (category === normalizedToolName) {
+      return true;
+    }
+    if (category === "bash") {
+      return normalizedToolName === "bash";
+    }
+    if (category === "edit") {
+      return normalizedToolName === "edit" || normalizedToolName === "multi_edit";
+    }
+    if (category === "write") {
+      return normalizedToolName === "write";
+    }
+    return false;
   }
 
   private createMaxOutputContinuationMessage(): RuntimeMessage {

@@ -118,7 +118,7 @@ export function createEnterWorktreeTool(
 								`- Branch: ${result.worktreeBranch}\n` +
 								`- Original branch: ${result.originalBranch}\n` +
 								`${result.creationDurationMs ? `- Creation time: ${result.creationDurationMs}ms\n` : ""}` +
-								`\nYou are now in an isolated worktree. Changes here will not affect the main working directory.`,
+								`\nUse this path as cwd/workdir in subsequent commands for isolated execution.`,
 						},
 					],
 					details: {

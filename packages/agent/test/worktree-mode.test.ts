@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
-import * as processModule from "node:process";
 import { join } from "node:path";
 import {
   WorktreeStateManager,
@@ -21,10 +20,6 @@ vi.mock("node:fs", () => ({
   writeFileSync: vi.fn(),
 }));
 
-vi.mock("node:process", () => ({
-  chdir: vi.fn(),
-}));
-
 describe("WorktreeStateManager", () => {
   const repoRoot = "/repo/omi";
   const worktreeName = "ws12-plan";
@@ -35,7 +30,6 @@ describe("WorktreeStateManager", () => {
   let execSyncMock: ReturnType<typeof vi.mocked<typeof childProcess.execSync>>;
   let existsSyncMock: ReturnType<typeof vi.mocked<typeof fs.existsSync>>;
   let mkdirSyncMock: ReturnType<typeof vi.mocked<typeof fs.mkdirSync>>;
-  let chdirMock: ReturnType<typeof vi.mocked<typeof processModule.chdir>>;
   let cwdSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -43,12 +37,10 @@ describe("WorktreeStateManager", () => {
     execSyncMock = vi.mocked(childProcess.execSync);
     existsSyncMock = vi.mocked(fs.existsSync);
     mkdirSyncMock = vi.mocked(fs.mkdirSync);
-    chdirMock = vi.mocked(processModule.chdir);
     cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
 
     existsSyncMock.mockReturnValue(false);
     mkdirSyncMock.mockImplementation(() => undefined);
-    chdirMock.mockImplementation(() => undefined);
 
     execSyncMock.mockImplementation((command: string) => {
       if (command === "git branch --show-current") {
@@ -114,7 +106,6 @@ describe("WorktreeStateManager", () => {
     expect(mkdirSyncMock).toHaveBeenCalledWith(join(repoRoot, ".claude", "worktrees"), {
       recursive: true,
     });
-    expect(chdirMock).toHaveBeenCalledWith(worktreePath);
     expect(worktreeMode.getState()).toMatchObject({
       isInWorktree: true,
       worktreePath,
@@ -150,7 +141,6 @@ describe("WorktreeStateManager", () => {
 
     await worktreeMode.exitWorktree({ action: "keep" });
 
-    expect(chdirMock).toHaveBeenCalledWith(repoRoot);
     expect(worktreeMode.isInWorktree()).toBe(false);
     expect(worktreeMode.getState()).toEqual({
       isInWorktree: false,

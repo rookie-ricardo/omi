@@ -176,7 +176,7 @@ export function createExitWorktreeTool(sessionId: string): AgentTool {
 						content: [
 							{
 								type: "text" as const,
-								text: `Worktree removed. You are back in the original working directory.\n\nNote: Changes in the removed worktree are lost. Make sure you have merged or committed any important changes.`,
+								text: "Worktree removed.\n\nNote: Changes in the removed worktree are lost. Make sure you have merged or committed any important changes.",
 							},
 						],
 						details: {

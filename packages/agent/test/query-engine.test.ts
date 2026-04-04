@@ -595,6 +595,76 @@ describe("QueryEngine", () => {
       expect(mockRuntime.blockOnTool).toHaveBeenCalledWith(run.id, toolCallId);
     });
 
+    it("uses approved allowedPrompts after plan exit to avoid redundant ask approvals", async () => {
+      const planState = createPlanStateManager();
+      planState.enterPlanMode("default");
+      planState.setAllowedPrompts([{ tool: "Bash", prompt: "echo approved" }]);
+      planState.exitPlanMode();
+
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+      const toolCallId = "tool-call-allowed-prompt";
+
+      const provider = {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+          const requestedId = await input.onToolRequested?.({
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId,
+            toolName: "bash",
+            input: { command: "echo approved" },
+            requiresApproval: true,
+          });
+          input.onToolDecision?.(requestedId ?? toolCallId, "approved");
+          return { assistantText: "done" };
+        },
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "run approved command",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      const toolRequestedEvent = events.find(
+        (event) =>
+          event.type === "run.tool_requested"
+          && (event.payload as { toolCallId?: string }).toolCallId === toolCallId,
+      );
+      const toolRequestedPayload = (toolRequestedEvent as { payload?: { requiresApproval?: boolean } }).payload;
+      expect(toolRequestedPayload?.requiresApproval).toBe(false);
+      expect(mockRuntime.blockOnTool).not.toHaveBeenCalled();
+      expect(
+        events.some(
+          (event) =>
+            event.type === "run.allowed_prompt_matched"
+            && (event as { payload?: { toolName?: string } }).payload?.toolName === "bash",
+        ),
+      ).toBe(true);
+    });
+
     it("gates model calls when context health remains unsafe", async () => {
       const session = createTestSession();
       const run = createTestRun(session.id);
