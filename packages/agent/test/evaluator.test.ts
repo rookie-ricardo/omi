@@ -279,22 +279,32 @@ describe("permissions/evaluator", () => {
     });
 
     describe("preflightCheck", () => {
-      it("应该返回 null 当工具被允许时", () => {
+      it("应该返回 allow 当工具被允许时", () => {
         evaluator = new PermissionEvaluator({
           extraDefaultRules: [createRule({ decision: "allow" })],
         });
 
         const result = evaluator.preflightCheck(createContext());
-        expect(result).toBeNull();
+        expect(result.decision).toBe("allow");
+        expect(result.reason).toBeNull();
       });
 
-      it("应该返回错误消息当工具被拒绝时", () => {
+      it("应该返回 deny 与错误消息当工具被拒绝时", () => {
         evaluator = new PermissionEvaluator({
           extraDefaultRules: [createRule({ decision: "deny", description: "denied by policy" })],
         });
 
         const result = evaluator.preflightCheck(createContext());
-        expect(result).toContain("denied by policy");
+        expect(result.decision).toBe("deny");
+        expect(result.reason).toContain("denied by policy");
+      });
+
+      it("应该返回 ask 并要求审批", () => {
+        evaluator = new PermissionEvaluator({});
+
+        const result = evaluator.preflightCheck(createContext({ toolName: "bash" }));
+        expect(result.decision).toBe("ask");
+        expect(result.reason).toContain("requires approval");
       });
 
       it("plan mode 下写工具应该被阻止", () => {
@@ -305,7 +315,8 @@ describe("permissions/evaluator", () => {
           planMode: true,
         }));
 
-        expect(result).toContain("not allowed in plan mode");
+        expect(result.decision).toBe("deny");
+        expect(result.reason).toContain("not allowed in plan mode");
       });
     });
 

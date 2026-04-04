@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
   matchToolName,
@@ -85,6 +89,40 @@ describe("permissions/rules", () => {
     it("边界情况", () => {
       expect(matchPathPrefix("/home", "/home")).toBe(true);
       expect(matchPathPrefix("/home longer", "/home")).toBe(false);
+    });
+
+    it("应该使用 canonical 路径防止软链越权", () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "omi-perm-symlink-"));
+      const allowedRoot = path.join(tempRoot, "allowed");
+      const outsideRoot = path.join(tempRoot, "outside");
+      fs.mkdirSync(allowedRoot, { recursive: true });
+      fs.mkdirSync(outsideRoot, { recursive: true });
+
+      const symlink = path.join(allowedRoot, "escape");
+      fs.symlinkSync(outsideRoot, symlink, "dir");
+      const outsideFile = path.join(outsideRoot, "secret.txt");
+      fs.writeFileSync(outsideFile, "secret", "utf8");
+      const escapedPath = path.join(symlink, "secret.txt");
+
+      expect(matchPathPrefix(escapedPath, allowedRoot)).toBe(false);
+
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    });
+
+    it("应该使用 canonical 路径防止相对路径越权", () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "omi-perm-relative-"));
+      const allowedRoot = path.join(tempRoot, "workspace");
+      const outsideRoot = path.join(tempRoot, "outside");
+      fs.mkdirSync(allowedRoot, { recursive: true });
+      fs.mkdirSync(outsideRoot, { recursive: true });
+
+      const outsideFile = path.join(outsideRoot, "stolen.txt");
+      fs.writeFileSync(outsideFile, "stolen", "utf8");
+      const traversalPath = path.join(allowedRoot, "..", "outside", "stolen.txt");
+
+      expect(matchPathPrefix(traversalPath, allowedRoot)).toBe(false);
+
+      fs.rmSync(tempRoot, { recursive: true, force: true });
     });
   });
 

@@ -618,13 +618,13 @@ export class QueryEngine {
         ),
         preflightToolCheck: async (toolName, toolInput) => {
           const planMode = this.isPlanMode();
-          const reason = this.evaluator.preflightCheck({
+          const preflight = this.evaluator.preflightCheck({
             toolName,
             input: toolInput,
             planMode,
             sessionId: input.session.id,
           });
-          if (!reason && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
+          if (preflight.decision !== "deny" && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
             const replayReason = `Skipped replayed write tool: ${toolName}`;
             this.emitEvent({
               type: "run.tool_denied",
@@ -637,7 +637,8 @@ export class QueryEngine {
             });
             return replayReason;
           }
-          if (reason) {
+          if (preflight.decision === "deny") {
+            const reason = preflight.reason ?? `Tool '${toolName}' is denied by permission policy.`;
             this.emitEvent({
               type: "run.tool_denied",
               payload: {
@@ -667,24 +668,26 @@ export class QueryEngine {
         onToolRequested: async (event) => {
           // Preflight check: second-layer validation to prevent bypass
           const planMode = this.isPlanMode();
-          const preflightError = this.evaluator.preflightCheck({
+          const preflight = this.evaluator.preflightCheck({
             toolName: event.toolName,
             input: event.input,
             planMode,
             sessionId: input.session.id,
           });
-          if (preflightError) {
+          if (preflight.decision === "deny") {
+            const reason = preflight.reason ?? `Tool '${event.toolName}' is denied by permission policy.`;
             this.emitEvent({
               type: "run.tool_denied",
               payload: {
                 runId: input.run.id,
                 sessionId: input.session.id,
                 toolName: event.toolName,
-                reason: preflightError,
+                reason,
               },
             });
             return `${input.run.id}:${event.toolName}:denied`;
           }
+          const requiresApproval = event.requiresApproval || preflight.decision === "ask";
 
           await extensionRunner.emit({
             type: "run.tool_requested",
@@ -693,14 +696,14 @@ export class QueryEngine {
               sessionId: input.session.id,
               toolName: event.toolName,
               input: event.input,
-              requiresApproval: event.requiresApproval,
+              requiresApproval,
             },
           });
           return this.handleToolRequested(
             input.run.id,
             input.session.id,
             input.task?.id ?? null,
-            event,
+            { ...event, requiresApproval },
           );
         },
         onToolDecision: (toolCallId, decision) => {

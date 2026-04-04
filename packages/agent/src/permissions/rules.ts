@@ -5,6 +5,9 @@
  * for the permission evaluation system.
  */
 
+import fs from "node:fs";
+import path from "node:path";
+
 import { getBuiltInToolDefinitions } from "@omi/tools";
 
 // ============================================================================
@@ -149,16 +152,16 @@ export function matchCommand(command: string, pattern: string): boolean {
  * Check if a path starts with the given prefix.
  */
 export function matchPathPrefix(filePath: string, prefix: string): boolean {
-  const normalizedFilePath = normalizePathPrefix(filePath);
-  const normalizedPrefix = normalizePathPrefix(prefix);
+  const canonicalFilePath = canonicalizePath(filePath);
+  const canonicalPrefix = canonicalizePath(prefix);
 
-  if (normalizedPrefix === "") {
+  if (canonicalPrefix === "") {
     return true;
   }
 
   return (
-    normalizedFilePath === normalizedPrefix ||
-    normalizedFilePath.startsWith(`${normalizedPrefix}/`)
+    canonicalFilePath === canonicalPrefix ||
+    canonicalFilePath.startsWith(`${canonicalPrefix}/`)
   );
 }
 
@@ -221,7 +224,43 @@ function extractPath(input: Record<string, unknown>): string | null {
 }
 
 function normalizePathPrefix(value: string): string {
-  return value.replace(/^\.\//, "").replace(/\/+$/, "");
+  return value.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+function canonicalizePath(value: string): string {
+  const normalized = normalizePathPrefix(value);
+  if (normalized === "") {
+    return "";
+  }
+
+  const absolute = path.resolve(normalized);
+  const fallback = toPortablePath(absolute).replace(/\/+$/, "");
+
+  try {
+    return toPortablePath(fs.realpathSync.native(absolute)).replace(/\/+$/, "");
+  } catch {
+    const trailingSegments: string[] = [];
+    let probe = absolute;
+
+    while (true) {
+      try {
+        const canonicalBase = toPortablePath(fs.realpathSync.native(probe)).replace(/\/+$/, "");
+        const rebuilt = path.join(canonicalBase, ...trailingSegments);
+        return toPortablePath(rebuilt).replace(/\/+$/, "");
+      } catch {
+        const parent = path.dirname(probe);
+        if (parent === probe) {
+          return fallback;
+        }
+        trailingSegments.unshift(path.basename(probe));
+        probe = parent;
+      }
+    }
+  }
+}
+
+function toPortablePath(value: string): string {
+  return value.replace(/\\/g, "/");
 }
 
 function inferMcpServerName(toolName: string): string | null {

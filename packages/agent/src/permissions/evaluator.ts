@@ -43,6 +43,12 @@ export interface PermissionEvaluatorConfig {
   enforcePlanMode?: boolean;
 }
 
+export interface PermissionPreflightResult {
+  decision: PermissionDecision;
+  reason: string | null;
+  matchedRule: PermissionRule | null;
+}
+
 // ============================================================================
 // Evaluator
 // ============================================================================
@@ -144,22 +150,41 @@ export class PermissionEvaluator {
   }
 
   /**
-   * Pre-flight check: verify a tool is allowed right before execution.
-   * This is a second-layer check to prevent bypass attempts.
-   * Returns null if allowed, error message if denied.
+   * Pre-flight check: resolve execution-layer decision right before tool run.
+   * ask/deny must be explicitly surfaced so callers can enforce approval or block execution.
    */
-  preflightCheck(context: PermissionContext): string | null {
+  preflightCheck(context: PermissionContext): PermissionPreflightResult {
     if (context.planMode && WRITE_TOOLS.has(context.toolName)) {
-      return `Tool '${context.toolName}' is not allowed in plan mode (read-only).`;
+      return {
+        decision: "deny",
+        reason: `Tool '${context.toolName}' is not allowed in plan mode (read-only).`,
+        matchedRule: null,
+      };
     }
 
     const result = this.evaluate(context);
 
     if (result.decision === "deny") {
-      return `Tool '${context.toolName}' is denied by rule: ${result.matchedRule?.description ?? "unknown rule"}`;
+      return {
+        decision: "deny",
+        reason: `Tool '${context.toolName}' is denied by rule: ${result.matchedRule?.description ?? "unknown rule"}`,
+        matchedRule: result.matchedRule,
+      };
     }
 
-    return null;
+    if (result.decision === "ask") {
+      return {
+        decision: "ask",
+        reason: `Tool '${context.toolName}' requires approval before execution.`,
+        matchedRule: result.matchedRule,
+      };
+    }
+
+    return {
+      decision: "allow",
+      reason: null,
+      matchedRule: result.matchedRule,
+    };
   }
 
   // ============================================================================

@@ -61,6 +61,7 @@ describe("agent session", () => {
           (await input.onToolRequested?.({
             runId: input.runId,
             sessionId: input.sessionId,
+            toolCallId: "tool-call-1",
             toolName: "read",
             input: { path: "README.md" },
             requiresApproval: false,
@@ -834,6 +835,7 @@ describe("agent session", () => {
           (await input.onToolRequested?.({
             runId: input.runId,
             sessionId: input.sessionId,
+            toolCallId: "tool-call-approve",
             toolName: "bash",
             input: { command: "echo", args: ["approve"] },
             requiresApproval: true,
@@ -907,6 +909,7 @@ describe("agent session", () => {
           (await input.onToolRequested?.({
             runId: input.runId,
             sessionId: input.sessionId,
+            toolCallId: "tool-call-reject",
             toolName: "bash",
             input: { command: "echo", args: ["reject"] },
             requiresApproval: true,
