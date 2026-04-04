@@ -78,6 +78,13 @@ type McpResourceReadInput = { uri: string; maxLength?: number };
 
 const DEFAULT_MAX_CONTENT_LENGTH = 50000;
 
+function isMissingMcpRegistryRuntimeError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("MCP registry runtime is not configured")
+  );
+}
+
 /**
  * Create MCP resource list tool.
  */
@@ -145,6 +152,9 @@ export function createMcpResourceListTool(
           details: { items: filtered.map((item) => item.resource), serverId } as McpResourceToolDetails & { items: typeof filtered[number]["resource"][] },
         };
       } catch (error) {
+        if (isMissingMcpRegistryRuntimeError(error)) {
+          throw error;
+        }
         return {
           content: [{
             type: "text",
@@ -199,6 +209,9 @@ export function createMcpResourceReadTool(
           details: { serverId, uri, contentType: content.text ? "text" : "binary", truncated } as McpResourceToolDetails & { contentType: string; truncated: boolean },
         };
       } catch (error) {
+        if (isMissingMcpRegistryRuntimeError(error)) {
+          throw error;
+        }
         return {
           content: [{
             type: "text",

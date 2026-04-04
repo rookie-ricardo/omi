@@ -367,7 +367,10 @@ const ENTRIES: BuiltInEntry[] = [
         ],
       },
     ),
-    factory: () => renameTool(createMcpResourceListTool({ registry: getMcpRegistryRuntime() ?? createEmptyMcpRegistry() }), "mcp.resource.list"),
+    factory: () => renameTool(
+      createMcpResourceListTool({ registry: getMcpRegistryRuntime() ?? createUnavailableMcpRegistry() }),
+      "mcp.resource.list"
+    ),
   },
   {
     definition: defineTool(
@@ -385,7 +388,10 @@ const ENTRIES: BuiltInEntry[] = [
         ],
       },
     ),
-    factory: () => renameTool(createMcpResourceReadTool({ registry: getMcpRegistryRuntime() ?? createEmptyMcpRegistry() }), "mcp.resource.read"),
+    factory: () => renameTool(
+      createMcpResourceReadTool({ registry: getMcpRegistryRuntime() ?? createUnavailableMcpRegistry() }),
+      "mcp.resource.read"
+    ),
   },
   {
     definition: defineTool(
@@ -653,14 +659,16 @@ const ENTRIES: BuiltInEntry[] = [
   },
 ];
 
-function createEmptyMcpRegistry() {
+function createUnavailableMcpRegistry() {
+  const missingError = () => {
+    throw new Error("MCP registry runtime is not configured");
+  };
+
   return {
-    getResources: () => [],
-    getAllResources: () => [],
-    getServer: () => undefined,
-    readResourceByUri: async (_uri: string) => {
-      throw new Error("No MCP registry is available");
-    },
+    getResources: missingError,
+    getAllResources: missingError,
+    getServer: missingError,
+    readResourceByUri: async (_uri: string) => missingError(),
   } as never;
 }
 

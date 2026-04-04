@@ -219,10 +219,7 @@ export function createSubagentSpawnTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: {},
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {
@@ -260,10 +257,7 @@ export function createSubagentSendTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: {},
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {
@@ -310,10 +304,7 @@ export function createSubagentWaitTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: {},
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {
@@ -363,10 +354,7 @@ export function createSubagentCloseTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: {},
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {
@@ -406,10 +394,7 @@ export function createSubagentListTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: { subAgents: [] },
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {
@@ -472,10 +457,7 @@ export function createSubagentGetTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: {},
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {
@@ -538,10 +520,7 @@ export function createSubagentDelegateTool(
       const typedParams: any = params ?? {};
       const client = getClient();
       if (!client) {
-        return {
-          content: [makeTextContent("SubAgent system is not available in this context")],
-          details: {},
-        };
+        throw new Error("SubAgent runtime is not configured");
       }
 
       try {

@@ -158,18 +158,21 @@ class InMemoryTaskToolRuntime implements TaskToolRuntime {
   }
 }
 
-let globalTaskRuntime: TaskToolRuntime = new InMemoryTaskToolRuntime();
+let globalTaskRuntime: TaskToolRuntime | null = null;
 
 export function getTaskToolRuntime(): TaskToolRuntime {
+  if (!globalTaskRuntime) {
+    throw new Error("Task runtime is not configured");
+  }
   return globalTaskRuntime;
 }
 
-export function setTaskToolRuntime(runtime: TaskToolRuntime): void {
+export function setTaskToolRuntime(runtime: TaskToolRuntime | null): void {
   globalTaskRuntime = runtime;
 }
 
 export function resetTaskToolRuntime(): void {
-  globalTaskRuntime = new InMemoryTaskToolRuntime();
+  globalTaskRuntime = null;
 }
 
 export function createInMemoryTaskToolRuntime(): TaskToolRuntime {
