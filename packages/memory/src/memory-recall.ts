@@ -11,6 +11,7 @@
 import { existsSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 
 import {
   MEMORY_INDEX_FILENAME,
@@ -38,46 +39,27 @@ import {
 export function parseFrontmatter(
   content: string,
 ): { frontmatter: Record<string, unknown>; body: string } {
-  const lines = content.split("\n");
-  if (lines[0]?.trim() !== "---") {
+  const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
+  if (!frontmatterMatch) {
     return { frontmatter: {}, body: content };
   }
 
-  let endIndex = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i]?.trim() === "---") {
-      endIndex = i;
-      break;
+  const frontmatterText = frontmatterMatch[1] ?? "";
+  const body = content.slice(frontmatterMatch[0].length);
+
+  try {
+    const parsed = parseYaml(frontmatterText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return {
+        frontmatter: parsed as Record<string, unknown>,
+        body,
+      };
     }
+  } catch {
+    // Ignore invalid YAML and treat as no frontmatter.
   }
 
-  if (endIndex === -1) {
-    return { frontmatter: {}, body: content };
-  }
-
-  const frontmatterLines = lines.slice(1, endIndex);
-  const body = lines.slice(endIndex + 1).join("\n");
-
-  const frontmatter: Record<string, unknown> = {};
-  for (const line of frontmatterLines) {
-    const colonIndex = line.indexOf(":");
-    if (colonIndex === -1) continue;
-    const key = line.slice(0, colonIndex).trim();
-    const value = line.slice(colonIndex + 1).trim();
-    if (value.startsWith("[") && value.endsWith("]")) {
-      const items = value
-        .slice(1, -1)
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map((item) => item.replace(/^["']|["']$/g, ""));
-      frontmatter[key] = items;
-      continue;
-    }
-    frontmatter[key] = value;
-  }
-
-  return { frontmatter, body };
+  return { frontmatter: {}, body: content };
 }
 
 function normalizePath(value: string): string {
@@ -168,7 +150,8 @@ export function parseMemoryIndex(
     const match = line.match(MEMORY_INDEX_ENTRY_REGEX);
     if (!match) continue;
 
-    const [, title, filePath, hook] = match;
+    const [, title, filePath, hookRaw] = match;
+    const hook = hookRaw?.trim() ?? "";
     const fullPath = normalizePath(join(memoryDir, filePath));
 
     if (!existsSync(fullPath)) {

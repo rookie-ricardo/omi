@@ -327,7 +327,7 @@ export class MemoryInjector {
    * Build prompt with recalled memories included in budget.
    */
   async buildPromptWithRecall(
-    recalledMemories: MemoryFile[],
+    query: string,
     selectMemories: (params: {
       query: string;
       manifest: string;
@@ -337,23 +337,53 @@ export class MemoryInjector {
     options?: {
       signal?: AbortSignal;
       recentTools?: readonly string[];
+      alreadySurfaced?: ReadonlySet<string>;
+      skipMemory?: boolean;
     },
   ): Promise<MemoryPromptResult> {
+    if (options?.skipMemory || shouldIgnoreMemoryForQuery(query)) {
+      this.log.log({ type: "skipped", reason: "memory ignored for current turn" });
+      return {
+        prompt: "",
+        sections: { behavior: "", index: "", recalled: "" },
+        tokens: { behavior: 0, index: 0, recalled: 0, total: 0 },
+        injectedMemories: [],
+      };
+    }
+
+    const recallQuery = query.trim();
+    if (recallQuery.length === 0) {
+      return this.buildPrompt([]);
+    }
+
     // Import recall system
     const { recallRelevantMemories } = await import("./memory-recall");
 
     const result = await recallRelevantMemories(
       {
         memoryDir: this.memoryDir,
-        query: "", // Empty query means load all
+        query: recallQuery,
         signal: options?.signal,
         recentTools: options?.recentTools,
+        alreadySurfaced: options?.alreadySurfaced,
       },
       selectMemories,
     );
 
     return this.buildPrompt(result.memories);
   }
+}
+
+function shouldIgnoreMemoryForQuery(query: string): boolean {
+  const normalized = query.trim();
+  if (normalized.length === 0) {
+    return false;
+  }
+
+  return (
+    /\b(ignore|skip|without|don't use|do not use)\b.*\bmemory\b/i.test(normalized) ||
+    /忽略记忆|不要使用记忆|不使用记忆/.test(normalized)
+  );
 }
 
 // ============================================================================

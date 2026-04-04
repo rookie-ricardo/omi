@@ -34,6 +34,31 @@ async function writeIndex(dir: string, content: string): Promise<void> {
   await writeFile(filePath, content);
 }
 
+async function writeMemoryFile(
+  dir: string,
+  relativePath: string,
+  title: string,
+  description: string,
+  body: string,
+): Promise<void> {
+  const filePath = join(dir, relativePath);
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(
+    filePath,
+    [
+      "---",
+      `title: ${title}`,
+      `description: ${description}`,
+      "type: user",
+      "tags: [key]",
+      "updatedAt: 2026-04-03T00:00:00.000Z",
+      "---",
+      "",
+      body,
+    ].join("\n"),
+  );
+}
+
 function makeMemoryFile(path: string, title: string, body: string): MemoryFile {
   return {
     path,
@@ -134,5 +159,60 @@ describe("memory-inject", () => {
     expect(section).toContain("## What NOT to save in memory");
     expect(section).toContain("## When to access memories");
     expect(section).toContain("## Before recommending from memory");
+  });
+
+  it("uses the user query for recall instead of empty-query full recall", async () => {
+    const dir = await createTempMemoryDir();
+    await writeMemoryFile(
+      dir,
+      "preference.md",
+      "Pinned preference",
+      "Keep answers concise",
+      "Always answer in a short form.",
+    );
+
+    const injector = new MemoryInjector({
+      memoryDir: dir,
+      settings: DEFAULT_INJECTION_SETTINGS,
+      log: new MemoryInjectionLog(),
+      estimateTokens: (text) => text.length,
+    });
+
+    let capturedQuery = "";
+    const result = await injector.buildPromptWithRecall(
+      "remember my answer style",
+      async ({ query }) => {
+        capturedQuery = query;
+        return ["preference.md"];
+      },
+    );
+
+    expect(capturedQuery).toBe("remember my answer style");
+    expect(result.prompt).toContain("Pinned preference");
+  });
+
+  it("skips memory injection for one turn when query says to ignore memory", async () => {
+    const dir = await createTempMemoryDir();
+    const log = new MemoryInjectionLog();
+    const injector = new MemoryInjector({
+      memoryDir: dir,
+      settings: DEFAULT_INJECTION_SETTINGS,
+      log,
+      estimateTokens: (text) => text.length,
+    });
+
+    const selectMemories = vi.fn(async () => ["preference.md"]);
+    const result = await injector.buildPromptWithRecall(
+      "for this answer, ignore memory",
+      selectMemories,
+    );
+
+    expect(result.prompt).toBe("");
+    expect(result.injectedMemories).toEqual([]);
+    expect(selectMemories).not.toHaveBeenCalled();
+    expect(log.getEvents().at(-1)).toMatchObject({
+      type: "skipped",
+      reason: "memory ignored for current turn",
+    });
   });
 });

@@ -259,6 +259,9 @@ importers:
       '@omi/provider':
         specifier: workspace:*
         version: link:../provider
+      yaml:
+        specifier: ^2.8.2
+        version: 2.8.2
       zod:
         specifier: ^3.24.2
         version: 3.25.76

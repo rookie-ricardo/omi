@@ -66,7 +66,8 @@ export interface MemoryFile {
 // MEMORY.md Index Entry
 // ============================================================================
 
-export const MEMORY_INDEX_ENTRY_REGEX = /^- \[([^\]]+)\]\(([^)]+)\) — (.+)$/;
+export const MEMORY_INDEX_ENTRY_REGEX =
+  /^\s*[-*+]\s*\[([^\]]+)\]\(([^)]+)\)\s*(?:[—–-]|::?)\s*(.+?)\s*$/;
 
 export interface MemoryIndexEntry {
   title: string;

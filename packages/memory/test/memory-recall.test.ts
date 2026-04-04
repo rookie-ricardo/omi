@@ -6,6 +6,7 @@ import {
   checkIndexValidity,
   formatMemoryManifest,
   type MemoryHeader,
+  parseFrontmatter,
   parseMemoryIndex,
   recallRelevantMemories,
   scanMemoryFiles,
@@ -107,6 +108,34 @@ describe("memory-recall", () => {
     });
   });
 
+  it("parses full YAML frontmatter semantics (multiline and list syntax)", () => {
+    const content = [
+      "---",
+      "title: \"User preference: concise\"",
+      "description: |",
+      "  Keep responses short.",
+      "  Prefer bullet points when possible.",
+      "type: user",
+      "tags:",
+      "  - key",
+      "  - preference",
+      "updatedAt: 2026-04-03T00:00:00.000Z",
+      "metadata:",
+      "  source: conversation",
+      "---",
+      "",
+      "Body content.",
+    ].join("\n");
+
+    const result = parseFrontmatter(content);
+
+    expect(result.body.trim()).toBe("Body content.");
+    expect(result.frontmatter.title).toBe("User preference: concise");
+    expect(result.frontmatter.description).toContain("Prefer bullet points");
+    expect(result.frontmatter.tags).toEqual(["key", "preference"]);
+    expect(result.frontmatter.metadata).toEqual({ source: "conversation" });
+  });
+
   it("deduplicates index entries and drops missing links", async () => {
     const dir = await createTempMemoryDir();
     await writeMemoryFile(
@@ -160,6 +189,43 @@ describe("memory-recall", () => {
 
     expect(invalidPaths).toHaveLength(1);
     expect(invalidPaths[0]).toContain("/missing.md");
+  });
+
+  it("accepts MEMORY.md entry format variants while preserving dedupe", async () => {
+    const dir = await createTempMemoryDir();
+    await writeMemoryFile(
+      dir,
+      "alpha.md",
+      {
+        title: "Alpha",
+        description: "First",
+        type: "user",
+        tags: [],
+        updatedAt: "2026-04-03T00:00:00.000Z",
+      },
+    );
+    await writeMemoryFile(
+      dir,
+      "beta.md",
+      {
+        title: "Beta",
+        description: "Second",
+        type: "project",
+        tags: [],
+        updatedAt: "2026-04-02T00:00:00.000Z",
+      },
+    );
+
+    const content = [
+      "* [Alpha](alpha.md) - first hook",
+      "  + [Beta](beta.md) — second hook",
+      "- [Alpha duplicate](./alpha.md) – duplicate",
+    ].join("\n");
+
+    const result = parseMemoryIndex(content, dir);
+
+    expect(result.index.entries.map((entry) => entry.title)).toEqual(["Alpha", "Beta"]);
+    expect(result.duplicates).toHaveLength(1);
   });
 
   it("puts protected memories ahead of regular memories in the manifest", () => {
