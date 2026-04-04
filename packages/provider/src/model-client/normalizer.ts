@@ -232,7 +232,121 @@ function extractAssistantText(event: Extract<AgentEvent, { type: "message_end" }
 /**
  * Classify a pi-ai error message into a unified error class.
  */
-export function classifyPiAiError(message: string): ModelErrorClass {
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+export function classifyPiAiError(error: unknown): ModelErrorClass {
+  if (error === null || error === undefined) {
+    return "unknown";
+  }
+
+  if (typeof error === "string") {
+    return classifyPiAiErrorByMessage(error);
+  }
+
+  const record = toRecord(error);
+  if (!record) {
+    return classifyPiAiErrorByMessage(String(error));
+  }
+
+  const response = toRecord(record.response);
+  const nestedError = toRecord(record.error);
+  const statusCode = firstNumber(
+    record.statusCode,
+    record.status,
+    response?.statusCode,
+    response?.status,
+    nestedError?.statusCode,
+    nestedError?.status,
+  );
+  if (statusCode === 401 || statusCode === 403) {
+    return "auth";
+  }
+  if (statusCode === 429) {
+    return "rate_limit";
+  }
+  if (statusCode >= 500 && statusCode <= 599) {
+    return "network";
+  }
+
+  const errorCode = firstString(
+    record.code,
+    record.errorCode,
+    record.type,
+    nestedError?.code,
+    nestedError?.type,
+    response?.code,
+  )?.toLowerCase();
+
+  if (errorCode) {
+    if (
+      errorCode.includes("rate_limit")
+      || errorCode.includes("ratelimit")
+      || errorCode.includes("too_many_requests")
+    ) {
+      return "rate_limit";
+    }
+    if (
+      errorCode.includes("invalid_api_key")
+      || errorCode.includes("authentication")
+      || errorCode.includes("permission_denied")
+      || errorCode.includes("forbidden")
+      || errorCode.includes("unauthorized")
+    ) {
+      return "auth";
+    }
+    if (
+      errorCode.includes("econn")
+      || errorCode.includes("network")
+      || errorCode.includes("connection")
+      || errorCode.includes("timeout")
+      || errorCode.includes("timedout")
+      || errorCode.includes("overloaded")
+    ) {
+      return "network";
+    }
+    if (
+      errorCode.includes("max_output")
+      || errorCode.includes("max_tokens")
+      || errorCode.includes("output_limit")
+    ) {
+      return "max_output";
+    }
+  }
+
+  const message = firstString(record.message, nestedError?.message) ?? String(error);
+  return classifyPiAiErrorByMessage(message);
+}
+
+function classifyPiAiErrorByMessage(message: string): ModelErrorClass {
   const lower = message.toLowerCase();
 
   // Auth errors

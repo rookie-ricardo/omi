@@ -3,6 +3,7 @@ import type { ProviderConfig, Run, Session, Task } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
 import type { AppStore } from "@omi/store";
 import type { ProviderRunInput, ProviderRunResult } from "@omi/provider";
+import type { SessionRuntimeMessageEnvelope } from "@omi/memory";
 
 import {
   QueryEngine,
@@ -14,6 +15,7 @@ import {
   nextTaskStatus,
   normalizeHistoryDetails,
 } from "../src/query-engine";
+import { buildToolCallReplayKey } from "../src/recovery";
 import { createPlanStateManager } from "../src/modes/plan-mode";
 import type { SessionRuntime } from "../src/session-manager";
 import type { ResourceLoader } from "../src/resource-loader";
@@ -92,6 +94,7 @@ function createTestDatabase(session: Session, run: Run): AppStore {
   const messages: any[] = [];
   const events: any[] = [];
   const toolCalls = new Map();
+  const checkpointsByRun = new Map<string, any[]>();
 
   return {
     listSessions: () => [...sessions.values()],
@@ -169,9 +172,21 @@ function createTestDatabase(session: Session, run: Run): AppStore {
     getBranch: () => null,
     listBranches: () => [],
     updateBranch: (id, partial) => ({ id, sessionId: "", headEntryId: null, title: "main", createdAt: nowIso(), updatedAt: nowIso(), ...partial }),
-    createCheckpoint: (input) => ({ ...input, createdAt: nowIso() }),
-    listCheckpoints: () => [],
-    getLatestCheckpoint: () => null,
+    createCheckpoint(input) {
+      const checkpoint = { ...input, createdAt: nowIso() };
+      const checkpoints = checkpointsByRun.get(input.runId) ?? [];
+      checkpoints.push(checkpoint);
+      checkpointsByRun.set(input.runId, checkpoints);
+      return checkpoint;
+    },
+    listCheckpoints(runId) {
+      const checkpoints = checkpointsByRun.get(runId) ?? [];
+      return [...checkpoints];
+    },
+    getLatestCheckpoint(runId) {
+      const checkpoints = checkpointsByRun.get(runId) ?? [];
+      return checkpoints.at(-1) ?? null;
+    },
     getHistoryEntry: () => null,
     getBranchHistory: () => [],
     getActiveBranchId: () => null,
@@ -621,6 +636,280 @@ describe("QueryEngine", () => {
             contentToText(message.content).includes("Continue from your last response"),
         ),
       ).toBe(true);
+    });
+
+    it("restores mutable state from source run checkpoint before executing resumed run", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const sourceRunId = createId("run");
+      const database = createTestDatabase(session, {
+        ...run,
+        sourceRunId,
+        recoveryMode: "resume",
+      });
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+
+      const checkpoint = database.createCheckpoint({
+        id: createId("checkpoint"),
+        runId: sourceRunId,
+        sessionId: session.id,
+        phase: "after_tool_batch",
+        payload: {
+          turnCount: 4,
+          recoveryCount: 2,
+          compactTracking: {
+            maxOutputRecoveryCount: 1,
+            overflowRecovered: true,
+          },
+          executedWriteToolCallIds: [],
+          partialAssistantText: "partial",
+          context: {},
+        },
+      });
+      database.updateRun(run.id, {
+        resumeFromCheckpoint: checkpoint.id,
+      });
+
+      const provider = {
+        async run(): Promise<ProviderRunResult> {
+          return { assistantText: "restored" };
+        },
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      const result = await engine.execute({
+        session,
+        task: null,
+        run: {
+          ...run,
+          sourceRunId,
+          recoveryMode: "resume",
+          resumeFromCheckpoint: checkpoint.id,
+        },
+        prompt: "resume now",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(result.terminalReason).toBe("completed");
+      expect(result.turnCount).toBe(5);
+      expect(events.some((event) => event.type === "recovery.checkpoint_saved")).toBe(true);
+    });
+
+    it("uses shouldSkipTool replay protection in preflight checks", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const sourceRunId = createId("run");
+      const database = createTestDatabase(session, {
+        ...run,
+        sourceRunId,
+        recoveryMode: "resume",
+      });
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+      const blockedInput = { command: "echo hi", cwd: "/tmp" };
+      const replayKey = buildToolCallReplayKey({
+        toolCallId: "",
+        toolName: "bash",
+        toolInput: blockedInput,
+      });
+      const checkpoint = database.createCheckpoint({
+        id: createId("checkpoint"),
+        runId: sourceRunId,
+        sessionId: session.id,
+        phase: "after_tool_batch",
+        payload: {
+          turnCount: 0,
+          recoveryCount: 0,
+          compactTracking: {
+            maxOutputRecoveryCount: 0,
+            overflowRecovered: false,
+          },
+          executedWriteToolCallIds: [replayKey],
+          partialAssistantText: "",
+          context: {},
+        },
+      });
+      database.updateRun(run.id, {
+        resumeFromCheckpoint: checkpoint.id,
+      });
+
+      const preflightReasons: Array<string | null> = [];
+      const provider = {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+          preflightReasons.push(await input.preflightToolCheck?.("bash", blockedInput) ?? null);
+          return { assistantText: "done" };
+        },
+        cancel() {},
+        approveTool() {},
+        rejectTool() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      await engine.execute({
+        session,
+        task: null,
+        run: {
+          ...run,
+          sourceRunId,
+          recoveryMode: "resume",
+          resumeFromCheckpoint: checkpoint.id,
+        },
+        prompt: "resume and replay",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(preflightReasons).toHaveLength(1);
+      expect(preflightReasons[0]).toContain("Skipped replayed write tool: bash");
+      expect(
+        events.some(
+          (event) =>
+            event.type === "run.tool_denied"
+            && (event as { payload?: { reason?: string } }).payload?.reason?.includes("Skipped replayed write tool") === true,
+        ),
+      ).toBe(true);
+    });
+
+    it("writes recoverable structured fallback compaction details without breaking lineage", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const baseDatabase = createTestDatabase(session, run);
+      const parentEntryId = createId("history");
+      const branchId = createId("branch");
+      const historyEntries: Array<Record<string, unknown>> = [
+        {
+          id: parentEntryId,
+          sessionId: session.id,
+          parentId: null,
+          kind: "branch_summary",
+          messageId: null,
+          summary: "existing branch summary",
+          details: null,
+          branchId,
+          lineageDepth: 3,
+          originRunId: null,
+          createdAt: nowIso(),
+        },
+      ];
+
+      const database: AppStore = {
+        ...baseDatabase,
+        listBranches: () => [{
+          id: branchId,
+          sessionId: session.id,
+          headEntryId: parentEntryId,
+          title: "main",
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        }],
+        getActiveBranchId: () => branchId,
+        listSessionHistoryEntries: () => historyEntries as never[],
+        addSessionHistoryEntry: (input) => {
+          const created = {
+            id: createId("history"),
+            ...input,
+            createdAt: nowIso(),
+          };
+          historyEntries.push(created);
+          return created as never;
+        },
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: () => {},
+        resources: makeStaticResources(),
+        runtime: createMockRuntime(session.id),
+      };
+      const engine = new QueryEngine(deps);
+
+      const historyEnvelopes: SessionRuntimeMessageEnvelope[] = [
+        {
+          timestamp: Date.now() - 1_000,
+          order: 1,
+          sourceHistoryEntryId: createId("history"),
+          message: {
+            role: "user",
+            content: "Need compaction fallback with recoverable summary data",
+            timestamp: Date.now() - 1_000,
+          },
+        },
+      ];
+
+      const snapshot = await (
+        engine as unknown as {
+          compactHistoricalContext: (input: {
+            session: Session;
+            providerConfig: ProviderConfig;
+            mode: "threshold" | "manual" | "overflow";
+            prompt: string | null;
+            runId: string | null;
+            historyEnvelopes: SessionRuntimeMessageEnvelope[];
+          }) => Promise<{ summary: { goal: string; criticalContext: string[] } }>;
+        }
+      ).compactHistoricalContext({
+        session,
+        providerConfig: createTestProviderConfig(),
+        mode: "overflow",
+        prompt: "compact this",
+        runId: run.id,
+        historyEnvelopes,
+      });
+
+      expect(snapshot.summary.goal).toContain("Compaction fallback snapshot");
+      expect(
+        snapshot.summary.criticalContext.some(
+          (entry) => entry.startsWith("summarized:user:") || entry.startsWith("kept:user:"),
+        ),
+      ).toBe(true);
+
+      const latestEntry = historyEntries.at(-1) as Record<string, unknown>;
+      expect(latestEntry.kind).toBe("branch_summary");
+      expect(latestEntry.parentId).toBe(parentEntryId);
+      expect(latestEntry.lineageDepth).toBe(4);
+
+      const details = latestEntry.details as Record<string, unknown>;
+      expect(typeof details.summaryDocument).toBe("object");
+      const fallbackRecovery = details.fallbackRecovery as Record<string, unknown>;
+      expect(fallbackRecovery.version).toBe(1);
+      expect(fallbackRecovery.mode).toBe("overflow");
+      expect(Array.isArray(fallbackRecovery.summarizedMessages)).toBe(true);
+      const fallbackTokens = [
+        ...((fallbackRecovery.summarizedMessages as string[] | undefined) ?? []),
+        ...((fallbackRecovery.keptMessages as string[] | undefined) ?? []),
+      ];
+      expect(fallbackTokens.some((token) => token.includes("user:"))).toBe(true);
     });
   });
 

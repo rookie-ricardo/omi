@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyError,
+  buildToolCallReplayKey,
   CheckpointManager,
   decideRecoveryAction,
   isWriteTool,
@@ -74,6 +75,16 @@ describe("classifyError", () => {
 
   it("classifies overloaded as network", () => {
     expect(classifyError(new Error("server overloaded"))).toBe("network");
+  });
+
+  it("classifies by structured statusCode before message matching", () => {
+    expect(classifyError({ statusCode: 429, message: "something else" })).toBe("rate_limit");
+    expect(classifyError({ status: 503, message: "unknown" })).toBe("network");
+  });
+
+  it("classifies by structured error code before message matching", () => {
+    expect(classifyError({ code: "invalid_api_key", message: "oops" })).toBe("auth");
+    expect(classifyError({ code: "ECONNRESET", message: "oops" })).toBe("network");
   });
 
   it("classifies tool errors", () => {
@@ -356,6 +367,17 @@ describe("shouldSkipToolCall", () => {
     const tc: ToolCallMeta = { toolCallId: "tc-read-1", toolName: "glob", isWrite: false };
     expect(shouldSkipToolCall(tc, executedIds)).toBe(false);
   });
+
+  it("skips writes using deterministic fallback key when toolCallId is empty", () => {
+    const tc: ToolCallMeta = {
+      toolCallId: "",
+      toolName: "bash",
+      isWrite: true,
+      toolInput: { command: "echo hi", cwd: "/tmp" },
+    };
+    const executedFallbackIds = new Set([buildToolCallReplayKey(tc)]);
+    expect(shouldSkipToolCall(tc, executedFallbackIds)).toBe(true);
+  });
 });
 
 describe("filterAlreadyExecutedWrites", () => {
@@ -389,6 +411,30 @@ describe("filterAlreadyExecutedWrites", () => {
     const result = filterAlreadyExecutedWrites([], executedIds);
     expect(result.filtered).toHaveLength(0);
     expect(result.skippedCount).toBe(0);
+  });
+});
+
+describe("buildToolCallReplayKey", () => {
+  it("returns explicit toolCallId when present", () => {
+    expect(buildToolCallReplayKey({
+      toolCallId: "tc-123",
+      toolName: "bash",
+      toolInput: { command: "pwd" },
+    })).toBe("tc-123");
+  });
+
+  it("builds a deterministic fallback key when toolCallId is empty", () => {
+    const left = buildToolCallReplayKey({
+      toolCallId: "",
+      toolName: "bash",
+      toolInput: { command: "pwd", env: { B: "2", A: "1" } },
+    });
+    const right = buildToolCallReplayKey({
+      toolCallId: "",
+      toolName: "bash",
+      toolInput: { env: { A: "1", B: "2" }, command: "pwd" },
+    });
+    expect(left).toBe(right);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ProviderConfig, Run, Session, Task, ToolCall } from "@omi/core";
+import type { CompactionSummaryDocument, ProviderConfig, Run, Session, Task, ToolCall } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
 import type {
   CompactionMode,
@@ -138,6 +138,16 @@ interface PreparedRunContext {
   resolvedSkill: ResolvedSkill | null;
 }
 
+interface FallbackCompactionRecoveryBundle {
+  version: 1;
+  mode: CompactionMode;
+  generatedAt: string;
+  firstKeptHistoryEntryId: string | null;
+  firstKeptTimestamp: string | null;
+  summarizedMessages: string[];
+  keptMessages: string[];
+}
+
 // ============================================================================
 // Retry Settings (delegated to RecoveryEngine)
 // ============================================================================
@@ -231,7 +241,18 @@ export class QueryEngine {
       runId: input.run.id,
       sessionId: input.session.id,
       emit: (event) => this.emitEvent(event),
+      sourceRunId: input.run.sourceRunId ?? null,
+      resumeFromCheckpointId: input.run.resumeFromCheckpoint ?? null,
     });
+    const restoredCheckpoint = this.recoveryEngine.restoreFromCheckpoint();
+    if (restoredCheckpoint) {
+      this.state.turnCount = restoredCheckpoint.turnCount;
+      this.state.recoveryCount = restoredCheckpoint.recoveryCount;
+      this.state.compactTracking = {
+        ...this.state.compactTracking,
+        ...restoredCheckpoint.compactTracking,
+      };
+    }
 
     try {
       // init -> preprocess_context
@@ -573,6 +594,7 @@ export class QueryEngine {
     providerConfig: ProviderConfig;
   }): Promise<ProviderExecutionOutcome> {
     const { input, extensionRunner, systemPrompt, effectivePrompt, historyMessages, resolvedSkill, providerConfig } = params;
+    const pendingToolInputsByName = new Map<string, Array<Record<string, unknown>>>();
 
     try {
       const result = await this.provider.run({
@@ -597,6 +619,19 @@ export class QueryEngine {
             planMode,
             sessionId: input.session.id,
           });
+          if (!reason && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
+            const replayReason = `Skipped replayed write tool: ${toolName}`;
+            this.emitEvent({
+              type: "run.tool_denied",
+              payload: {
+                runId: input.run.id,
+                sessionId: input.session.id,
+                toolName,
+                reason: replayReason,
+              },
+            });
+            return replayReason;
+          }
           if (reason) {
             this.emitEvent({
               type: "run.tool_denied",
@@ -607,8 +642,12 @@ export class QueryEngine {
                 reason,
               },
             });
+            return reason;
           }
-          return reason;
+          const queue = pendingToolInputsByName.get(toolName) ?? [];
+          queue.push(toolInput);
+          pendingToolInputsByName.set(toolName, queue);
+          return null;
         },
         onTextDelta: (delta) => {
           this.emitEvent({
@@ -678,8 +717,15 @@ export class QueryEngine {
           });
         },
         onToolFinished: (toolCallId, toolName, output, isError) => {
+          const toolInputQueue = pendingToolInputsByName.get(toolName) ?? [];
+          const toolInput = toolInputQueue.shift();
+          if (toolInputQueue.length === 0) {
+            pendingToolInputsByName.delete(toolName);
+          } else {
+            pendingToolInputsByName.set(toolName, toolInputQueue);
+          }
           // Record write tool execution for replay protection
-          this.recoveryEngine?.recordWriteTool(toolCallId, toolName);
+          this.recoveryEngine?.recordWriteTool(toolCallId, toolName, toolInput);
 
           this.deps.database.updateToolCall(toolCallId, {
             output,
@@ -1099,24 +1145,18 @@ export class QueryEngine {
       return null;
     }
 
+    const fallbackRecoveryBundle = this.deps.compactionSummarizer
+      ? null
+      : this.buildFallbackCompactionRecoveryBundle({
+          mode: input.mode,
+          firstKeptHistoryEntryId: plan?.firstKeptHistoryEntryId ?? null,
+          firstKeptTimestamp: plan?.firstKeptTimestamp ?? null,
+          summaryMessages: summaryInput.summaryMessages,
+          keptMessages: summaryInput.keptMessages,
+        });
     const summary = this.deps.compactionSummarizer
       ? await this.deps.compactionSummarizer.summarize(summaryInput)
-      : {
-          version: 1 as const,
-          goal: `Compacted ${input.mode} context for ${input.session.id}`,
-          constraints: [`prompt:${input.prompt ?? "n/a"}`],
-          progress: {
-            done: [`summarized:${summaryInput.summaryMessages.length}`],
-            inProgress: [`kept:${summaryInput.keptMessages.length}`],
-            blocked: [],
-          },
-          keyDecisions: [`tokensBefore:${summaryInput.tokensBefore}`],
-          nextSteps: [`resume:${input.mode}`],
-          criticalContext: [
-            `provider:${input.providerConfig.type}`,
-            `tokensKept:${summaryInput.tokensKept}`,
-          ],
-        };
+      : this.buildFallbackCompactionSummary(input, summaryInput, fallbackRecoveryBundle);
 
     const snapshot = sessionCompactionSnapshotSchema.parse({
       version: 1,
@@ -1147,6 +1187,8 @@ export class QueryEngine {
         tokensBefore: plan?.tokensBefore ?? summaryInput.tokensBefore,
         tokensKept: plan?.tokensKept ?? summaryInput.tokensKept,
         keepRecentTokens: plan?.keepRecentTokens ?? summaryInput.keepRecentTokens,
+        summaryDocument: snapshot.summary,
+        fallbackRecovery: fallbackRecoveryBundle,
       };
 
       this.deps.database.addSessionHistoryEntry!({
@@ -1163,6 +1205,122 @@ export class QueryEngine {
     }
 
     return snapshot;
+  }
+
+  private buildFallbackCompactionSummary(
+    input: {
+      session: Session;
+      providerConfig: ProviderConfig;
+      mode: CompactionMode;
+      prompt: string | null;
+    },
+    summaryInput: {
+      tokensBefore: number;
+      tokensKept: number;
+      keepRecentTokens: number;
+      summaryMessages: RuntimeMessage[];
+      keptMessages: RuntimeMessage[];
+    },
+    fallbackRecoveryBundle: FallbackCompactionRecoveryBundle,
+  ): CompactionSummaryDocument {
+    return {
+      version: 1,
+      goal: `Compaction fallback snapshot (${input.mode})`,
+      constraints: [
+        `session_id=${input.session.id}`,
+        `provider=${input.providerConfig.type}`,
+        `prompt=${this.truncateFallbackToken(input.prompt ?? "n/a")}`,
+      ],
+      progress: {
+        done: [`summarized_messages=${summaryInput.summaryMessages.length}`],
+        inProgress: [`kept_messages=${summaryInput.keptMessages.length}`],
+        blocked: [],
+      },
+      keyDecisions: [
+        `tokens_before=${summaryInput.tokensBefore}`,
+        `tokens_kept=${summaryInput.tokensKept}`,
+        `keep_recent_tokens=${summaryInput.keepRecentTokens}`,
+      ],
+      nextSteps: [`resume_mode=${input.mode}`, "recovery_source=fallbackRecovery"],
+      criticalContext: [
+        `first_kept_history_entry_id=${fallbackRecoveryBundle.firstKeptHistoryEntryId ?? "null"}`,
+        `first_kept_timestamp=${fallbackRecoveryBundle.firstKeptTimestamp ?? "null"}`,
+        ...fallbackRecoveryBundle.summarizedMessages.slice(0, 8).map((entry) => `summarized:${entry}`),
+        ...fallbackRecoveryBundle.keptMessages.slice(0, 8).map((entry) => `kept:${entry}`),
+      ],
+    };
+  }
+
+  private buildFallbackCompactionRecoveryBundle(input: {
+    mode: CompactionMode;
+    firstKeptHistoryEntryId: string | null;
+    firstKeptTimestamp: string | null;
+    summaryMessages: RuntimeMessage[];
+    keptMessages: RuntimeMessage[];
+  }): FallbackCompactionRecoveryBundle {
+    return {
+      version: 1,
+      mode: input.mode,
+      generatedAt: nowIso(),
+      firstKeptHistoryEntryId: input.firstKeptHistoryEntryId,
+      firstKeptTimestamp: input.firstKeptTimestamp,
+      summarizedMessages: input.summaryMessages.map((message) => this.toFallbackRecoveryToken(message)),
+      keptMessages: input.keptMessages.map((message) => this.toFallbackRecoveryToken(message)),
+    };
+  }
+
+  private toFallbackRecoveryToken(message: RuntimeMessage): string {
+    switch (message.role) {
+      case "user":
+        return `user:${this.truncateFallbackToken(this.runtimeContentToText(message.content))}`;
+      case "assistantTranscript":
+        return `assistant:${this.truncateFallbackToken(message.content)}`;
+      case "runtimeToolOutput":
+        return `${message.toolName}:${message.isError ? "error" : "ok"}:${this.truncateFallbackToken(
+          this.runtimeContentToText(message.content),
+        )}`;
+      case "compactionSummary":
+        return `compaction:${this.truncateFallbackToken(message.summary.goal)}`;
+      case "branchSummary":
+        return `branch:${this.truncateFallbackToken(message.summary)}`;
+      case "bashExecution":
+        return `bash:${this.truncateFallbackToken(message.command)}`;
+      default:
+        return `${message.role}:${this.truncateFallbackToken(JSON.stringify(message))}`;
+    }
+  }
+
+  private runtimeContentToText(content: unknown): string {
+    if (typeof content === "string") {
+      return content;
+    }
+    if (!Array.isArray(content)) {
+      return "";
+    }
+    return content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+        if (
+          part &&
+          typeof part === "object" &&
+          "text" in part &&
+          typeof (part as { text?: unknown }).text === "string"
+        ) {
+          return (part as { text: string }).text;
+        }
+        return "";
+      })
+      .join("");
+  }
+
+  private truncateFallbackToken(value: string, maxLength = 180): string {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    if (normalized.length <= maxLength) {
+      return normalized;
+    }
+    return `${normalized.slice(0, maxLength)}...`;
   }
 
   /**

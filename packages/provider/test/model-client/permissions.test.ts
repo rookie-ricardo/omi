@@ -81,7 +81,46 @@ describe("PiAiModelClient permission integration", () => {
     );
 
     expect(onToolCallStart).not.toHaveBeenCalled();
-    expect(onToolDecision).toHaveBeenCalledWith("run_2:1", "rejected");
+    expect(onToolDecision).toHaveBeenCalledTimes(1);
+    const [toolCallId, decision] = onToolDecision.mock.calls[0] ?? [];
+    expect(toolCallId).toMatch(/^run_2:tool:fallback:[a-f0-9]{16}$/);
+    expect(decision).toBe("rejected");
+  });
+
+  it("uses provider tool event id as stable toolCallId instead of sequence order", async () => {
+    const client = new PiAiModelClient();
+    const config = makeProviderConfig();
+    const onToolDecision = vi.fn();
+
+    nextPrompt = async (agentConfig: any) => {
+      await agentConfig.beforeToolCall({
+        toolCall: { name: "bash", id: "event-b" },
+        args: { command: "echo b" },
+      });
+      await agentConfig.beforeToolCall({
+        toolCall: { name: "bash", id: "event-a" },
+        args: { command: "echo a" },
+      });
+    };
+
+    await client.run(
+      {
+        runId: "run_3",
+        sessionId: "session_1",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: config,
+        preflightToolCheck: async () => "blocked by policy",
+      },
+      {
+        onToolDecision,
+      },
+    );
+
+    expect(onToolDecision.mock.calls).toEqual([
+      ["run_3:tool:event-b", "rejected"],
+      ["run_3:tool:event-a", "rejected"],
+    ]);
   });
 });
 

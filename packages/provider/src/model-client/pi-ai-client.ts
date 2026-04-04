@@ -5,6 +5,7 @@ import {
   ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
+import { createHash } from "node:crypto";
 import { createModelFromConfig } from "../model-registry";
 import type { ToolName } from "@omi/tools";
 import { createToolArray } from "@omi/tools";
@@ -37,6 +38,67 @@ interface RuntimeToolCall {
   toolCallId: string;
   toolName: string;
   phase: "requested" | "started" | "finished";
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function canonicalizeForHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeForHash(item));
+  }
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    const sortedEntries = Object.keys(record)
+      .sort()
+      .map((key) => [key, canonicalizeForHash(record[key])] as const);
+    return Object.fromEntries(sortedEntries);
+  }
+  return value;
+}
+
+function normalizeToolEventId(rawId: string): string {
+  return rawId.replace(/[^a-zA-Z0-9:_-]/g, "_");
+}
+
+function extractToolEventId(toolCall: unknown): string | null {
+  const record = toRecord(toolCall);
+  if (!record) {
+    return null;
+  }
+  const eventId =
+    (typeof record.id === "string" && record.id)
+    || (typeof record.toolCallId === "string" && record.toolCallId)
+    || (typeof record.callId === "string" && record.callId)
+    || null;
+  if (!eventId || eventId.trim().length === 0) {
+    return null;
+  }
+  return normalizeToolEventId(eventId);
+}
+
+function buildStableToolCallId(
+  runId: string,
+  toolCall: unknown,
+  toolName: string,
+  args: Record<string, unknown>,
+): string {
+  const toolEventId = extractToolEventId(toolCall);
+  if (toolEventId) {
+    return `${runId}:tool:${toolEventId}`;
+  }
+
+  const toolCallSnapshot = JSON.stringify(canonicalizeForHash(toRecord(toolCall) ?? {}));
+  const argsSnapshot = JSON.stringify(canonicalizeForHash(args));
+  const fingerprint = createHash("sha1")
+    .update(`${toolName}|${toolCallSnapshot}|${argsSnapshot}`)
+    .digest("hex")
+    .slice(0, 16);
+  return `${runId}:tool:fallback:${fingerprint}`;
 }
 
 /**
@@ -101,7 +163,7 @@ export class PiAiModelClient implements ModelClient {
         args: Record<string, unknown>;
       }) => {
         const toolName = toolCall.name;
-        const toolCallId = `${runId}:${toolCalls.length + 1}`;
+        const toolCallId = buildStableToolCallId(runId, toolCall, toolName, args);
         const preflightReason = await preflightToolCheck?.(toolName, args);
         if (preflightReason) {
           callbacks.onToolDecision?.(toolCallId, "rejected");
@@ -192,7 +254,7 @@ export class PiAiModelClient implements ModelClient {
       await agent.prompt(prompt);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorClass = classifyPiAiError(errorMessage);
+      const errorClass = classifyPiAiError(error);
       const recoverable = isRecoverableError(errorClass);
       callbacks.onError?.(errorMessage, errorClass, recoverable);
       finalError = errorMessage;

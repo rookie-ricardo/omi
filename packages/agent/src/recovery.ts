@@ -1,5 +1,6 @@
 import type { Run, RunCheckpoint, RunCheckpointPhase } from "@omi/core";
 import { createId } from "@omi/core";
+import { createHash } from "node:crypto";
 import {
   isOverflowError,
   isRetryableError,
@@ -23,12 +24,195 @@ export type ErrorClass =
   | "cancelled"
   | "unknown";
 
+interface StructuredErrorMetadata {
+  message: string;
+  statusCode: number | null;
+  errorCode: string | null;
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function extractStructuredErrorMetadata(error: unknown): StructuredErrorMetadata {
+  if (error === null || error === undefined) {
+    return { message: "", statusCode: null, errorCode: null };
+  }
+
+  if (typeof error === "string") {
+    return { message: error, statusCode: null, errorCode: null };
+  }
+
+  if (error instanceof Error) {
+    const err = error as Error & {
+      status?: unknown;
+      statusCode?: unknown;
+      code?: unknown;
+      response?: unknown;
+      error?: unknown;
+    };
+    const response = toRecord(err.response);
+    const nestedError = toRecord(err.error);
+    return {
+      message: err.message,
+      statusCode: firstNumber(
+        err.statusCode,
+        err.status,
+        response?.statusCode,
+        response?.status,
+        nestedError?.statusCode,
+        nestedError?.status,
+      ),
+      errorCode: firstString(
+        err.code,
+        nestedError?.code,
+        nestedError?.type,
+        response?.code,
+      ),
+    };
+  }
+
+  const record = toRecord(error);
+  if (!record) {
+    return { message: String(error), statusCode: null, errorCode: null };
+  }
+
+  const response = toRecord(record.response);
+  const nestedError = toRecord(record.error);
+  return {
+    message: firstString(record.message) ?? String(error),
+    statusCode: firstNumber(
+      record.statusCode,
+      record.status,
+      response?.statusCode,
+      response?.status,
+      nestedError?.statusCode,
+      nestedError?.status,
+    ),
+    errorCode: firstString(
+      record.code,
+      record.errorCode,
+      record.type,
+      nestedError?.code,
+      nestedError?.type,
+      response?.code,
+    ),
+  };
+}
+
+function classifyByStatusCode(statusCode: number | null): ErrorClass | null {
+  if (statusCode === null) {
+    return null;
+  }
+  if (statusCode === 401 || statusCode === 403) {
+    return "auth";
+  }
+  if (statusCode === 429) {
+    return "rate_limit";
+  }
+  if (statusCode >= 500 && statusCode <= 599) {
+    return "network";
+  }
+  return null;
+}
+
+function classifyByErrorCode(errorCode: string | null): ErrorClass | null {
+  if (!errorCode) {
+    return null;
+  }
+  const lowerCode = errorCode.toLowerCase();
+  if (
+    lowerCode.includes("rate_limit")
+    || lowerCode.includes("ratelimit")
+    || lowerCode.includes("too_many_requests")
+  ) {
+    return "rate_limit";
+  }
+  if (
+    lowerCode.includes("invalid_api_key")
+    || lowerCode.includes("authentication")
+    || lowerCode.includes("permission_denied")
+    || lowerCode.includes("forbidden")
+    || lowerCode.includes("unauthorized")
+  ) {
+    return "auth";
+  }
+  if (
+    lowerCode.includes("econn")
+    || lowerCode.includes("network")
+    || lowerCode.includes("connection")
+    || lowerCode.includes("timeout")
+    || lowerCode.includes("timedout")
+    || lowerCode.includes("overloaded")
+  ) {
+    return "network";
+  }
+  if (
+    lowerCode.includes("max_output")
+    || lowerCode.includes("max_tokens")
+    || lowerCode.includes("output_limit")
+  ) {
+    return "max_output";
+  }
+  if (
+    lowerCode.includes("prompt_too_long")
+    || lowerCode.includes("context_length")
+    || lowerCode.includes("token_limit")
+  ) {
+    return "prompt_too_long";
+  }
+  if (lowerCode.includes("tool")) {
+    return "tool_error";
+  }
+  if (lowerCode.includes("cancel") || lowerCode.includes("abort")) {
+    return "cancelled";
+  }
+  return null;
+}
+
 export function classifyError(error: unknown): ErrorClass {
   if (error === null || error === undefined) {
     return "unknown";
   }
 
-  const message = error instanceof Error ? error.message : String(error);
+  const metadata = extractStructuredErrorMetadata(error);
+  const statusClass = classifyByStatusCode(metadata.statusCode);
+  if (statusClass) {
+    return statusClass;
+  }
+  const codeClass = classifyByErrorCode(metadata.errorCode);
+  if (codeClass) {
+    return codeClass;
+  }
+
+  const message = metadata.message;
   const lowerMessage = message.toLowerCase();
 
   // Auth errors (non-retryable)
@@ -342,6 +526,32 @@ export interface ToolCallMeta {
   toolCallId: string;
   toolName: string;
   isWrite: boolean;
+  toolInput?: unknown;
+}
+
+function canonicalizeForHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeForHash(item));
+  }
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    const sortedEntries = Object.keys(record)
+      .sort()
+      .map((key) => [key, canonicalizeForHash(record[key])] as const);
+    return Object.fromEntries(sortedEntries);
+  }
+  return value;
+}
+
+export function buildToolCallReplayKey(toolCall: Pick<ToolCallMeta, "toolCallId" | "toolName" | "toolInput">): string {
+  const normalizedId = toolCall.toolCallId.trim();
+  if (normalizedId.length > 0) {
+    return normalizedId;
+  }
+
+  const canonicalInput = JSON.stringify(canonicalizeForHash(toolCall.toolInput ?? null));
+  const fingerprint = createHash("sha1").update(`${toolCall.toolName}:${canonicalInput}`).digest("hex");
+  return `${toolCall.toolName}:fallback:${fingerprint.slice(0, 16)}`;
 }
 
 /**
@@ -355,7 +565,8 @@ export function shouldSkipToolCall(
   if (!toolCall.isWrite) {
     return false;
   }
-  return executedWriteToolCallIds.has(toolCall.toolCallId);
+  const replayKey = buildToolCallReplayKey(toolCall);
+  return executedWriteToolCallIds.has(replayKey);
 }
 
 /**
@@ -441,6 +652,8 @@ export interface RecoveryEngineDeps {
   runId: string;
   sessionId: string;
   emit: (event: RecoveryEngineEvent) => void;
+  sourceRunId?: string | null;
+  resumeFromCheckpointId?: string | null;
 }
 
 export type RecoveryEngineEvent =
@@ -587,12 +800,14 @@ export class RecoveryEngine {
   /**
    * Record a write tool execution for replay protection.
    */
-  recordWriteTool(toolCallId: string, toolName: string): void {
+  recordWriteTool(toolCallId: string, toolName: string, toolInput?: unknown): void {
     const isWrite = isWriteTool(toolName);
-    const alreadyExecuted = isWrite && this.checkpointManager.isWriteToolExecuted(toolCallId);
+    const replayKey = buildToolCallReplayKey({ toolCallId, toolName, toolInput });
+    const eventToolCallId = toolCallId.trim().length > 0 ? toolCallId : replayKey;
+    const alreadyExecuted = isWrite && this.checkpointManager.isWriteToolExecuted(replayKey);
     if (isWrite) {
       if (!alreadyExecuted) {
-        this.checkpointManager.recordWriteToolExecution(toolCallId);
+        this.checkpointManager.recordWriteToolExecution(replayKey);
       }
     }
 
@@ -600,7 +815,7 @@ export class RecoveryEngine {
       type: "recovery.replay_protection",
       runId: this.deps.runId,
       sessionId: this.deps.sessionId,
-      toolCallId,
+      toolCallId: eventToolCallId,
       toolName,
       skipped: alreadyExecuted,
     });
@@ -609,19 +824,21 @@ export class RecoveryEngine {
   /**
    * Check if a tool call should be skipped during replay.
    */
-  shouldSkipTool(toolCallId: string, toolName: string): boolean {
+  shouldSkipTool(toolCallId: string, toolName: string, toolInput?: unknown): boolean {
     const isWrite = isWriteTool(toolName);
     if (!isWrite) {
       return false;
     }
 
-    const skipped = this.checkpointManager.isWriteToolExecuted(toolCallId);
+    const replayKey = buildToolCallReplayKey({ toolCallId, toolName, toolInput });
+    const eventToolCallId = toolCallId.trim().length > 0 ? toolCallId : replayKey;
+    const skipped = this.checkpointManager.isWriteToolExecuted(replayKey);
     if (skipped) {
       this.deps.emit({
         type: "recovery.replay_protection",
         runId: this.deps.runId,
         sessionId: this.deps.sessionId,
-        toolCallId,
+        toolCallId: eventToolCallId,
         toolName,
         skipped: true,
       });
@@ -635,7 +852,12 @@ export class RecoveryEngine {
    * Returns the checkpoint payload if found, null otherwise.
    */
   restoreFromCheckpoint(): CheckpointPayload | null {
-    const checkpoint = this.checkpointManager.findResumeCheckpoint();
+    const sourceRunId = this.deps.sourceRunId ?? this.deps.runId;
+    const resumeFromCheckpointId = this.deps.resumeFromCheckpointId ?? null;
+    const checkpoints = this.deps.store.listCheckpoints(sourceRunId);
+    const checkpoint = resumeFromCheckpointId
+      ? checkpoints.find((entry) => entry.id === resumeFromCheckpointId) ?? null
+      : this.findBestResumeCheckpoint(checkpoints);
     if (!checkpoint) {
       return null;
     }
@@ -643,5 +865,21 @@ export class RecoveryEngine {
     const payload = checkpoint.payload as unknown as CheckpointPayload;
     this.checkpointManager.restoreExecutedWrites(payload);
     return payload;
+  }
+
+  private findBestResumeCheckpoint(checkpoints: RunCheckpoint[]): RunCheckpoint | null {
+    const resumeOrder: RunCheckpointPhase[] = [
+      "before_terminal_commit",
+      "after_tool_batch",
+      "after_model_stream",
+      "before_model_call",
+    ];
+    for (const phase of resumeOrder) {
+      const checkpoint = [...checkpoints].reverse().find((entry) => entry.phase === phase);
+      if (checkpoint) {
+        return checkpoint;
+      }
+    }
+    return null;
   }
 }
