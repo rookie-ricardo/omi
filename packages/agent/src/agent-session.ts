@@ -621,6 +621,8 @@ export class AgentSession {
         this.options.database.getActiveBranchId(input.session.id) ??
         this.options.database.listBranches(input.session.id).at(-1)?.id ??
         null;
+      const parentHistoryEntry =
+        this.options.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
       const details = {
         mode: input.mode,
         prompt: input.prompt,
@@ -632,13 +634,13 @@ export class AgentSession {
 
       this.options.database.addSessionHistoryEntry({
         sessionId: input.session.id,
-        parentId: null,
+        parentId: parentHistoryEntry?.id ?? null,
         kind: "branch_summary",
         messageId: null,
         summary: snapshot.summary.goal,
         details: normalizeHistoryDetails(details),
         branchId,
-        lineageDepth: 0,
+        lineageDepth: parentHistoryEntry ? parentHistoryEntry.lineageDepth + 1 : 0,
         originRunId: null,
       });
     }

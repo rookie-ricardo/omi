@@ -77,6 +77,23 @@ describe("database migrations", () => {
     expect(reverted).toBe("20260402_session_kernel_branches");
     expect(tableExists(sqlite, "session_branches")).toBe(false);
     expect(tableExists(sqlite, "run_checkpoints")).toBe(false);
+    expect(tableColumns(sqlite, "runs")).toEqual(
+      expect.arrayContaining(["origin_run_id", "resume_from_checkpoint", "terminal_reason"]),
+    );
+    expect(tableColumns(sqlite, "session_history_entries")).toEqual(
+      expect.arrayContaining(["branch_id", "lineage_depth", "origin_run_id"]),
+    );
+  });
+
+  it("creates indexes for branch and checkpoint query paths", () => {
+    const sqlite = createMemoryDatabase();
+    createFreshSchema(sqlite);
+
+    applyMigrations(sqlite);
+
+    expect(indexExists(sqlite, "idx_session_branches_session_created")).toBe(true);
+    expect(indexExists(sqlite, "idx_run_checkpoints_run_created")).toBe(true);
+    expect(indexExists(sqlite, "idx_session_history_entries_session_branch_created")).toBe(true);
   });
 
   it("reports orphan branch and checkpoint rows in the consistency check", () => {
@@ -275,5 +292,13 @@ function tableExists(sqlite: BetterSqlite3.Database, tableName: string): boolean
     sqlite
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
       .get(tableName) !== undefined
+  );
+}
+
+function indexExists(sqlite: BetterSqlite3.Database, indexName: string): boolean {
+  return (
+    sqlite
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get(indexName) !== undefined
   );
 }

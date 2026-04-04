@@ -197,6 +197,10 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_session_branches_session_created
+      ON session_branches (session_id, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_run_checkpoints_run_created
+      ON run_checkpoints (run_id, created_at, id);
   `);
   applyMigrations(sqlite);
 
@@ -396,9 +400,12 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     input: Omit<SessionHistoryEntry, "id" | "createdAt" | "updatedAt"> & { id?: string },
   ): SessionHistoryEntry {
     const timestamp = nowIso();
+    const resolvedParentId = input.parentId ?? getLatestSessionHistoryEntry(input.sessionId)?.id ?? null;
     const entry = sessionHistoryEntrySchema.parse({
       id: input.id ?? createId("hist"),
       ...input,
+      parentId: resolvedParentId,
+      lineageDepth: computeLineageDepth(resolvedParentId),
       createdAt: timestamp,
       updatedAt: timestamp,
     });
@@ -1002,14 +1009,35 @@ const DATABASE_MIGRATIONS: DatabaseMigration[] = [
           created_at TEXT NOT NULL
         );
       `);
+      ensureIndexExists(
+        sqlite,
+        "idx_session_branches_session_created",
+        "CREATE INDEX idx_session_branches_session_created ON session_branches (session_id, created_at, id)",
+      );
+      ensureIndexExists(
+        sqlite,
+        "idx_run_checkpoints_run_created",
+        "CREATE INDEX idx_run_checkpoints_run_created ON run_checkpoints (run_id, created_at, id)",
+      );
+      const historyTableExistsAfterMigration = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_history_entries'")
+        .all().length > 0;
+      if (historyTableExistsAfterMigration) {
+        ensureIndexExists(
+          sqlite,
+          "idx_session_history_entries_session_branch_created",
+          "CREATE INDEX idx_session_history_entries_session_branch_created ON session_history_entries (session_id, branch_id, created_at, id)",
+        );
+      }
     },
     revert(sqlite) {
       sqlite.exec(`DROP TABLE IF EXISTS run_checkpoints`);
       sqlite.exec(`DROP TABLE IF EXISTS session_branches`);
-      // SQLite does not support DROP COLUMN before 3.35.0; leave the added columns in place.
-      // The added columns (origin_run_id, resume_from_checkpoint, terminal_reason,
-      // branch_id, lineage_depth, origin_run_id on history entries) are nullable and
-      // will simply be ignored by older code.
+      // Partial rollback semantics: table additions are reversible, additive columns are not.
+      // SQLite does not support DROP COLUMN in the general case, so added columns remain.
+      // Non-reversible additive columns:
+      // - runs: origin_run_id, resume_from_checkpoint, terminal_reason
+      // - session_history_entries: branch_id, lineage_depth, origin_run_id
     },
     validate(sqlite) {
       const errors: string[] = [];
@@ -1235,5 +1263,18 @@ function ensureColumnExists(
 
   if (!columns.has(columnName)) {
     sqlite.exec(alterStatement);
+  }
+}
+
+function ensureIndexExists(
+  sqlite: MigrationDatabase,
+  indexName: string,
+  createStatement: string,
+): void {
+  const existing = sqlite
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name = ?")
+    .all(indexName);
+  if (existing.length === 0) {
+    sqlite.exec(createStatement);
   }
 }

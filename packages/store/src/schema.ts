@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const sessionsTable = sqliteTable("sessions", {
   id: text("id").primaryKey(),
@@ -45,20 +45,31 @@ export const messagesTable = sqliteTable("messages", {
   createdAt: text("created_at").notNull(),
 });
 
-export const sessionHistoryEntriesTable = sqliteTable("session_history_entries", {
-  id: text("id").primaryKey(),
-  sessionId: text("session_id").notNull(),
-  parentId: text("parent_id"),
-  kind: text("kind").notNull(),
-  messageId: text("message_id"),
-  summary: text("summary"),
-  details: text("details"),
-  branchId: text("branch_id"),
-  lineageDepth: integer("lineage_depth").notNull().default(0),
-  originRunId: text("origin_run_id"),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const sessionHistoryEntriesTable = sqliteTable(
+  "session_history_entries",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    parentId: text("parent_id"),
+    kind: text("kind").notNull(),
+    messageId: text("message_id"),
+    summary: text("summary"),
+    details: text("details"),
+    branchId: text("branch_id"),
+    lineageDepth: integer("lineage_depth").notNull().default(0),
+    originRunId: text("origin_run_id"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sessionBranchCreatedIdx: index("idx_session_history_entries_session_branch_created").on(
+      table.sessionId,
+      table.branchId,
+      table.createdAt,
+      table.id,
+    ),
+  }),
+);
 
 export const eventsTable = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -126,20 +137,36 @@ export const providerConfigsTable = sqliteTable("provider_configs", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const sessionBranchesTable = sqliteTable("session_branches", {
-  id: text("id").primaryKey(),
-  sessionId: text("session_id").notNull(),
-  headEntryId: text("head_entry_id"),
-  title: text("title").notNull().default("main"),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-});
+export const sessionBranchesTable = sqliteTable(
+  "session_branches",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    headEntryId: text("head_entry_id"),
+    title: text("title").notNull().default("main"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    sessionCreatedIdx: index("idx_session_branches_session_created").on(
+      table.sessionId,
+      table.createdAt,
+      table.id,
+    ),
+  }),
+);
 
-export const runCheckpointsTable = sqliteTable("run_checkpoints", {
-  id: text("id").primaryKey(),
-  runId: text("run_id").notNull(),
-  sessionId: text("session_id").notNull(),
-  phase: text("phase").notNull(),
-  payload: text("payload").notNull(),
-  createdAt: text("created_at").notNull(),
-});
+export const runCheckpointsTable = sqliteTable(
+  "run_checkpoints",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    phase: text("phase").notNull(),
+    payload: text("payload").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    runCreatedIdx: index("idx_run_checkpoints_run_created").on(table.runId, table.createdAt, table.id),
+  }),
+);
