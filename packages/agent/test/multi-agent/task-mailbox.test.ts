@@ -1,5 +1,23 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { TaskMailbox, createTaskSubmittedEvent, createTaskCompletedEvent } from "../../src/task-mailbox";
+import { Mailbox, TaskMailbox, createTaskSubmittedEvent, createTaskCompletedEvent } from "../../src/task-mailbox";
+
+describe("Mailbox", () => {
+  it("should persist read state when marking a message as read", () => {
+    const mailbox = new Mailbox();
+    const message = mailbox.sendTo("agent-1", "agent-2", "task/delegate", { text: "hello" });
+
+    expect(mailbox.getMessageMeta(message.id)?.status).toBe("pending");
+    expect(mailbox.markAsRead(message.id)).toBe(true);
+    const meta = mailbox.getMessageMeta(message.id);
+    expect(meta?.status).toBe("read");
+    expect(meta?.readAt).toBeDefined();
+  });
+
+  it("should return false when marking an unknown message as read", () => {
+    const mailbox = new Mailbox();
+    expect(mailbox.markAsRead("missing")).toBe(false);
+  });
+});
 
 describe("TaskMailbox", () => {
   let mailbox: TaskMailbox;

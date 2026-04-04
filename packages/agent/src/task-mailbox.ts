@@ -78,6 +78,7 @@ export interface MailboxConfig {
  */
 export class Mailbox {
   private readonly messages = new Map<string, MailboxMessage>();
+  private readonly messageMeta = new Map<string, MailboxMessageMeta>();
   private readonly subscriptions = new Map<string, MailboxSubscription>();
   private readonly recipientInbox = new Map<string, string[]>(); // recipientId -> messageIds
   private readonly topicIndex = new Map<string, Set<string>>(); // topic -> messageIds
@@ -104,6 +105,9 @@ export class Mailbox {
 
     // Store message
     this.messages.set(id, fullMessage as MailboxMessage<unknown> as MailboxMessage);
+    this.messageMeta.set(id, {
+      status: "pending",
+    });
 
     // Index by topic
     if (!this.topicIndex.has(fullMessage.topic)) {
@@ -258,7 +262,19 @@ export class Mailbox {
     if (!message) {
       return false;
     }
+    const existingMeta = this.messageMeta.get(messageId);
+    const now = nowIso();
+    this.messageMeta.set(messageId, {
+      status: "read",
+      deliveredAt: existingMeta?.deliveredAt ?? now,
+      readAt: now,
+      replyId: existingMeta?.replyId,
+    });
     return true;
+  }
+
+  getMessageMeta(messageId: string): MailboxMessageMeta | null {
+    return this.messageMeta.get(messageId) ?? null;
   }
 
   /**
@@ -271,6 +287,7 @@ export class Mailbox {
     }
 
     this.messages.delete(messageId);
+    this.messageMeta.delete(messageId);
 
     // Remove from topic index
     const topicSet = this.topicIndex.get(message.topic);
@@ -314,6 +331,7 @@ export class Mailbox {
    */
   clear(): void {
     this.messages.clear();
+    this.messageMeta.clear();
     this.recipientInbox.clear();
     this.topicIndex.clear();
   }
@@ -332,6 +350,14 @@ export class Mailbox {
 
       // Deliver asynchronously to avoid blocking
       Promise.resolve().then(() => {
+        const currentMeta = this.messageMeta.get(message.id);
+        if (currentMeta && currentMeta.status === "pending") {
+          this.messageMeta.set(message.id, {
+            ...currentMeta,
+            status: "delivered",
+            deliveredAt: nowIso(),
+          });
+        }
         subscription.callback(message);
       });
     }

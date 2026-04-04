@@ -217,6 +217,9 @@ export interface TaskResult {
   error?: string;
   completedAt: string;
   durationMs: number;
+  terminalSource?: "live" | "tombstone";
+  terminalAt?: string;
+  tombstone?: boolean;
 }
 
 export function createSpawnConfig(
@@ -386,6 +389,7 @@ export interface SubAgentManagerConfig {
   onSubAgentStart?: (subAgent: SubAgent) => void;
   onSubAgentComplete?: (subAgent: SubAgent, result: TaskResult) => void;
   onSubAgentError?: (subAgent: SubAgent, error: Error) => void;
+  tombstoneRetentionMs?: number;
 }
 
 type SubAgentManagerEvent =
@@ -398,6 +402,7 @@ type SubAgentManagerEvent =
 
 export class SubAgentManager {
   private readonly subAgents = new Map<string, SubAgent>();
+  private readonly tombstones = new Map<string, SubAgentState>();
   private readonly listeners = new Map<SubAgentManagerEvent, Set<(subAgent: SubAgent, result?: TaskResult) => void>>();
   private readonly config: SubAgentManagerConfig;
 
@@ -416,6 +421,7 @@ export class SubAgentManager {
         parentId: "main",
         builtInAgents: [],
         mailbox: new Mailbox(),
+        tombstoneRetentionMs: 300000,
         ...configOrWorkspaceRoot,
       };
     }
@@ -558,7 +564,16 @@ export class SubAgentManager {
    */
   async wait(subAgentId: string, timeoutMs?: number): Promise<TaskResult> {
     const subAgent = this.subAgents.get(subAgentId);
+    const tombstone = this.tombstones.get(subAgentId);
     if (!subAgent) {
+      if (tombstone) {
+        return this.buildResultFromState(
+          subAgentId,
+          tombstone,
+          Date.now(),
+          "tombstone",
+        );
+      }
       return {
         subAgentId,
         status: "failed",
@@ -573,30 +588,15 @@ export class SubAgentManager {
     const startTime = Date.now();
 
     if (timeoutMs !== undefined && timeoutMs <= 0) {
-      return this.buildResult(subAgent, startTime);
+      return this.buildResult(subAgent, startTime, "live");
     }
 
-    if (
-      subAgent.state.status === "completed"
-      || subAgent.state.status === "failed"
-      || subAgent.state.status === "canceled"
-      || subAgent.state.status === "closed"
-    ) {
-      return this.buildResult(subAgent, startTime);
+    if (this.isTerminalStatus(subAgent.state.status)) {
+      return this.buildResult(subAgent, startTime, "live");
     }
 
     if (subAgent.state.status === "pending" || subAgent.state.status === "initializing") {
       this.start(subAgentId);
-    }
-
-    if (!subAgent.state.background) {
-      if (subAgent.state.status === "running" || subAgent.state.status === "waiting") {
-        if (subAgent.state.output === undefined && subAgent.state.result === undefined) {
-          subAgent.state.output = "";
-        }
-        this.updateStatus(subAgentId, "completed");
-      }
-      return this.buildResult(subAgent, startTime);
     }
 
     const timeout = timeoutMs ?? subAgent.state.deadline ?? 300000;
@@ -604,6 +604,15 @@ export class SubAgentManager {
     while (Date.now() < deadlineAt) {
       const latest = this.subAgents.get(subAgentId);
       if (!latest) {
+        const closedState = this.tombstones.get(subAgentId);
+        if (closedState) {
+          return this.buildResultFromState(
+            subAgentId,
+            closedState,
+            startTime,
+            "tombstone",
+          );
+        }
         return {
           subAgentId,
           status: "canceled",
@@ -615,13 +624,8 @@ export class SubAgentManager {
         };
       }
 
-      if (
-        latest.state.status === "completed"
-        || latest.state.status === "failed"
-        || latest.state.status === "canceled"
-        || latest.state.status === "closed"
-      ) {
-        return this.buildResult(latest, startTime);
+      if (this.isTerminalStatus(latest.state.status)) {
+        return this.buildResult(latest, startTime, "live");
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -660,6 +664,12 @@ export class SubAgentManager {
 
     subAgent.state.status = "closed";
     subAgent.state.completedAt = nowIso();
+    this.tombstones.set(subAgentId, {
+      ...subAgent.state,
+      status: "closed",
+      completedAt: subAgent.state.completedAt,
+    });
+    this.scheduleTombstoneCleanup(subAgentId);
     this.emit("subagent.closed", subAgent);
 
     // Clean up
@@ -695,7 +705,9 @@ export class SubAgentManager {
     parentId?: string;
     ownerId?: string;
   }): SubAgent[] {
-    let agents = [...this.subAgents.values()];
+    const activeAgents = [...this.subAgents.values()];
+    const tombstoneAgents = [...this.tombstones.values()].map((state) => this.buildTombstoneAgent(state));
+    let agents = [...activeAgents, ...tombstoneAgents];
 
     if (filter?.status) {
       agents = agents.filter((a) => a.state.status === filter.status);
@@ -740,7 +752,7 @@ export class SubAgentManager {
    * Get SubAgent state snapshot.
    */
   getState(subAgentId: string): SubAgentState | undefined {
-    return this.subAgents.get(subAgentId)?.state;
+    return this.subAgents.get(subAgentId)?.state ?? this.tombstones.get(subAgentId);
   }
 
   /**
@@ -779,6 +791,7 @@ export class SubAgentManager {
       const result = this.buildResult(
         subAgent,
         new Date(subAgent.state.createdAt).getTime(),
+        "live",
       );
       this.config.onSubAgentComplete?.(subAgent, result);
       this.emit("subagent.completed", subAgent, result);
@@ -868,27 +881,83 @@ export class SubAgentManager {
     this.subAgents.delete(subAgentId);
   }
 
-  private buildResult(subAgent: SubAgent, startTime: number): TaskResult {
-    const resultText = subAgent.state.output ?? subAgent.state.result ?? subAgent.state.error ?? "";
-    const success = subAgent.state.status === "completed";
+  private buildResult(
+    subAgent: SubAgent,
+    startTime: number,
+    terminalSource: "live" | "tombstone",
+  ): TaskResult {
+    return this.buildResultFromState(
+      subAgent.config.id,
+      subAgent.state,
+      startTime,
+      terminalSource,
+    );
+  }
+
+  private buildResultFromState(
+    subAgentId: string,
+    state: SubAgentState,
+    startTime: number,
+    terminalSource: "live" | "tombstone",
+  ): TaskResult {
+    const resultText = state.output ?? state.result ?? state.error ?? "";
+    const success = state.status === "completed";
     return {
-      subAgentId: subAgent.config.id,
+      subAgentId,
       status:
-        subAgent.state.status === "completed"
+        state.status === "completed"
           ? "completed"
-          : subAgent.state.status === "failed"
+          : state.status === "failed"
             ? "failed"
-            : subAgent.state.status === "canceled" || subAgent.state.status === "closed"
+            : state.status === "canceled" || state.status === "closed"
               ? "canceled"
               : "timeout",
       success,
       text: resultText,
-      output: subAgent.state.output ?? subAgent.state.result,
-      result: subAgent.state.result ?? subAgent.state.output,
-      error: subAgent.state.error,
-      completedAt: subAgent.state.completedAt ?? nowIso(),
+      output: state.output ?? state.result,
+      result: state.result ?? state.output,
+      error: state.error,
+      completedAt: state.completedAt ?? nowIso(),
       durationMs: Date.now() - startTime,
+      terminalSource,
+      terminalAt: state.completedAt ?? nowIso(),
+      tombstone: terminalSource === "tombstone",
     };
+  }
+
+  private isTerminalStatus(status: SubAgentStatus): boolean {
+    return status === "completed" || status === "failed" || status === "canceled" || status === "closed";
+  }
+
+  private buildTombstoneAgent(state: SubAgentState): SubAgent {
+    return {
+      config: {
+        id: state.id,
+        name: state.name,
+        task: state.task,
+        ownerId: state.ownerId,
+        writeScope: state.writeScope,
+        status: state.status,
+        output: state.output,
+        workspaceRoot: state.workspaceRoot,
+        parentId: state.parentId,
+        background: state.background,
+      },
+      state: { ...state },
+      mailbox: this.config.mailbox ?? new Mailbox(),
+      abortController: new AbortController(),
+      tools: [],
+    };
+  }
+
+  private scheduleTombstoneCleanup(subAgentId: string): void {
+    const retentionMs = this.config.tombstoneRetentionMs ?? 300000;
+    if (retentionMs <= 0) {
+      return;
+    }
+    setTimeout(() => {
+      this.tombstones.delete(subAgentId);
+    }, retentionMs);
   }
 
   private emit(event: SubAgentManagerEvent, subAgent: SubAgent, result?: TaskResult): void {

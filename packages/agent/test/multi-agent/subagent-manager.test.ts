@@ -89,13 +89,32 @@ describe("SubAgentManager", () => {
   });
 
   describe("close", () => {
-    it("should close and remove an agent", async () => {
+    it("should close and keep tombstone state for audit", async () => {
       const config = createSpawnConfig("owner-1", "Task to close");
       const id = await manager.spawn(config);
 
       await manager.close(id);
 
-      expect(manager.getState(id)).toBeUndefined();
+      const state = manager.getState(id);
+      expect(state).toBeDefined();
+      expect(state?.status).toBe("closed");
+    });
+  });
+
+  describe("wait", () => {
+    it("should wait until real terminal state instead of auto-completing", async () => {
+      const id = await manager.spawn(createSpawnConfig("owner-1", "Wait task"));
+      manager.start(id);
+      setTimeout(() => {
+        manager.setResult(id, "done");
+        manager.updateStatus(id, "completed");
+      }, 20);
+
+      const result = await manager.wait(id, 500);
+      expect(result.status).toBe("completed");
+      expect(result.result).toBe("done");
+      expect(result.terminalSource).toBe("live");
+      expect(result.tombstone).toBe(false);
     });
   });
 });
