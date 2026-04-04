@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Static, TSchema } from "@mariozechner/pi-ai";
+import type { TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
+import { parseToolInput } from "./input-parse";
 
 // ============================================================================
 // Schemas
@@ -11,21 +12,30 @@ export const webFetchSchema: TSchema = Type.Object({
   maxChars: Type.Optional(Type.Number({ description: "Maximum number of characters to return" })),
 });
 
-export type WebFetchInput = Static<typeof webFetchSchema>;
+export interface WebFetchInput {
+  url: string;
+  maxChars?: number;
+}
 
 export const webSearchSchema: TSchema = Type.Object({
   query: Type.String({ description: "Search query" }),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results" })),
 });
 
-export type WebSearchInput = Static<typeof webSearchSchema>;
+export interface WebSearchInput {
+  query: string;
+  limit?: number;
+}
 
 export const askUserSchema: TSchema = Type.Object({
   question: Type.String({ description: "Question to ask the user" }),
   choices: Type.Optional(Type.Array(Type.String(), { description: "Optional answer choices" })),
 });
 
-export type AskUserInput = Static<typeof askUserSchema>;
+export interface AskUserInput {
+  question: string;
+  choices?: string[];
+}
 
 // ============================================================================
 // Helpers
@@ -72,7 +82,7 @@ export function createWebFetchTool(): AgentTool<typeof webFetchSchema, { url?: s
     description: "Fetch a web page and return its text content.",
     parameters: webFetchSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { url, maxChars } = (params ?? {}) as any;
+      const { url, maxChars } = parseToolInput("web.fetch", webFetchSchema, params) as WebFetchInput;
       let parsed: URL;
       try {
         parsed = new URL(url);
@@ -107,7 +117,7 @@ export function createWebSearchTool(): AgentTool<typeof webSearchSchema, { query
     description: "Search the web and return top results.",
     parameters: webSearchSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { query, limit } = (params ?? {}) as any;
+      const { query, limit } = parseToolInput("web.search", webSearchSchema, params) as WebSearchInput;
       const resultLimit = Math.max(1, limit ?? 5);
       const searchUrl = new URL("https://duckduckgo.com/html/");
       searchUrl.searchParams.set("q", query);
@@ -134,7 +144,7 @@ export function createAskUserTool(): AgentTool<typeof askUserSchema, { question:
     description: "Ask the user a clarifying question and wait for a response.",
     parameters: askUserSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { question, choices } = (params ?? {}) as any;
+      const { question, choices } = parseToolInput("ask_user", askUserSchema, params) as AskUserInput;
       const lines = [question];
       if (choices && choices.length > 0) {
         lines.push("", `Choices: ${choices.join(", ")}`);

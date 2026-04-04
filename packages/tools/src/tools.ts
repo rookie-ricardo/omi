@@ -8,6 +8,7 @@ import {
 } from "./builtins";
 import { createEnterWorktreeTool } from "./enter-worktree/index.js";
 import { createExitWorktreeTool } from "./exit-worktree/index.js";
+import { executeWithStructuredOutput } from "./registry";
 
 export type ApprovalPolicy = "always" | "safe";
 export type ToolName = string;
@@ -83,16 +84,24 @@ export async function executeTool(
       return { ok: false, error: { code: "UNKNOWN_TOOL", message: `Tool ${toolName} not found in registry` } };
     }
 
-    const result = await tool.execute(`${toolName}-call`, rawInput);
-    const content =
-      result.content
-        ?.filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("\n") ?? "";
+    const output = await executeWithStructuredOutput(tool, `${toolName}-call`, rawInput);
+    if (output.ok) {
+      return {
+        ok: true,
+        output: {
+          content: output.content ?? "",
+          details: output.data ?? {},
+          meta: output.meta ?? {},
+        },
+      };
+    }
 
     return {
-      ok: true,
-      output: { content, details: result.details ?? {} },
+      ok: false,
+      error: {
+        code: output.error?.code ?? "TOOL_EXECUTION_FAILED",
+        message: output.error?.message ?? "Tool execution failed",
+      },
     };
   } catch (error) {
     return {

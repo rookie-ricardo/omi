@@ -1,18 +1,52 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { Static, TSchema } from "@mariozechner/pi-ai";
+import type { TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 
+import { parseToolInput } from "./input-parse";
 import {
   getTaskToolRuntime,
-  type TaskToolCreateInput,
-  type TaskToolListInput,
   type TaskToolRecord,
-  type TaskToolUpdateInput,
 } from "./runtime";
 
 // ============================================================================
 // Schemas
 // ============================================================================
+
+export type TaskStatus = "inbox" | "active" | "review" | "done" | "dismissed";
+
+export interface TaskCreateInput {
+  title: string;
+  originSessionId: string;
+  candidateReason: string;
+  autoCreated?: boolean;
+  status?: TaskStatus;
+}
+
+export interface TaskUpdateInput {
+  taskId: string;
+  title?: string;
+  status?: TaskStatus;
+  candidateReason?: string;
+  autoCreated?: boolean;
+}
+
+export interface TaskGetInput {
+  taskId: string;
+}
+
+export interface TaskListInput {
+  status?: TaskStatus;
+  originSessionId?: string;
+}
+
+export interface TaskStopInput {
+  taskId: string;
+}
+
+export interface TaskOutputInput {
+  taskId: string;
+  output: string;
+}
 
 export const taskCreateSchema: TSchema = Type.Object({
   title: Type.String({ description: "Human-readable task title" }),
@@ -30,8 +64,6 @@ export const taskCreateSchema: TSchema = Type.Object({
   ),
 });
 
-export type TaskCreateInput = Static<typeof taskCreateSchema>;
-
 export const taskUpdateSchema: TSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
   title: Type.Optional(Type.String({ description: "Updated title" })),
@@ -48,13 +80,9 @@ export const taskUpdateSchema: TSchema = Type.Object({
   autoCreated: Type.Optional(Type.Boolean({ description: "Updated auto-created flag" })),
 });
 
-export type TaskUpdateInput = Static<typeof taskUpdateSchema>;
-
 export const taskGetSchema: TSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
 });
-
-export type TaskGetInput = Static<typeof taskGetSchema>;
 
 export const taskListSchema: TSchema = Type.Object({
   status: Type.Optional(
@@ -69,20 +97,14 @@ export const taskListSchema: TSchema = Type.Object({
   originSessionId: Type.Optional(Type.String({ description: "Filter by origin session ID" })),
 });
 
-export type TaskListInput = Static<typeof taskListSchema>;
-
 export const taskStopSchema: TSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
 });
-
-export type TaskStopInput = Static<typeof taskStopSchema>;
 
 export const taskOutputSchema: TSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
   output: Type.String({ description: "Task output" }),
 });
-
-export type TaskOutputInput = Static<typeof taskOutputSchema>;
 
 export interface TaskToolDetails {
   task?: TaskToolRecord["task"];
@@ -114,9 +136,9 @@ export function createTaskCreateTool(): AgentTool<typeof taskCreateSchema, TaskT
     description: "Create a task record for the session.",
     parameters: taskCreateSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const input: any = params ?? {};
+      const input = parseToolInput("task.create", taskCreateSchema, params) as TaskCreateInput;
       const runtime = getTaskToolRuntime();
-      const created = runtime.createTask(input as TaskToolCreateInput);
+      const created = runtime.createTask(input);
       return {
         content: [{ type: "text" as const, text: `Created task ${created.task.id} (${created.task.title})` }],
         details: { task: created.task },
@@ -132,9 +154,9 @@ export function createTaskUpdateTool(): AgentTool<typeof taskUpdateSchema, TaskT
     description: "Update an existing task record.",
     parameters: taskUpdateSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const input: any = params ?? {};
+      const input = parseToolInput("task.update", taskUpdateSchema, params) as TaskUpdateInput;
       const runtime = getTaskToolRuntime();
-      const updated = runtime.updateTask(input.taskId, input as TaskToolUpdateInput);
+      const updated = runtime.updateTask(input.taskId, input);
       if (!updated) {
         return {
           content: [{ type: "text" as const, text: `Task ${input.taskId} not found` }],
@@ -156,7 +178,7 @@ export function createTaskGetTool(): AgentTool<typeof taskGetSchema, TaskToolDet
     description: "Get a task by ID.",
     parameters: taskGetSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { taskId } = (params ?? {}) as any;
+      const { taskId } = parseToolInput("task.get", taskGetSchema, params) as TaskGetInput;
       const runtime = getTaskToolRuntime();
       const record = runtime.getTask(taskId);
       if (!record) {
@@ -180,9 +202,9 @@ export function createTaskListTool(): AgentTool<typeof taskListSchema, TaskToolD
     description: "List tasks with optional filters.",
     parameters: taskListSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const input: any = params ?? {};
+      const input = parseToolInput("task.list", taskListSchema, params) as TaskListInput;
       const runtime = getTaskToolRuntime();
-      const tasks = runtime.listTasks(input as TaskToolListInput);
+      const tasks = runtime.listTasks(input);
       if (tasks.length === 0) {
         return {
           content: [{ type: "text" as const, text: "No tasks found" }],
@@ -204,7 +226,7 @@ export function createTaskStopTool(): AgentTool<typeof taskStopSchema, TaskToolD
     description: "Stop a task by marking it dismissed.",
     parameters: taskStopSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { taskId } = (params ?? {}) as any;
+      const { taskId } = parseToolInput("task.stop", taskStopSchema, params) as TaskStopInput;
       const runtime = getTaskToolRuntime();
       const stopped = runtime.stopTask(taskId);
       if (!stopped) {
@@ -228,7 +250,7 @@ export function createTaskOutputTool(): AgentTool<typeof taskOutputSchema, TaskT
     description: "Attach an output artifact to a task.",
     parameters: taskOutputSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { taskId, output } = (params ?? {}) as any;
+      const { taskId, output } = parseToolInput("task.output", taskOutputSchema, params) as TaskOutputInput;
       const runtime = getTaskToolRuntime();
       const stored = runtime.setTaskOutput(taskId, output);
       if (!stored) {

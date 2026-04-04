@@ -36,6 +36,21 @@ export * from "./mcp-resource-tools";
 export * from "./subagent";
 export * from "./task-tools";
 export * from "./web-tools";
+export {
+  getMcpRegistryRuntime,
+  setMcpRegistryRuntime,
+  getSubAgentClientRuntime,
+  setSubAgentClientRuntime,
+  getTaskToolRuntime,
+  setTaskToolRuntime,
+  resetTaskToolRuntime,
+  createInMemoryTaskToolRuntime,
+  type TaskToolRuntime,
+  type TaskToolRecord,
+  type TaskToolCreateInput,
+  type TaskToolUpdateInput,
+  type TaskToolListInput,
+} from "./runtime";
 
 // Plan Mode Tools
 export { createEnterPlanTool, enterPlanTool, type EnterPlanInput } from "./enter-plan/index.js";

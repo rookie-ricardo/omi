@@ -83,6 +83,7 @@ describe("tools", () => {
 
     expect(result.ok).toBe(true);
     expect(result.output?.content).toContain("hello world");
+    expect((result.output as { meta?: unknown })?.meta).toBeDefined();
   });
 
   it("runs bash via executeTool", async () => {
@@ -95,6 +96,7 @@ describe("tools", () => {
 
     expect(result.ok).toBe(true);
     expect(result.output?.content).toContain("hello");
+    expect((result.output as { meta?: unknown })?.meta).toBeDefined();
   });
 
   it("returns error for unknown tool", async () => {
