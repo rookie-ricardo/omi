@@ -10,7 +10,6 @@
 import type { Model, Api } from "@mariozechner/pi-ai";
 
 import type { ProviderConfig } from "@omi/core";
-import { createModelFromConfig } from "@omi/provider";
 
 // ============================================================================
 // Constants
@@ -92,9 +91,18 @@ export interface QuickBudgetCheckResult {
  * Create a context budget from a provider config.
  * Factors in the model's context window and reserves output tokens.
  */
-export function createContextBudget(config: ProviderConfig, outputReserve?: number): ContextBudget {
-  const model = createModelFromConfig(config);
-  return buildContextBudget(model, outputReserve);
+/**
+ * Create a context budget from a model.
+ * Use this with a Model instance directly.
+ * @deprecated Use buildContextBudget() instead for new code.
+ */
+export function createContextBudget(modelOrConfig: Model<Api> | ProviderConfig, outputReserve?: number): ContextBudget {
+  // If it looks like a Model (has contextWindow), use directly
+  if ('contextWindow' in modelOrConfig) {
+    return buildContextBudget(modelOrConfig as Model<Api>, outputReserve);
+  }
+  // Legacy path: ProviderConfig - caller must resolve the model before calling
+  throw new Error('createContextBudget no longer accepts ProviderConfig directly. Pass a Model instance or use buildContextBudget().');
 }
 
 /**
@@ -120,8 +128,12 @@ export function buildContextBudget(model: Model<Api>, outputReserve?: number): C
 /**
  * Get the effective context window size (context - output reserve).
  */
-export function getEffectiveContextWindow(config: ProviderConfig, outputReserve?: number): number {
-  const budget = createContextBudget(config, outputReserve);
+/**
+ * Get the effective context window size.
+ * @deprecated Use buildContextBudget() with a Model instance instead.
+ */
+export function getEffectiveContextWindow(model: Model<Api>, outputReserve?: number): number {
+  const budget = buildContextBudget(model, outputReserve);
   return budget.effectiveContextWindow;
 }
 

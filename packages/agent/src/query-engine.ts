@@ -19,6 +19,7 @@ import {
 } from "@omi/memory";
 import {
   createContextBudget,
+  buildContextBudget,
   calculateTokenWarningState,
   needsContextAttention,
   type ContextBudget,
@@ -29,9 +30,9 @@ import {
   type ContextPipelineConfig,
   type ContextPipelineResult,
 } from "@omi/memory";
-import { createModelFromConfig, PiAiProvider } from "@omi/provider";
+import { createModelFromConfig, PiAiProvider, CostTracker, createCostTracker } from "@omi/provider";
 import type { ProviderAdapter, ProviderRunResult, ProviderToolRequestedEvent } from "@omi/provider";
-import { SAFE_TOOL_NAMES, listBuiltInToolNames } from "@omi/tools";
+import { SAFE_TOOL_NAMES, listBuiltInToolNames, createAllTools, requiresApproval, isBuiltInTool } from "@omi/tools";
 import type { ToolName } from "@omi/tools";
 import type { AppStore } from "@omi/store";
 import type { ResourceLoader } from "./resource-loader";
@@ -76,6 +77,10 @@ export interface QueryEngineDeps {
   denialTracker?: DenialTracker;
   /** Context pipeline configuration */
   contextPipelineConfig?: Partial<ContextPipelineConfig>;
+  /** Cost tracker for token/USD budget enforcement. */
+  costTracker?: CostTracker;
+  /** Hook registry for lifecycle event interception. */
+  hookRegistry?: import("@omi/extensions").HookRegistry;
 }
 
 import {
@@ -194,8 +199,11 @@ export class QueryEngine {
   private state: QueryLoopMutableState;
   private currentRunId: string | null = null;
   private canceled = false;
+  private suspended = false;
   private recoveryEngine: RecoveryEngine | null = null;
   private readonly planStateManager = getPlanStateManager();
+  private readonly costTracker: CostTracker | null;
+  private readonly hookRegistry: import("@omi/extensions").HookRegistry | null;
 
   constructor(private readonly deps: QueryEngineDeps) {
     this.provider = deps.provider ?? new PiAiProvider();
@@ -205,6 +213,8 @@ export class QueryEngine {
     this.evaluator = deps.evaluator ?? createPermissionEvaluator()
       .withDenialTracker(this.denialTracker)
       .build();
+    this.costTracker = deps.costTracker ?? null;
+    this.hookRegistry = deps.hookRegistry ?? null;
   }
 
   snapshot(): QueryLoopSnapshot {
@@ -239,6 +249,7 @@ export class QueryEngine {
     this.state = createInitialMutableState();
     this.currentRunId = input.run.id;
     this.canceled = false;
+    this.suspended = false;
 
     // Initialize recovery engine for this run
     this.recoveryEngine = new RecoveryEngine({
@@ -300,8 +311,18 @@ export class QueryEngine {
         if (this.state.budget.maxTurns > 0 && this.state.turnCount >= this.state.budget.maxTurns) {
           return this.terminate("max_turns", null);
         }
+        // Cost budget enforcement via CostTracker
+        if (this.costTracker && this.state.budget.maxBudgetUsd > 0) {
+          this.costTracker.setBudget(this.state.budget.maxBudgetUsd);
+          if (this.costTracker.isBudgetExceeded()) {
+            return this.terminate("budget_exceeded", `Cost budget exceeded: ${this.costTracker.formatSummary()}`);
+          }
+        }
         if (this.canceled) {
           return this.terminate("canceled", null);
+        }
+        if (this.suspended) {
+          return this.terminate("suspended", null);
         }
 
         // Gate model calls when context health indicates the run is unsafe.
@@ -455,12 +476,18 @@ export class QueryEngine {
 
         // Handle cancellation during streaming
         if (!outcome || outcome.kind === "canceled") {
+          if (this.suspended) {
+             return this.terminate("suspended", null);
+          }
           return this.terminate("canceled", null);
         }
 
         // Check for cancellation after streaming
         if (this.canceled) {
           return this.terminate("canceled", null);
+        }
+        if (this.suspended) {
+          return this.terminate("suspended", null);
         }
 
         const result = outcome.result;
@@ -574,6 +601,7 @@ export class QueryEngine {
       error,
       turnCount: this.state.turnCount,
       timestamp: this.state.lastTransitionAt,
+      costSnapshot: this.costTracker?.snapshot() ?? null,
     });
 
     return {
@@ -613,10 +641,39 @@ export class QueryEngine {
         enabledTools: resolvedSkill?.enabledToolNames.length
           ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
           : this.filterVisibleTools(listBuiltInToolNames(), input.session.id),
+        tools: this.buildToolsForProvider(this.deps.workspaceRoot, resolvedSkill?.enabledToolNames.length
+          ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
+          : this.filterVisibleTools(listBuiltInToolNames(), input.session.id)),
+        requiresApprovalFn: (toolName: string) => isBuiltInTool(toolName) ? requiresApproval(toolName) : false,
         toolExecutionMode: resolveToolExecutionMode(
           resolvedSkill?.enabledToolNames as ToolName[] | undefined,
         ),
         preflightToolCheck: async (toolName, toolInput) => {
+          // Hook: PreToolUse — allow hooks to block or modify input
+          if (this.hookRegistry?.hasHooks("PreToolUse")) {
+            const hookOutputs = await this.hookRegistry.execute("PreToolUse", {
+              event: "PreToolUse",
+              toolName,
+              toolInput,
+              sessionId: input.session.id,
+              cwd: this.deps.workspaceRoot,
+            });
+            const { shouldBlock, getBlockReason } = await import("@omi/extensions");
+            if (shouldBlock(hookOutputs)) {
+              const reason = getBlockReason(hookOutputs) ?? `Tool '${toolName}' blocked by PreToolUse hook.`;
+              this.emitEvent({
+                type: "run.tool_denied",
+                payload: {
+                  runId: input.run.id,
+                  sessionId: input.session.id,
+                  toolName,
+                  reason,
+                  source: "hook",
+                },
+              });
+              return { decision: "deny", reason };
+            }
+          }
           const planMode = this.isPlanMode();
           const preflight = this.evaluator.preflightCheck({
             toolName,
@@ -801,6 +858,25 @@ export class QueryEngine {
               isError,
             },
           });
+          // Hook: PostToolUse / PostToolUseFailure
+          if (this.hookRegistry?.hasHooks("PostToolUse") || this.hookRegistry?.hasHooks("PostToolUseFailure")) {
+            const hookEvent = isError ? "PostToolUseFailure" : "PostToolUse";
+            void this.hookRegistry.execute(hookEvent as import("@omi/extensions").HookEvent, {
+              event: hookEvent,
+              toolName,
+              toolOutput: output,
+              toolUseId: toolCallId,
+              sessionId: input.session.id,
+              cwd: this.deps.workspaceRoot,
+              error: isError ? JSON.stringify(output) : undefined,
+            });
+          }
+
+          // Check if tool output requested a halt/suspension
+          if (!isError && output?.details && typeof output.details === "object" && (output.details as any).isInterrupt) {
+            this.suspended = true;
+            this.provider.cancel(input.run.id);
+          }
         },
       });
       if (!result) {
@@ -980,7 +1056,7 @@ export class QueryEngine {
       ],
     });
     const systemPrompt = extensionRunner.buildSystemPrompt(baseSystemPrompt);
-    const runtimePrompt = renderRuntimeMessagesForPrompt(extensionRunner.getRuntimeMessages());
+    const runtimePrompt = renderRuntimeMessagesForPrompt(extensionRunner.getRuntimeMessages() as RuntimeMessage[]);
     const effectivePrompt = runtimePrompt.trim().length > 0
       ? `${runtimePrompt}\n\n${input.prompt}`
       : input.prompt;
@@ -1157,6 +1233,22 @@ export class QueryEngine {
     }) as ToolName[];
   }
 
+  /**
+   * Build AgentTool[] for the provider from the tools package.
+   * This is the single place where tool instances are created for provider consumption.
+   */
+  private buildToolsForProvider(workspaceRoot: string, enabledTools?: ToolName[]): import("@mariozechner/pi-agent-core").AgentTool[] {
+    const allTools = createAllTools(workspaceRoot);
+    const toolArray = Object.values(allTools);
+
+    if (!enabledTools || enabledTools.length === 0) {
+      return toolArray;
+    }
+
+    const allowed = new Set(enabledTools);
+    return toolArray.filter((tool) => allowed.has(tool.name));
+  }
+
   // ==========================================================================
   // Compaction
   // ==========================================================================
@@ -1178,6 +1270,7 @@ export class QueryEngine {
       ? {
           sessionId: input.session.id,
           providerConfig: input.providerConfig,
+          model,
           mode: input.mode,
           tokensBefore: plan.tokensBefore,
           tokensKept: plan.tokensKept,
@@ -1188,6 +1281,7 @@ export class QueryEngine {
       : {
           sessionId: input.session.id,
           providerConfig: input.providerConfig,
+          model,
           mode: input.mode,
           tokensBefore: fallbackTokensBefore,
           tokensKept: 0,
@@ -1421,6 +1515,7 @@ export class QueryEngine {
   ): Promise<{ messages: RuntimeMessage[]; didCompact: boolean; snapshot?: SessionCompactionSnapshot }> {
     const pipelineConfig: ContextPipelineConfig = {
       providerConfig,
+      model: createModelFromConfig(providerConfig),
       summarizer: this.deps.compactionSummarizer,
       enableMicroCompact: this.deps.contextPipelineConfig?.enableMicroCompact ?? true,
       enableContextCollapse: this.deps.contextPipelineConfig?.enableContextCollapse ?? true,
@@ -1495,7 +1590,7 @@ export class QueryEngine {
     needsAttention: boolean;
     usageTokens: number;
   } {
-    const budget = createContextBudget(providerConfig);
+    const budget = buildContextBudget(createModelFromConfig(providerConfig));
     const usage = estimateContextTokens(messages);
     if (budget.effectiveContextWindow <= 0) {
       return {

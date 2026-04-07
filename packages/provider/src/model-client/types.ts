@@ -1,6 +1,8 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import type { ProviderConfig } from "@omi/core";
-import type { ToolName } from "@omi/tools";
+
+export type ToolName = string;
 
 // ============================================================================
 // Protocol Types
@@ -183,6 +185,10 @@ export interface ModelClientRunInput {
   systemPrompt?: string;
   providerConfig: ProviderConfig;
   enabledTools?: ToolName[];
+  /** Pre-built tools injected by the agent layer */
+  tools?: AgentTool[];
+  /** Callback to check if a tool requires user approval */
+  requiresApprovalFn?: (toolName: string) => boolean;
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   toolExecutionMode?: "sequential" | "parallel";
   preflightToolCheck?: (

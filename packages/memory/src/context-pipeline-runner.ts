@@ -1,5 +1,5 @@
 import type { ProviderConfig, Session } from "@omi/core";
-import { createModelFromConfig } from "@omi/provider";
+import type { Model, Api } from "@mariozechner/pi-ai";
 
 import {
   buildCompactionPlan,
@@ -19,6 +19,8 @@ import {
 
 export interface ContextPipelineConfig {
   providerConfig: ProviderConfig;
+  /** Pre-resolved model instance (injected by agent layer) */
+  model?: Model<Api>;
   summarizer?: CompactionSummaryGenerator | null;
   enableMicroCompact?: boolean;
   enableContextCollapse?: boolean;
@@ -64,7 +66,10 @@ export class ContextPipeline {
 
   async execute(input: ContextPipelineExecuteInput): Promise<ContextPipelineResult> {
     const usageEstimate = input.usageEstimate ?? estimateContextTokens(input.messages);
-    const model = createModelFromConfig(this.config.providerConfig);
+    if (!this.config.model) {
+      throw new Error('ContextPipelineConfig.model is required. Pass a pre-resolved Model instance.');
+    }
+    const model = this.config.model;
     const maxToolResultTokens = this.config.maxToolResultTokens ?? 2000;
     const collapseHeadroomRatio = this.config.collapseHeadroomRatio ?? 0.15;
     const enableMicroCompact = this.config.enableMicroCompact ?? true;

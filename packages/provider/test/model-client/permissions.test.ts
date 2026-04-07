@@ -3,13 +3,16 @@ import type { ProviderConfig } from "@omi/core";
 
 let lastAgentConfig: any;
 let nextPrompt: ((config: any) => Promise<void>) | null = null;
+let lastSubscriber: ((event: any) => void) | null = null;
 
 vi.mock("@mariozechner/pi-agent-core", () => {
   return {
     Agent: vi.fn().mockImplementation((config: any) => {
       lastAgentConfig = config;
       return {
-        subscribe: vi.fn(),
+        subscribe: vi.fn((handler: (event: any) => void) => {
+          lastSubscriber = handler;
+        }),
         prompt: vi.fn(async () => {
           if (nextPrompt) {
             await nextPrompt(config);
@@ -27,6 +30,7 @@ describe("PiAiModelClient permission integration", () => {
   afterEach(() => {
     lastAgentConfig = undefined;
     nextPrompt = null;
+    lastSubscriber = null;
     vi.clearAllMocks();
   });
 
@@ -42,6 +46,7 @@ describe("PiAiModelClient permission integration", () => {
         historyMessages: [],
         providerConfig: config,
         enabledTools: ["read"],
+        tools: [{ name: "read", label: "read", description: "Read files", parameters: {}, execute: async () => ({}) } as any],
       },
       {},
     );
@@ -152,6 +157,7 @@ describe("PiAiModelClient permission integration", () => {
         prompt: "test",
         historyMessages: [],
         providerConfig: config,
+        requiresApprovalFn: (toolName: string) => toolName === "bash",
       },
       {
         onToolCallStart: async (toolCallId) => {
@@ -214,6 +220,47 @@ describe("PiAiModelClient permission integration", () => {
       reason: "Tool execution rejected by user.",
     });
     expect(onToolDecision).toHaveBeenCalledWith("run_5:tool:read-ask-event", "rejected");
+  });
+
+  it("deduplicates onToolCallStart between preflight hook and normalized start event", async () => {
+    const client = new PiAiModelClient();
+    const config = makeProviderConfig();
+    const onToolCallStart = vi.fn();
+
+    nextPrompt = async (agentConfig: any) => {
+      await agentConfig.beforeToolCall({
+        toolCall: { name: "read", id: "read-start-event" },
+        args: { path: "README.md" },
+      });
+      lastSubscriber?.({
+        type: "tool_execution_start",
+        id: "read-start-event",
+        toolName: "read",
+        args: { path: "README.md" },
+      });
+      await Promise.resolve();
+    };
+
+    await client.run(
+      {
+        runId: "run_6",
+        sessionId: "session_1",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: config,
+      },
+      {
+        onToolCallStart,
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onToolCallStart).toHaveBeenCalledTimes(1);
+    expect(onToolCallStart).toHaveBeenCalledWith(
+      "run_6:tool:read-start-event",
+      "read",
+      { path: "README.md" },
+    );
   });
 });
 

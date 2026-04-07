@@ -1,7 +1,6 @@
 import { completeSimple, getOverflowPatterns, type AssistantMessage, type Model, type Usage } from "@mariozechner/pi-ai";
 import type { ProviderConfig } from "@omi/core";
 
-import { createModelFromConfig } from "@omi/provider";
 import {
   assistantMessageToText,
   compactionSummaryDocumentSchema,
@@ -468,6 +467,8 @@ export interface CompactionPlan {
 export interface CompactionSummaryInput {
   sessionId: string;
   providerConfig: ProviderConfig;
+  /** Pre-resolved model instance (injected by agent layer) */
+  model?: Model<any>;
   mode: CompactionMode;
   tokensBefore: number;
   tokensKept: number;
@@ -684,7 +685,10 @@ function findCutoffIndex(
 async function defaultCompactionSummaryGenerator(
   input: CompactionSummaryInput,
 ): Promise<CompactionSummaryDocument> {
-  const model = createModelFromConfig(input.providerConfig) as Model<any>;
+  if (!input.model) {
+    throw new Error('CompactionSummaryInput.model is required for default summary generation. Pass a pre-resolved Model instance.');
+  }
+  const model = input.model as Model<any>;
   const systemPrompt = [
     "You compact agent history into a structured summary for deterministic recovery.",
     "Return valid JSON only. Do not wrap the JSON in markdown fences.",

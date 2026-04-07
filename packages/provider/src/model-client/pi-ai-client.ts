@@ -7,8 +7,6 @@ import {
 import type { Message } from "@mariozechner/pi-ai";
 import { createHash } from "node:crypto";
 import { createModelFromConfig } from "../model-registry";
-import type { ToolName } from "@omi/tools";
-import { createToolArray, isBuiltInTool, requiresApproval } from "@omi/tools";
 import { ALLOW_TOOL_PREFLIGHT_DECISION } from "./types";
 import type {
   ModelClient,
@@ -143,6 +141,7 @@ export class PiAiModelClient implements ModelClient {
 
     const toolCalls: RuntimeToolCall[] = [];
     this.toolCallsByRun.set(runId, toolCalls);
+    const startedToolCallIds = new Set<string>();
     const context = {
       runId,
       sessionId,
@@ -155,7 +154,7 @@ export class PiAiModelClient implements ModelClient {
       initialState: {
         systemPrompt: systemPrompt ?? "",
         model: createModelFromConfig(providerConfig),
-        tools: this.buildTools(enabledTools),
+        tools: input.tools ?? [],
         messages: historyMessages,
         thinkingLevel: (thinkingLevel ?? "off") as ThinkingLevel,
       } as never,
@@ -189,7 +188,7 @@ export class PiAiModelClient implements ModelClient {
           };
         }
 
-        const requiresReview = preflight.decision === "ask" || this.requiresApproval(toolName);
+        const requiresReview = preflight.decision === "ask" || (input.requiresApprovalFn?.(toolName) ?? false);
 
         toolCalls.push({
           toolCallId,
@@ -199,6 +198,7 @@ export class PiAiModelClient implements ModelClient {
 
         // Emit normalized tool call start event
         await callbacks.onToolCallStart?.(toolCallId, toolName, args);
+        startedToolCallIds.add(toolCallId);
 
         if (!requiresReview) {
           return undefined;
@@ -239,7 +239,7 @@ export class PiAiModelClient implements ModelClient {
       const normalizedEvents = normalizeEvent(event, context);
 
       for (const normalized of normalizedEvents) {
-        void this.emitNormalizedEvent(normalized, callbacks);
+        void this.emitNormalizedEvent(normalized, callbacks, startedToolCallIds);
 
         if (normalized.type === "assistant_delta") {
           latestAssistantText += normalized.delta;
@@ -318,13 +318,17 @@ export class PiAiModelClient implements ModelClient {
   private async emitNormalizedEvent(
     event: ModelStreamEvent,
     callbacks: ModelClientCallbacks,
+    startedToolCallIds: Set<string>,
   ): Promise<void> {
     switch (event.type) {
       case "assistant_delta":
         await callbacks.onTextDelta?.(event.delta);
         break;
       case "tool_call_start":
-        await callbacks.onToolCallStart?.(event.toolCallId, event.toolName, event.input);
+        if (!startedToolCallIds.has(event.toolCallId)) {
+          await callbacks.onToolCallStart?.(event.toolCallId, event.toolName, event.input);
+          startedToolCallIds.add(event.toolCallId);
+        }
         break;
       case "tool_call_end":
         await callbacks.onToolCallEnd?.(
@@ -374,20 +378,6 @@ export class PiAiModelClient implements ModelClient {
     }
   }
 
-  private requiresApproval(toolName: string): boolean {
-    return isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
-  }
-
-  private buildTools(enabledTools?: ToolName[]): AgentTool[] {
-    const allTools = createToolArray("");
-
-    if (!enabledTools || enabledTools.length === 0) {
-      return allTools;
-    }
-
-    const allowed = new Set(enabledTools);
-    return allTools.filter((tool: AgentTool) => allowed.has(tool.name as ToolName));
-  }
 }
 
 /**

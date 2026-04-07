@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
 
 import type { ProviderConfig } from "@omi/core";
@@ -6,7 +7,7 @@ import type { ProviderConfig } from "@omi/core";
 import { createModelFromConfig } from "./model-registry";
 import { PiAiModelClient } from "./model-client/pi-ai-client";
 import type { ModelClientCallbacks, ToolPreflightDecision } from "./model-client/types";
-import { type ToolName, requiresApproval, isBuiltInTool, createAllTools } from "@omi/tools";
+import type { ToolName } from "./model-client/types";
 
 export interface ProviderAdapter {
   run(input: ProviderRunInput): Promise<ProviderRunResult>;
@@ -24,6 +25,10 @@ export interface ProviderRunInput {
   systemPrompt?: string;
   providerConfig: ProviderConfig;
   enabledTools?: ToolName[];
+  /** Pre-built tools injected by the agent layer */
+  tools?: AgentTool[];
+  /** Callback to check if a tool requires user approval */
+  requiresApprovalFn?: (toolName: string) => boolean;
   thinkingLevel?: ThinkingLevel;
   toolExecutionMode?: "sequential" | "parallel";
   preflightToolCheck?: (
@@ -76,7 +81,7 @@ export function buildAgentInitialState(input: ProviderRunInput) {
   return {
     systemPrompt: input.systemPrompt ?? "",
     model: createModelFromConfig(input.providerConfig),
-    tools: buildAgentTools(input.workspaceRoot, input.enabledTools),
+    tools: input.tools ?? [],
     messages: input.historyMessages,
     thinkingLevel: input.thinkingLevel ?? "off",
   };
@@ -109,7 +114,6 @@ export class PiAiProvider implements ProviderAdapter {
           input.onToolStarted?.(toolCallId, toolName);
           return;
         }
-        const requiresReview = isBuiltInTool(toolName) ? requiresApproval(toolName) : false;
         pendingRequested.add(toolCallId);
         await input.onToolRequested?.({
           runId: input.runId,
@@ -117,7 +121,7 @@ export class PiAiProvider implements ProviderAdapter {
           toolCallId,
           toolName,
           input: toolInput,
-          requiresApproval: requiresReview,
+          requiresApproval: input.requiresApprovalFn?.(toolName) ?? false,
         });
       },
       onToolDecision: input.onToolDecision,
@@ -145,6 +149,8 @@ export class PiAiProvider implements ProviderAdapter {
           systemPrompt: input.systemPrompt,
           providerConfig: input.providerConfig,
           enabledTools: input.enabledTools,
+          tools: input.tools,
+          requiresApprovalFn: input.requiresApprovalFn,
           thinkingLevel: input.thinkingLevel,
           toolExecutionMode: input.toolExecutionMode,
           preflightToolCheck: input.preflightToolCheck,
@@ -168,26 +174,6 @@ export class PiAiProvider implements ProviderAdapter {
   rejectTool(toolCallId: string): void {
     this.modelClient.rejectTool(toolCallId);
   }
-}
-
-function buildAgentTools(
-  workspaceRoot: string,
-  enabledTools?: ToolName[],
-): ReturnType<typeof createAllTools> {
-  const allTools = createAllTools(workspaceRoot);
-
-  if (!enabledTools || enabledTools.length === 0) {
-    return allTools;
-  }
-
-  const allowed = new Set(enabledTools);
-  const result: ReturnType<typeof createAllTools> = {};
-  for (const [name, tool] of Object.entries(allTools)) {
-    if (allowed.has(name as ToolName)) {
-      result[name] = tool;
-    }
-  }
-  return result;
 }
 
 function assistantMessageToText(message: AssistantMessage): string {
