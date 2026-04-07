@@ -5,10 +5,10 @@
  * SubAgents share the main workspace by default, with worktree isolation
  * only enabled when explicitly requested or multi-session is active.
  *
- * Architecture reference: open-agent-sdk/src/tools/AgentTool/
+ * Architecture reference: open-agent-sdk/src/tools/OmiTool/
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { TextContent, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { createId, nowIso } from "@omi/core";
@@ -150,7 +150,7 @@ export interface SubAgent {
   state: SubAgentState;
   mailbox: Mailbox;
   abortController: AbortController;
-  tools: AgentTool[];
+  tools: OmiTool[];
 }
 
 /**
@@ -383,7 +383,7 @@ export interface SubAgentManagerConfig {
   workspaceRoot: string;
   mailbox?: Mailbox;
   parentId?: string;
-  getTools?: () => AgentTool[];
+  getTools?: () => OmiTool[];
   getSystemPrompt?: () => string;
   builtInAgents?: BuiltInAgentDefinition[];
   onSubAgentStart?: (subAgent: SubAgent) => void;
@@ -857,7 +857,7 @@ export class SubAgentManager {
       allowedTools?: string[];
       disallowedTools?: string[];
     },
-  ): AgentTool[] {
+  ): OmiTool[] {
     const allTools = this.config.getTools?.() ?? [];
     let filteredTools = allTools;
 
@@ -992,9 +992,9 @@ function makeErrorContent(error: unknown): TextContent {
   };
 }
 
-export function createSubAgentTools(
+export function createSubOmiTools(
   manager: SubAgentManager,
-): AgentTool[] {
+): OmiTool[] {
   return [
     createSpawnTool(manager),
     createSendTool(manager),
@@ -1004,7 +1004,7 @@ export function createSubAgentTools(
   ];
 }
 
-function createSpawnTool(manager: SubAgentManager): AgentTool {
+function createSpawnTool(manager: SubAgentManager): OmiTool {
   return {
     name: "subagent.spawn",
     label: "subagent.spawn",
@@ -1036,7 +1036,7 @@ function createSpawnTool(manager: SubAgentManager): AgentTool {
   };
 }
 
-function createSendTool(manager: SubAgentManager): AgentTool {
+function createSendTool(manager: SubAgentManager): OmiTool {
   return {
     name: "subagent.send",
     label: "subagent.send",
@@ -1078,7 +1078,7 @@ function createSendTool(manager: SubAgentManager): AgentTool {
   };
 }
 
-function createWaitTool(manager: SubAgentManager): AgentTool {
+function createWaitTool(manager: SubAgentManager): OmiTool {
   return {
     name: "subagent.wait",
     label: "subagent.wait",
@@ -1122,7 +1122,7 @@ function createWaitTool(manager: SubAgentManager): AgentTool {
   };
 }
 
-function createCloseTool(manager: SubAgentManager): AgentTool {
+function createCloseTool(manager: SubAgentManager): OmiTool {
   return {
     name: "subagent.close",
     label: "subagent.close",
@@ -1152,7 +1152,7 @@ function createCloseTool(manager: SubAgentManager): AgentTool {
   };
 }
 
-function createListSubAgentsTool(manager: SubAgentManager): AgentTool {
+function createListSubAgentsTool(manager: SubAgentManager): OmiTool {
   return {
     name: "subagent_list",
     label: "subagent_list",

@@ -1234,10 +1234,10 @@ export class QueryEngine {
   }
 
   /**
-   * Build AgentTool[] for the provider from the tools package.
+   * Build OmiTool[] for the provider from the tools package.
    * This is the single place where tool instances are created for provider consumption.
    */
-  private buildToolsForProvider(workspaceRoot: string, enabledTools?: ToolName[]): import("@mariozechner/pi-agent-core").AgentTool[] {
+  private buildToolsForProvider(workspaceRoot: string, enabledTools?: ToolName[]): import("@omi/core").OmiTool[] {
     const allTools = createAllTools(workspaceRoot);
     const toolArray = Object.values(allTools);
 

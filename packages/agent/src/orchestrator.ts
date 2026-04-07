@@ -168,6 +168,24 @@ export class AppOrchestrator {
     };
   }
 
+  updateSessionTitle(sessionId: string, title: string): { session: Session } {
+    const session = this.database.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const trimmedTitle = title.trim();
+    if (!trimmedTitle) {
+      throw new Error("Session title cannot be empty");
+    }
+
+    return {
+      session: this.database.updateSession(sessionId, {
+        title: trimmedTitle,
+      }),
+    };
+  }
+
   getSessionRuntimeState(sessionId: string): SessionRuntimeState {
     const session = this.database.getSession(sessionId);
     if (!session) {
