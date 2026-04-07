@@ -35,6 +35,7 @@ import {
   type EffortLevel,
   getEffortScore,
 } from "./frontmatter";
+import { getBundledSkills } from "./bundled/registry";
 
 // ============================================================================
 // Types
@@ -96,6 +97,8 @@ export async function discoverSkills(options: DiscoveryOptions): Promise<Discove
   const discovered = (
     await Promise.all(roots.map(async (root) => discoverSkillsInRoot(root, options)))
   ).flat();
+
+  discovered.push(...getBundledSkills());
 
   // Deduplicate by realpath identity
   const deduped = new Map<string, DiscoveredSkill>();

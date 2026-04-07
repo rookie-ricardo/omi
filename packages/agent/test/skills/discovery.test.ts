@@ -3,15 +3,18 @@ import {
   searchSkills,
   resolveSkillForPrompt,
 } from "../../src/skills/discovery";
-import { existsSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { clearBundledSkills } from "../../src/skills/bundled/registry";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 describe("discovery", () => {
-  const testWorkspace = "/tmp/test-skill-workspace-discovery";
+  let testWorkspace = "";
 
   beforeEach(() => {
     // Create test workspace
-    mkdirSync(testWorkspace, { recursive: true });
+    clearBundledSkills();
+    testWorkspace = mkdtempSync(join(tmpdir(), "test-skill-workspace-discovery-"));
     mkdirSync(join(testWorkspace, ".agent", "skills"), { recursive: true });
   });
 
@@ -22,6 +25,7 @@ describe("discovery", () => {
     } catch {
       // Ignore cleanup errors
     }
+    clearBundledSkills();
   });
 
   describe("searchSkills", () => {
@@ -38,7 +42,9 @@ description: A skill for testing purposes
 This is a test skill body.`,
       );
 
-      const results = await searchSkills(testWorkspace, "test skill");
+      const results = await searchSkills(testWorkspace, "test skill", {
+        includeUserSkills: false,
+      });
 
       expect(results.length).toBeGreaterThan(0);
       expect(results[0].name).toContain("Test");
@@ -74,7 +80,9 @@ description: For testing purposes
 Testing assistance.`,
       );
 
-      const results = await searchSkills(testWorkspace, "refactor");
+      const results = await searchSkills(testWorkspace, "refactor", {
+        includeUserSkills: false,
+      });
 
       expect(results.length).toBeGreaterThan(0);
       expect(results[0].name).toBe("Refactor Skill");
@@ -102,6 +110,7 @@ Use refactoring patterns and best practices.`,
       const resolved = await resolveSkillForPrompt(
         testWorkspace,
         "refactor this function",
+        { includeUserSkills: false },
       );
 
       expect(resolved).not.toBeNull();
@@ -110,16 +119,14 @@ Use refactoring patterns and best practices.`,
     });
 
     it("should return null when no matching skill", async () => {
-      // The test workspace has no skills, so searching should return null
-      // (unless user has global skills that match)
+      // The test workspace has no skills, so searching should return null.
       const resolved = await resolveSkillForPrompt(
         testWorkspace,
         "zzznomatchxyz999aaa",
+        { includeUserSkills: false },
       );
 
-      // This test may pass or fail depending on user skills
-      // Just verify it doesn't throw
-      expect(typeof resolved).toBe("object");
+      expect(resolved).toBeNull();
     });
 
     it("should filter unsupported tools", async () => {
@@ -141,6 +148,7 @@ Body.`,
       const resolved = await resolveSkillForPrompt(
         testWorkspace,
         "tool skill",
+        { includeUserSkills: false },
       );
 
       expect(resolved).not.toBeNull();

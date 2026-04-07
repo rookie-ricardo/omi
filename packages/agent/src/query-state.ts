@@ -47,7 +47,8 @@ export type TerminalReason =
   | "max_turns"
   | "budget_exceeded"
   | "canceled"
-  | "error";
+  | "error"
+  | "suspended";
 
 /**
  * Tool execution mode: sequential for mutations, parallel for read-only.
@@ -133,6 +134,8 @@ export interface QueryLoopTerminalEvent {
   error: string | null;
   turnCount: number;
   timestamp: string;
+  /** Cost tracking snapshot at termination (null if no tracker configured). */
+  costSnapshot?: unknown;
 }
 
 export type QueryLoopEvent = QueryLoopTransitionEvent | QueryLoopTerminalEvent;
