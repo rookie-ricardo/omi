@@ -5,6 +5,7 @@ import {
   compactionSummaryDocumentSchema,
   providerConfigSchema,
   runSchema,
+  sessionSchema,
   sessionHistoryEntrySchema,
   toolCallSchema,
 } from "@omi/core";
@@ -31,6 +32,11 @@ export const rpcErrorSchema = z.object({
 });
 
 export const sessionCreateParamsSchema = z.object({
+  title: z.string().min(1),
+});
+
+export const sessionTitleUpdateParamsSchema = z.object({
+  sessionId: z.string(),
   title: z.string().min(1),
 });
 
@@ -264,11 +270,15 @@ export const modelListResultSchema = z.object({
 });
 
 export const providerConfigResultSchema = providerConfigSchema;
+export const sessionTitleUpdateResultSchema = z.object({
+  session: sessionSchema,
+});
 
 export const commandMap = {
   "session.create": sessionCreateParamsSchema,
   "session.list": z.object({}).default({}),
   "session.get": z.object({ sessionId: z.string() }),
+  "session.title.update": sessionTitleUpdateParamsSchema,
   "session.runtime.get": z.object({ sessionId: z.string() }),
   "session.branch.create": z.object({
     sessionId: z.string(),
@@ -374,6 +384,7 @@ export const commandMap = {
 } as const;
 
 export const resultSchemas = {
+  "session.title.update": sessionTitleUpdateResultSchema,
   "session.runtime.get": sessionRuntimeGetResultSchema,
   "session.model.switch": sessionModelSwitchResultSchema,
   "provider.config.save": providerConfigResultSchema,
@@ -846,6 +857,7 @@ export type RpcRequest = z.infer<typeof rpcRequestSchema>;
 export type RpcSuccess = z.infer<typeof rpcSuccessSchema>;
 export type RpcError = z.infer<typeof rpcErrorSchema>;
 export type SessionCreateParams = z.infer<typeof sessionCreateParamsSchema>;
+export type SessionTitleUpdateParams = z.infer<typeof sessionTitleUpdateParamsSchema>;
 export type RunStartParams = z.infer<typeof runStartParamsSchema>;
 export type TaskUpdateParams = z.infer<typeof taskUpdateParamsSchema>;
 export type ToolApprovalParams = z.infer<typeof toolApprovalParamsSchema>;
@@ -870,6 +882,7 @@ export type SessionHistoryListParams = z.infer<typeof sessionHistoryListParamsSc
 export type SessionHistoryContinueParams = z.infer<typeof sessionHistoryContinueParamsSchema>;
 export type SessionRuntimeGetResult = z.infer<typeof sessionRuntimeGetResultSchema>;
 export type SessionModelSwitchResult = z.infer<typeof sessionModelSwitchResultSchema>;
+export type SessionTitleUpdateResult = z.infer<typeof sessionTitleUpdateResultSchema>;
 export type ProviderConfigResult = z.infer<typeof providerConfigResultSchema>;
 export type ToolPendingListResult = z.infer<typeof toolPendingListResultSchema>;
 export type ToolListResult = z.infer<typeof toolListResultSchema>;
