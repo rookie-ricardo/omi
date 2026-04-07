@@ -29,6 +29,12 @@ import {
   mcpResourceReadSchema,
 } from "./mcp-resource-tools";
 import {
+  createMcpPromptListTool,
+  createMcpPromptEvalTool,
+  mcpPromptListSchema,
+  mcpPromptEvalSchema,
+} from "./mcp-prompt-tools";
+import {
   createSubagentSpawnTool,
   createSubagentSendTool,
   createSubagentWaitTool,
@@ -66,7 +72,39 @@ import {
   webSearchSchema,
   askUserSchema,
 } from "./web-tools";
-import { getMcpRegistryRuntime, getSubAgentClientRuntime } from "./runtime";
+import { getMcpRegistryRuntime, getSubAgentClientRuntime, getSearchSkillsRuntime } from "./runtime";
+import {
+  createTodoWriteTool,
+  createTodoReadTool,
+  todoWriteSchema,
+  todoReadSchema,
+} from "./todo-tools";
+import {
+  createConfigReadTool,
+  createConfigWriteTool,
+  configReadSchema,
+  configWriteSchema,
+} from "./config-tools";
+import {
+  createDiscoverSkillsTool,
+  discoverSkillsToolSchema,
+} from "./skill-tools";
+import {
+  createBashBackgroundTool,
+  createMonitorTool,
+  bashBackgroundSchema,
+  monitorSchema,
+} from "./monitor-tools";
+import {
+  createTeamCreateTool,
+  createTeamDeleteTool,
+  teamCreateSchema,
+  teamDeleteSchema,
+} from "./team-tools";
+import {
+  createWebBrowserTool,
+  browserSchema,
+} from "./browser-tools";
 
 // ============================================================================
 // Tool Search
@@ -402,6 +440,48 @@ const ENTRIES: BuiltInEntry[] = [
   },
   {
     definition: defineTool(
+      "mcp.prompt.list",
+      "List available MCP prompts.",
+      mcpPromptListSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.MCP_ERROR,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(
+      createMcpPromptListTool({ registry: getMcpRegistryRuntime() ?? createUnavailableMcpRegistry() }),
+      "mcp.prompt.list"
+    ),
+  },
+  {
+    definition: defineTool(
+      "mcp.prompt.eval",
+      "Evaluate a single MCP prompt.",
+      mcpPromptEvalSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [
+          TOOL_ERROR_CODES.MCP_ERROR,
+          TOOL_ERROR_CODES.INVALID_INPUT,
+        ],
+      },
+    ),
+    factory: () => renameTool(
+      createMcpPromptEvalTool({ registry: getMcpRegistryRuntime() ?? createUnavailableMcpRegistry() }),
+      "mcp.prompt.eval"
+    ),
+  },
+  {
+    definition: defineTool(
       "subagent.spawn",
       "Spawn a subagent to execute a task in parallel.",
       subagentSpawnSchema,
@@ -719,6 +799,176 @@ const ENTRIES: BuiltInEntry[] = [
       },
     ),
     factory: () => createAskUserTool(),
+  },
+  {
+    definition: defineTool(
+      "todo.write",
+      "Write/replace the TODO list to track work items, their status, and priority.",
+      todoWriteSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "low",
+        idempotencyPolicy: "conflict",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createTodoWriteTool(),
+  },
+  {
+    definition: defineTool(
+      "todo.read",
+      "Read the current TODO list.",
+      todoReadSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: () => createTodoReadTool(),
+  },
+  {
+    definition: defineTool(
+      "config.read",
+      "Read runtime configuration settings.",
+      configReadSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: () => createConfigReadTool(),
+  },
+  {
+    definition: defineTool(
+      "config.write",
+      "Set a runtime configuration value.",
+      configWriteSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createConfigWriteTool(),
+  },
+  {
+    definition: defineTool(
+      "discover_skills",
+      "Search for available built-in skills, bundled prompts, and MCP-injected skills.",
+      discoverSkillsToolSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: (cwd) => createDiscoverSkillsTool({
+      workspaceRootFactory: () => cwd,
+      searchSkills: async (workspaceRoot, query) => {
+        const fn = getSearchSkillsRuntime();
+        if (!fn) {
+          throw new Error("Search skills runtime is unavailable.");
+        }
+        return fn(workspaceRoot, query);
+      }
+    }),
+  },
+  {
+    definition: defineTool(
+      "bash_background",
+      "Execute a bash command in the background. Returns a jobId that can be used with the monitor tool.",
+      bashBackgroundSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "high",
+        idempotencyPolicy: "none",
+        errorCodes: [
+          TOOL_ERROR_CODES.COMMAND_FAILED,
+          TOOL_ERROR_CODES.INVALID_COMMAND,
+          TOOL_ERROR_CODES.PERMISSION_DENIED,
+        ],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createBashBackgroundTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "monitor",
+      "Monitor the status and fetch the latest output (tail) of a background job.",
+      monitorSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+        auditFields: [...READ_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createMonitorTool(),
+  },
+  {
+    definition: defineTool(
+      "team.create",
+      "Create a Multi-Agent Swarm team by spawning multiple parallel subagents and recording the context.",
+      teamCreateSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [TOOL_ERROR_CODES.TASK_FAILED, TOOL_ERROR_CODES.INVALID_INPUT],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createTeamCreateTool(cwd, () => getSubAgentClientRuntime()),
+  },
+  {
+    definition: defineTool(
+      "team.delete",
+      "Delete a Multi-Agent Swarm team, gracefully closing all its bound subagents.",
+      teamDeleteSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [TOOL_ERROR_CODES.TASK_FAILED, TOOL_ERROR_CODES.INVALID_INPUT],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createTeamDeleteTool(cwd, () => getSubAgentClientRuntime()),
+  },
+  {
+    definition: defineTool(
+      "web.browser",
+      "Launch a headless browser (Playwright) to navigate to a URL and perform an action.",
+      browserSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [TOOL_ERROR_CODES.NETWORK_ERROR, TOOL_ERROR_CODES.INVALID_INPUT],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: (cwd) => createWebBrowserTool(cwd),
   },
 ];
 

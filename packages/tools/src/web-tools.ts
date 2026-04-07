@@ -136,7 +136,7 @@ export function createWebSearchTool(): AgentTool<typeof webSearchSchema, { query
   };
 }
 
-export function createAskUserTool(): AgentTool<typeof askUserSchema, { question: string; choices?: string[]; waitingForUser: true }> {
+export function createAskUserTool(): AgentTool<typeof askUserSchema, { question: string; choices?: string[]; waitingForUser: true; isInterrupt: true }> {
   return {
     name: "ask_user",
     label: "ask_user",
@@ -150,7 +150,7 @@ export function createAskUserTool(): AgentTool<typeof askUserSchema, { question:
       }
       return {
         content: [{ type: "text" as const, text: toTextSummary(lines) }],
-        details: { question, choices, waitingForUser: true as const },
+        details: { question, choices, waitingForUser: true as const, isInterrupt: true as const },
       };
     },
   };

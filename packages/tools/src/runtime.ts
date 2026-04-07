@@ -3,11 +3,13 @@ import { createId, nowIso, type Task } from "@omi/core";
 import type { McpRegistry } from "@omi/provider";
 
 import type { SubAgentManagerClient } from "./subagent";
+import type { SearchSkillsFn } from "./skill-tools";
 
 export interface ToolRuntimeContext {
   mcpRegistry?: McpRegistry | null;
   subAgentClient?: SubAgentManagerClient | null;
   taskRuntime?: TaskToolRuntime | null;
+  searchSkills?: SearchSkillsFn | null;
 }
 
 const runtimeContextStorage = new AsyncLocalStorage<ToolRuntimeContext>();
@@ -202,4 +204,18 @@ export function resetTaskToolRuntime(): void {
 
 export function createInMemoryTaskToolRuntime(): TaskToolRuntime {
   return new InMemoryTaskToolRuntime();
+}
+
+// ============================================================================
+// Skill Runtime
+// ============================================================================
+
+let globalSearchSkills: SearchSkillsFn | null = null;
+
+export function getSearchSkillsRuntime(): SearchSkillsFn | null {
+  return getCurrentToolRuntimeContext()?.searchSkills ?? globalSearchSkills;
+}
+
+export function setSearchSkillsRuntime(fn: SearchSkillsFn | null): void {
+  globalSearchSkills = fn;
 }
