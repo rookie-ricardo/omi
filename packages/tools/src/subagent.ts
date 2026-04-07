@@ -8,7 +8,7 @@
  */
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { TextContent, Static, TSchema } from "@mariozechner/pi-ai";
+import type { TextContent, Static } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 
 // ============================================================================
@@ -18,7 +18,7 @@ import { Type } from "@mariozechner/pi-ai";
 /**
  * Schema for spawning a new SubAgent.
  */
-export const subagentSpawnSchema: TSchema = Type.Object({
+export const subagentSpawnSchema = Type.Object({
   name: Type.Optional(Type.String({
     description: "Human-readable name for the subagent (e.g., 'code-reviewer', 'test-writer')",
   })),
@@ -46,7 +46,7 @@ export type SubagentSpawnInput = Static<typeof subagentSpawnSchema>;
 /**
  * Schema for sending a message to a SubAgent.
  */
-export const subagentSendSchema: TSchema = Type.Object({
+export const subagentSendSchema = Type.Object({
   subAgentId: Type.String({
     description: "The ID of the subagent to send the message to",
   }),
@@ -63,7 +63,7 @@ export type SubagentSendInput = Static<typeof subagentSendSchema>;
 /**
  * Schema for waiting for a SubAgent to complete.
  */
-export const subagentWaitSchema: TSchema = Type.Object({
+export const subagentWaitSchema = Type.Object({
   subAgentId: Type.String({
     description: "The ID of the subagent to wait for",
   }),
@@ -77,7 +77,7 @@ export type SubagentWaitInput = Static<typeof subagentWaitSchema>;
 /**
  * Schema for closing a SubAgent.
  */
-export const subagentCloseSchema: TSchema = Type.Object({
+export const subagentCloseSchema = Type.Object({
   subAgentId: Type.String({
     description: "The ID of the subagent to close",
   }),
@@ -91,7 +91,7 @@ export type SubagentCloseInput = Static<typeof subagentCloseSchema>;
 /**
  * Schema for listing SubAgents.
  */
-export const subagentListSchema: TSchema = Type.Object({
+export const subagentListSchema = Type.Object({
   status: Type.Optional(Type.String({
     description: "Filter by status: 'pending', 'running', 'waiting', 'completed', 'failed', 'closed'",
   })),
@@ -105,7 +105,7 @@ export type SubagentListInput = Static<typeof subagentListSchema>;
 /**
  * Schema for getting SubAgent details.
  */
-export const subagentGetSchema: TSchema = Type.Object({
+export const subagentGetSchema = Type.Object({
   subAgentId: Type.String({
     description: "The ID of the subagent to get details for",
   }),
@@ -116,7 +116,7 @@ export type SubagentGetInput = Static<typeof subagentGetSchema>;
 /**
  * Schema for delegating work to a SubAgent (combined spawn and send).
  */
-export const subagentDelegateSchema: TSchema = Type.Object({
+export const subagentDelegateSchema = Type.Object({
   name: Type.Optional(Type.String({
     description: "Human-readable name for the subagent",
   })),
@@ -216,7 +216,7 @@ export function createSubagentSpawnTool(
     description: "Spawn a new SubAgent to execute a task in parallel. The SubAgent will start working immediately after spawning. Use subagent.wait to wait for completion or subagent.list to monitor progress.",
     parameters: subagentSpawnSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentSpawnInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
@@ -254,7 +254,7 @@ export function createSubagentSendTool(
     description: "Send a message to a running SubAgent. Use this to provide additional instructions or context to the subagent.",
     parameters: subagentSendSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentSendInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
@@ -301,7 +301,7 @@ export function createSubagentWaitTool(
     description: "Wait for a SubAgent to complete its task. Returns the result when the subagent finishes or reports back. Optionally accepts a timeout.",
     parameters: subagentWaitSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentWaitInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
@@ -351,7 +351,7 @@ export function createSubagentCloseTool(
     description: "Close a SubAgent, optionally forcing termination. Use force=true to immediately terminate without waiting for the current task to complete.",
     parameters: subagentCloseSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentCloseInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
@@ -391,7 +391,7 @@ export function createSubagentListTool(
     description: "List all SubAgents, optionally filtered by status or parent agent. Use this to monitor the status of spawned subagents.",
     parameters: subagentListSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentListInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
@@ -454,7 +454,7 @@ export function createSubagentGetTool(
     description: "Get detailed information about a specific SubAgent by its ID.",
     parameters: subagentGetSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentGetInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
@@ -517,7 +517,7 @@ export function createSubagentDelegateTool(
     description: "Delegate a task to a SubAgent and optionally wait for completion. This is a convenience tool that combines spawn and wait into a single operation. Returns the subagent's result when complete or on timeout.",
     parameters: subagentDelegateSchema,
     execute: async (_toolCallId, params: unknown) => {
-      const typedParams: any = params ?? {};
+      const typedParams = (params ?? {}) as SubagentDelegateInput;
       const client = getClient();
       if (!client) {
         throw new Error("SubAgent runtime is not configured");
