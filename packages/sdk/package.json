@@ -1,0 +1,30 @@
+{
+  "name": "@omi/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "High-level Agent SDK for OMI — createAgent() + query() streaming API",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@omi/agent": "workspace:*",
+    "@omi/core": "workspace:*",
+    "@omi/store": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "vitest": "^3.1.1"
+  }
+}

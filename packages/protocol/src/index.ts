@@ -474,7 +474,7 @@ export const resultSchemas = {
 } as const;
 
 // Branch schemas
-export const sessionBranchSchema = z.object({
+export const rpcSessionBranchSchema = z.object({
   id: z.string(),
   name: z.string(),
   sessionId: z.string(),
@@ -485,17 +485,17 @@ export const sessionBranchSchema = z.object({
 
 export const sessionBranchListResultSchema = z.object({
   sessionId: z.string(),
-  branches: z.array(sessionBranchSchema),
+  branches: z.array(rpcSessionBranchSchema),
 });
 
 export const sessionBranchCreateResultSchema = z.object({
   sessionId: z.string(),
-  branch: sessionBranchSchema,
+  branch: rpcSessionBranchSchema,
 });
 
 export const sessionBranchSwitchResultSchema = z.object({
   sessionId: z.string(),
-  branch: sessionBranchSchema,
+  branch: rpcSessionBranchSchema,
   previousBranchId: z.string().nullable(),
 });
 
@@ -878,7 +878,9 @@ export type ModelListResult = z.infer<typeof modelListResultSchema>;
 export type SessionHistoryListResult = z.infer<typeof sessionHistoryListResultSchema>;
 
 // Branch types
-export type SessionBranch = z.infer<typeof sessionBranchSchema>;
+export type RpcSessionBranch = z.infer<typeof rpcSessionBranchSchema>;
+/** @deprecated Use RpcSessionBranch instead */
+export type SessionBranch = RpcSessionBranch;
 export type SessionBranchListResult = z.infer<typeof sessionBranchListResultSchema>;
 export type SessionBranchCreateResult = z.infer<typeof sessionBranchCreateResultSchema>;
 export type SessionBranchSwitchResult = z.infer<typeof sessionBranchSwitchResultSchema>;
