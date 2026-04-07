@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "node:fs/promises";
@@ -42,7 +42,7 @@ export interface WriteToolOptions {
 	operations?: WriteOperations;
 }
 
-export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentTool<typeof writeSchema, WriteToolDetails> {
+export function createWriteTool(cwd: string, options?: WriteToolOptions): OmiTool<typeof writeSchema, WriteToolDetails> {
 	const ops = options?.operations ?? createLocalWriteOperations();
 
 	return {
@@ -126,4 +126,4 @@ export function createWriteTool(cwd: string, options?: WriteToolOptions): AgentT
 }
 
 /** Default write tool using process.cwd() - for backwards compatibility */
-export const writeTool: AgentTool<typeof writeSchema, WriteToolDetails> = createWriteTool(process.cwd());
+export const writeTool: OmiTool<typeof writeSchema, WriteToolDetails> = createWriteTool(process.cwd());

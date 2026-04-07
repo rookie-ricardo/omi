@@ -23,7 +23,7 @@ describe("find 工具", () => {
   });
 
   describe("createFindTool", () => {
-    it("应该创建一个 AgentTool 对象", () => {
+    it("应该创建一个 OmiTool 对象", () => {
       const tool = createFindTool(testDir);
       expect(tool).toBeDefined();
       expect(tool.name).toBe("glob");

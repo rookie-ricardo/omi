@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { ImageContent, TextContent, Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { constants } from "node:fs";
@@ -51,7 +51,7 @@ export interface ReadToolOptions {
 	operations?: ReadOperations;
 }
 
-export function createReadTool(cwd: string, options?: ReadToolOptions): AgentTool<typeof readSchema, ReadToolDetails> {
+export function createReadTool(cwd: string, options?: ReadToolOptions): OmiTool<typeof readSchema, ReadToolDetails> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const ops = options?.operations ?? createLocalReadOperations();
 
@@ -225,4 +225,4 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): AgentToo
 }
 
 /** Default read tool using process.cwd() - for backwards compatibility */
-export const readTool: AgentTool<typeof readSchema, ReadToolDetails> = createReadTool(process.cwd());
+export const readTool: OmiTool<typeof readSchema, ReadToolDetails> = createReadTool(process.cwd());

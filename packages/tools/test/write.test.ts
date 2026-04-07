@@ -17,7 +17,7 @@ describe("write 工具", () => {
   });
 
   describe("createWriteTool", () => {
-    it("应该创建一个 AgentTool 对象", () => {
+    it("应该创建一个 OmiTool 对象", () => {
       const tool = createWriteTool(testDir);
       expect(tool).toBeDefined();
       expect(tool.name).toBe("write");
@@ -105,7 +105,7 @@ describe("write 工具", () => {
         content: "Hello",
       });
 
-      expect(result.details.bytes).toBe(5);
+      expect(result.details!.bytes).toBe(5);
     });
 
     it("应该能写入多行内容", async () => {
@@ -170,7 +170,7 @@ describe("write 工具", () => {
         content: "",
       });
       expect((result.content[0] as { type: "text"; text: string }).text).toContain("Successfully wrote");
-      expect(result.details.bytes).toBe(0);
+      expect(result.details!.bytes).toBe(0);
     });
 
     it("应该能写入 Unicode 内容", async () => {
@@ -193,7 +193,7 @@ describe("write 工具", () => {
         content: largeContent,
       }) as { details: { bytes: number } };
 
-      expect(result.details.bytes).toBe(10000);
+      expect(result.details!.bytes).toBe(10000);
     });
   });
 
@@ -234,7 +234,7 @@ describe("write 工具", () => {
         path: "ascii.txt",
         content: "Hello",
       });
-      expect(result.details.bytes).toBe(5);
+      expect(result.details!.bytes).toBe(5);
     });
 
     it("应该正确计算 Unicode 字节", async () => {
@@ -244,7 +244,7 @@ describe("write 工具", () => {
         content: "你好",
       });
       // UTF-8 中 "你好" 是 6 字节
-      expect(result.details.bytes).toBe(6);
+      expect(result.details!.bytes).toBe(6);
     });
 
     it("应该正确计算混合内容字节", async () => {
@@ -254,7 +254,7 @@ describe("write 工具", () => {
         content: "Hello 世界 123",
       });
       // 计算实际字节数
-      expect(result.details.bytes).toBe(Buffer.byteLength("Hello 世界 123", "utf-8"));
+      expect(result.details!.bytes).toBe(Buffer.byteLength("Hello 世界 123", "utf-8"));
     });
   });
 });

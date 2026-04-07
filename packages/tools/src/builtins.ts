@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 
 import {
@@ -118,7 +118,7 @@ export interface ToolSearchInput {
   query: string;
 }
 
-function createToolSearchTool(): AgentTool {
+function createToolSearchTool(): OmiTool {
   return {
     name: "tool.search",
     label: "tool.search",
@@ -145,13 +145,13 @@ function createToolSearchTool(): AgentTool {
 // ============================================================================
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type BuiltInToolFactory = (cwd: string) => AgentTool<any>;
+type BuiltInToolFactory = (cwd: string) => OmiTool<any>;
 
 const READ_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash"];
 const WRITE_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash", "retryCount"];
 const CACHED_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash", "cached"];
 
-function renameTool<T extends AgentTool>(tool: T, name: string): T {
+function renameTool<T extends OmiTool>(tool: T, name: string): T {
   return {
     ...tool,
     name,
@@ -1033,6 +1033,6 @@ export function findTools(query: string): ToolDefinition[] {
   });
 }
 
-export function createBuiltInToolMap(cwd: string): Record<string, AgentTool> {
+export function createBuiltInToolMap(cwd: string): Record<string, OmiTool> {
   return getBuiltInToolRegistry().createMap(cwd);
 }

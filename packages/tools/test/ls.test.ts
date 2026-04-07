@@ -17,7 +17,7 @@ describe("ls 工具", () => {
   });
 
   describe("createLsTool", () => {
-    it("应该创建一个 AgentTool 对象", () => {
+    it("应该创建一个 OmiTool 对象", () => {
       const tool = createLsTool(testDir);
       expect(tool).toBeDefined();
       expect(tool.name).toBe("ls");
@@ -155,7 +155,7 @@ describe("ls 工具", () => {
       const tool = createLsTool(testDir);
 
       const result = await tool.execute("call-id", { limit: 3 });
-      expect(result.details.entryLimitReached).toBe(3);
+      expect(result.details!.entryLimitReached).toBe(3);
     });
 
     it("应该包含限制通知", async () => {

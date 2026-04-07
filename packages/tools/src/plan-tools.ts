@@ -5,7 +5,7 @@
  * Note: These tools depend on external PlanMode implementation.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import type { TextContent } from "@mariozechner/pi-ai";
 
@@ -85,7 +85,7 @@ export interface PlanToolsConfig {
 /**
  * Create Enter Plan tool.
  */
-export function createEnterPlanTool(config: PlanToolsConfig): AgentTool<typeof enterPlanSchema> {
+export function createEnterPlanTool(config: PlanToolsConfig): OmiTool<typeof enterPlanSchema> {
   return {
     name: ENTER_PLAN_TOOL,
     label: ENTER_PLAN_TOOL,
@@ -131,7 +131,7 @@ export function createEnterPlanTool(config: PlanToolsConfig): AgentTool<typeof e
 /**
  * Create Exit Plan tool.
  */
-export function createExitPlanTool(config: PlanToolsConfig): AgentTool<typeof exitPlanSchema> {
+export function createExitPlanTool(config: PlanToolsConfig): OmiTool<typeof exitPlanSchema> {
   return {
     name: EXIT_PLAN_TOOL,
     label: EXIT_PLAN_TOOL,
@@ -187,7 +187,7 @@ export function createExitPlanTool(config: PlanToolsConfig): AgentTool<typeof ex
 /**
  * Create Approve Plan tool.
  */
-export function createApprovePlanTool(config: PlanToolsConfig): AgentTool<typeof approvePlanSchema> {
+export function createApprovePlanTool(config: PlanToolsConfig): OmiTool<typeof approvePlanSchema> {
   return {
     name: APPROVE_PLAN_TOOL,
     label: APPROVE_PLAN_TOOL,
@@ -247,7 +247,7 @@ export function createApprovePlanTool(config: PlanToolsConfig): AgentTool<typeof
 /**
  * Create Reject Plan tool.
  */
-export function createRejectPlanTool(config: PlanToolsConfig): AgentTool<typeof rejectPlanSchema> {
+export function createRejectPlanTool(config: PlanToolsConfig): OmiTool<typeof rejectPlanSchema> {
   return {
     name: REJECT_PLAN_TOOL,
     label: REJECT_PLAN_TOOL,
@@ -307,7 +307,7 @@ export function createRejectPlanTool(config: PlanToolsConfig): AgentTool<typeof 
 /**
  * Create List Plan Steps tool.
  */
-export function createListPlanStepsTool(config: PlanToolsConfig): AgentTool<typeof listPlanStepsSchema> {
+export function createListPlanStepsTool(config: PlanToolsConfig): OmiTool<typeof listPlanStepsSchema> {
   return {
     name: LIST_PLAN_STEPS_TOOL,
     label: LIST_PLAN_STEPS_TOOL,
@@ -385,12 +385,12 @@ export function createListPlanStepsTool(config: PlanToolsConfig): AgentTool<type
  * Create all plan mode tools.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createPlanTools(config: PlanToolsConfig): AgentTool<any>[] {
+export function createPlanTools(config: PlanToolsConfig): OmiTool<any>[] {
   return [
-    createEnterPlanTool(config) as AgentTool<any>,
-    createExitPlanTool(config) as AgentTool<any>,
-    createApprovePlanTool(config) as AgentTool<any>,
-    createRejectPlanTool(config) as AgentTool<any>,
-    createListPlanStepsTool(config) as AgentTool<any>,
+    createEnterPlanTool(config) as OmiTool<any>,
+    createExitPlanTool(config) as OmiTool<any>,
+    createApprovePlanTool(config) as OmiTool<any>,
+    createRejectPlanTool(config) as OmiTool<any>,
+    createListPlanStepsTool(config) as OmiTool<any>,
   ];
 }

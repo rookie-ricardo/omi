@@ -3,7 +3,7 @@ import { createWriteStream, existsSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type, type Static } from "@mariozechner/pi-ai";
 import { getShellConfig, getShellEnv, killProcessTree } from "./shell.js";
 import { parseToolInput } from "./input-parse.js";
@@ -48,7 +48,7 @@ export const monitorSchema = Type.Object({
 // Tool Factories
 // ============================================================================
 
-export function createBashBackgroundTool(cwd: string): AgentTool<typeof bashBackgroundSchema, { jobId: string; pid?: number; logFile: string }> {
+export function createBashBackgroundTool(cwd: string): OmiTool<typeof bashBackgroundSchema, { jobId: string; pid?: number; logFile: string }> {
   return {
     name: "bash_background",
     label: "bash_background",
@@ -130,7 +130,7 @@ export function createBashBackgroundTool(cwd: string): AgentTool<typeof bashBack
   };
 }
 
-export function createMonitorTool(): AgentTool<typeof monitorSchema, { jobId: string; status: string; exitCode: number | null; outputTail: string }> {
+export function createMonitorTool(): OmiTool<typeof monitorSchema, { jobId: string; status: string; exitCode: number | null; outputTail: string }> {
   return {
     name: "monitor",
     label: "monitor",

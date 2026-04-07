@@ -7,7 +7,7 @@
  * explicitly enabled or multi-session is active.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { TextContent, Static } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 
@@ -209,7 +209,7 @@ function makeTextContent(text: string): TextContent {
  */
 export function createSubagentSpawnTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_SPAWN_TOOL,
     label: SUBAGENT_SPAWN_TOOL,
@@ -247,7 +247,7 @@ export function createSubagentSpawnTool(
  */
 export function createSubagentSendTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_SEND_TOOL,
     label: SUBAGENT_SEND_TOOL,
@@ -294,7 +294,7 @@ export function createSubagentSendTool(
  */
 export function createSubagentWaitTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_WAIT_TOOL,
     label: SUBAGENT_WAIT_TOOL,
@@ -344,7 +344,7 @@ export function createSubagentWaitTool(
  */
 export function createSubagentCloseTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_CLOSE_TOOL,
     label: SUBAGENT_CLOSE_TOOL,
@@ -384,7 +384,7 @@ export function createSubagentCloseTool(
  */
 export function createSubagentListTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_LIST_TOOL,
     label: SUBAGENT_LIST_TOOL,
@@ -447,7 +447,7 @@ export function createSubagentListTool(
  */
 export function createSubagentGetTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_GET_TOOL,
     label: SUBAGENT_GET_TOOL,
@@ -510,7 +510,7 @@ export function createSubagentGetTool(
  */
 export function createSubagentDelegateTool(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool {
+): OmiTool {
   return {
     name: SUBAGENT_DELEGATE_TOOL,
     label: SUBAGENT_DELEGATE_TOOL,
@@ -585,7 +585,7 @@ export function createSubagentDelegateTool(
  */
 export function createSubagentTools(
   getClient: () => SubAgentManagerClient | null,
-): AgentTool[] {
+): OmiTool[] {
   return [
     createSubagentSpawnTool(getClient),
     createSubagentSendTool(getClient),

@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 
 import { parseToolInput } from "./input-parse";
@@ -128,7 +128,7 @@ function toTextRecord(record: TaskToolRecord): string {
     .join("\n");
 }
 
-export function createTaskCreateTool(): AgentTool<typeof taskCreateSchema, TaskToolDetails> {
+export function createTaskCreateTool(): OmiTool<typeof taskCreateSchema, TaskToolDetails> {
   return {
     name: "task.create",
     label: "task.create",
@@ -146,7 +146,7 @@ export function createTaskCreateTool(): AgentTool<typeof taskCreateSchema, TaskT
   };
 }
 
-export function createTaskUpdateTool(): AgentTool<typeof taskUpdateSchema, TaskToolDetails> {
+export function createTaskUpdateTool(): OmiTool<typeof taskUpdateSchema, TaskToolDetails> {
   return {
     name: "task.update",
     label: "task.update",
@@ -170,7 +170,7 @@ export function createTaskUpdateTool(): AgentTool<typeof taskUpdateSchema, TaskT
   };
 }
 
-export function createTaskGetTool(): AgentTool<typeof taskGetSchema, TaskToolDetails> {
+export function createTaskGetTool(): OmiTool<typeof taskGetSchema, TaskToolDetails> {
   return {
     name: "task.get",
     label: "task.get",
@@ -194,7 +194,7 @@ export function createTaskGetTool(): AgentTool<typeof taskGetSchema, TaskToolDet
   };
 }
 
-export function createTaskListTool(): AgentTool<typeof taskListSchema, TaskToolDetails> {
+export function createTaskListTool(): OmiTool<typeof taskListSchema, TaskToolDetails> {
   return {
     name: "task.list",
     label: "task.list",
@@ -218,7 +218,7 @@ export function createTaskListTool(): AgentTool<typeof taskListSchema, TaskToolD
   };
 }
 
-export function createTaskStopTool(): AgentTool<typeof taskStopSchema, TaskToolDetails> {
+export function createTaskStopTool(): OmiTool<typeof taskStopSchema, TaskToolDetails> {
   return {
     name: "task.stop",
     label: "task.stop",
@@ -242,7 +242,7 @@ export function createTaskStopTool(): AgentTool<typeof taskStopSchema, TaskToolD
   };
 }
 
-export function createTaskOutputTool(): AgentTool<typeof taskOutputSchema, TaskToolDetails> {
+export function createTaskOutputTool(): OmiTool<typeof taskOutputSchema, TaskToolDetails> {
   return {
     name: "task.output",
     label: "task.output",
@@ -267,7 +267,7 @@ export function createTaskOutputTool(): AgentTool<typeof taskOutputSchema, TaskT
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createTaskTools(): AgentTool<any>[] {
+export function createTaskTools(): OmiTool<any>[] {
   return [
     createTaskCreateTool(),
     createTaskUpdateTool(),

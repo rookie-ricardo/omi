@@ -5,7 +5,7 @@
  * by the agent. These tools integrate with the MCP registry.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { TextContent, Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import type { McpRegistry } from "@omi/provider";
@@ -90,7 +90,7 @@ function isMissingMcpRegistryRuntimeError(error: unknown): boolean {
  */
 export function createMcpResourceListTool(
   config: McpResourceToolsConfig
-): AgentTool<typeof mcpResourceListSchema, McpResourceToolDetails> {
+): OmiTool<typeof mcpResourceListSchema, McpResourceToolDetails> {
   return {
     name: MCP_RESOURCE_LIST_TOOL,
     label: MCP_RESOURCE_LIST_TOOL,
@@ -172,7 +172,7 @@ export function createMcpResourceListTool(
  */
 export function createMcpResourceReadTool(
   config: McpResourceToolsConfig
-): AgentTool<typeof mcpResourceReadSchema, McpResourceToolDetails> {
+): OmiTool<typeof mcpResourceReadSchema, McpResourceToolDetails> {
   return {
     name: MCP_RESOURCE_READ_TOOL,
     label: MCP_RESOURCE_READ_TOOL,
@@ -229,7 +229,7 @@ export function createMcpResourceReadTool(
  */
 export function createMcpResourceTools(
   config: McpResourceToolsConfig
-): AgentTool<typeof mcpResourceListSchema | typeof mcpResourceReadSchema, McpResourceToolDetails>[] {
+): OmiTool<typeof mcpResourceListSchema | typeof mcpResourceReadSchema, McpResourceToolDetails>[] {
   return [
     createMcpResourceListTool(config),
     createMcpResourceReadTool(config),

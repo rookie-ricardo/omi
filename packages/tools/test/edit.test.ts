@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { createEditTool, createLocalEditOperations, type EditOperations, type EditToolOptions } from "../src/edit";
 
 describe("edit 工具", () => {
@@ -18,7 +18,7 @@ describe("edit 工具", () => {
   });
 
   describe("createEditTool", () => {
-    it("应该创建一个 AgentTool 对象", () => {
+    it("应该创建一个 OmiTool 对象", () => {
       const tool = createEditTool(testDir);
       expect(tool).toBeDefined();
       expect(tool.name).toBe("edit");
@@ -88,7 +88,7 @@ describe("edit 工具", () => {
 
       const textContent = result.content.find((c) => c.type === "text");
       expect(textContent?.text).toContain("Successfully replaced");
-      expect(result.details.diff).toBeDefined();
+      expect(result.details!.diff).toBeDefined();
 
       // 验证文件已修改
       const ops = createLocalEditOperations();
@@ -124,9 +124,9 @@ describe("edit 工具", () => {
         newText: "Modified",
       });
 
-      expect(result.details.diff).toBeDefined();
-      expect(result.details.diff).toContain("Original");
-      expect(result.details.diff).toContain("Modified");
+      expect(result.details!.diff).toBeDefined();
+      expect(result.details!.diff).toContain("Original");
+      expect(result.details!.diff).toContain("Modified");
     });
 
     it("应该返回 firstChangedLine", async () => {
@@ -140,7 +140,7 @@ describe("edit 工具", () => {
         newText: "Modified Line 2",
       });
 
-      expect(result.details.firstChangedLine).toBeDefined();
+      expect(result.details!.firstChangedLine).toBeDefined();
     });
   });
 

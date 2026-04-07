@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -49,7 +49,7 @@ export interface LsToolOptions {
 	operations?: LsOperations;
 }
 
-export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<typeof lsSchema, LsToolDetails> {
+export function createLsTool(cwd: string, options?: LsToolOptions): OmiTool<typeof lsSchema, LsToolDetails> {
 	const ops = options?.operations ?? createLocalLsOperations();
 
 	return {
@@ -176,4 +176,4 @@ export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<ty
 }
 
 /** Default ls tool using process.cwd() - for backwards compatibility */
-export const lsTool: AgentTool<typeof lsSchema, LsToolDetails> = createLsTool(process.cwd());
+export const lsTool: OmiTool<typeof lsSchema, LsToolDetails> = createLsTool(process.cwd());

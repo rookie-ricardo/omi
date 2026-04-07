@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { constants } from "node:fs";
@@ -14,7 +14,7 @@ import {
 } from "./edit-diff.js";
 import { resolveToCwd } from "./path-utils.js";
 
-// TypeBox schema for AgentTool
+// TypeBox schema for OmiTool
 export const editSchema: TSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 	oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
@@ -59,7 +59,7 @@ export interface EditToolOptions {
 	operations?: EditOperations;
 }
 
-export function createEditTool(cwd: string, options?: EditToolOptions): AgentTool<typeof editSchema, EditToolDetails> {
+export function createEditTool(cwd: string, options?: EditToolOptions): OmiTool<typeof editSchema, EditToolDetails> {
 	const ops = options?.operations ?? createLocalEditOperations();
 
 	return {
@@ -232,4 +232,4 @@ export function createEditTool(cwd: string, options?: EditToolOptions): AgentToo
 }
 
 /** Default edit tool using process.cwd() - for backwards compatibility */
-export const editTool: AgentTool<typeof editSchema, EditToolDetails> = createEditTool(process.cwd());
+export const editTool: OmiTool<typeof editSchema, EditToolDetails> = createEditTool(process.cwd());

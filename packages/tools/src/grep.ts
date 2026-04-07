@@ -1,5 +1,5 @@
 import { createInterface } from "node:readline";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { spawn } from "node:child_process";
@@ -66,7 +66,7 @@ export interface GrepToolOptions {
 	operations?: GrepOperations;
 }
 
-export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentTool<typeof grepSchema, GrepToolDetails> {
+export function createGrepTool(cwd: string, options?: GrepToolOptions): OmiTool<typeof grepSchema, GrepToolDetails> {
 	const customOps = options?.operations;
 
 	return {
@@ -341,4 +341,4 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): AgentToo
 }
 
 /** Default grep tool using process.cwd() - for backwards compatibility */
-export const grepTool: AgentTool<typeof grepSchema, GrepToolDetails> = createGrepTool(process.cwd());
+export const grepTool: OmiTool<typeof grepSchema, GrepToolDetails> = createGrepTool(process.cwd());

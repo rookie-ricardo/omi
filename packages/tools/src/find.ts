@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { spawnSync } from "node:child_process";
@@ -59,7 +59,7 @@ export interface FindToolOptions {
 	operations?: FindOperations;
 }
 
-export function createFindTool(cwd: string, options?: FindToolOptions): AgentTool<typeof findSchema, FindToolDetails> {
+export function createFindTool(cwd: string, options?: FindToolOptions): OmiTool<typeof findSchema, FindToolDetails> {
 	const customOps = options?.operations;
 
 	return {
@@ -330,4 +330,4 @@ export function createFindTool(cwd: string, options?: FindToolOptions): AgentToo
 }
 
 /** Default glob tool using process.cwd() */
-export const findTool: AgentTool<typeof findSchema, FindToolDetails> = createFindTool(process.cwd());
+export const findTool: OmiTool<typeof findSchema, FindToolDetails> = createFindTool(process.cwd());

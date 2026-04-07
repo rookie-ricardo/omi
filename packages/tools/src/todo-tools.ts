@@ -6,7 +6,7 @@
  * Enables the agent to track work items, their status, and priority.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse";
 import { getTaskToolRuntime } from "./runtime";
@@ -78,7 +78,7 @@ export function clearTodoItems(sessionId?: string): void {
 // Tool Factory
 // ============================================================================
 
-export function createTodoWriteTool(sessionId?: string): AgentTool {
+export function createTodoWriteTool(sessionId?: string): OmiTool {
 	return {
 		name: "todo.write",
 		label: "todo.write",
@@ -146,7 +146,7 @@ export const todoReadSchema = Type.Object({});
 
 export interface TodoReadInput {}
 
-export function createTodoReadTool(sessionId?: string): AgentTool {
+export function createTodoReadTool(sessionId?: string): OmiTool {
 	return {
 		name: "todo.read",
 		label: "todo.read",

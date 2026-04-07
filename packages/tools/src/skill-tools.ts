@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse";
 
@@ -29,7 +29,7 @@ export interface DiscoverSkillsDependencies {
   searchSkills: SearchSkillsFn;
 }
 
-export function createDiscoverSkillsTool(deps: DiscoverSkillsDependencies): AgentTool<any> {
+export function createDiscoverSkillsTool(deps: DiscoverSkillsDependencies): OmiTool<any> {
   return {
     name: "discover_skills",
     label: "discover_skills",

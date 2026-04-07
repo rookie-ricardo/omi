@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { Static, TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { spawn } from "node:child_process";
@@ -171,7 +171,7 @@ export interface BashToolOptions {
 	spawnHook?: BashSpawnHook;
 }
 
-export function createBashTool(cwd: string, options?: BashToolOptions): AgentTool<typeof bashSchema, BashToolDetails> {
+export function createBashTool(cwd: string, options?: BashToolOptions): OmiTool<typeof bashSchema, BashToolDetails> {
 	const ops = options?.operations ?? createLocalBashOperations();
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
@@ -326,4 +326,4 @@ export function createBashTool(cwd: string, options?: BashToolOptions): AgentToo
 }
 
 /** Default bash tool using process.cwd() - for backwards compatibility */
-export const bashTool: AgentTool<typeof bashSchema, BashToolDetails> = createBashTool(process.cwd());
+export const bashTool: OmiTool<typeof bashSchema, BashToolDetails> = createBashTool(process.cwd());

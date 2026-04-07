@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse";
 
@@ -74,7 +74,7 @@ function parseSearchResults(html: string, limit: number): Array<{ title: string;
 // Tool Factories
 // ============================================================================
 
-export function createWebFetchTool(): AgentTool<typeof webFetchSchema, { url?: string; status?: number; contentType?: string; title?: string; body?: string }> {
+export function createWebFetchTool(): OmiTool<typeof webFetchSchema, { url?: string; status?: number; contentType?: string; title?: string; body?: string }> {
   return {
     name: "web.fetch",
     label: "web.fetch",
@@ -109,7 +109,7 @@ export function createWebFetchTool(): AgentTool<typeof webFetchSchema, { url?: s
   };
 }
 
-export function createWebSearchTool(): AgentTool<typeof webSearchSchema, { query: string; results: Array<{ title: string; url: string; snippet?: string }> }> {
+export function createWebSearchTool(): OmiTool<typeof webSearchSchema, { query: string; results: Array<{ title: string; url: string; snippet?: string }> }> {
   return {
     name: "web.search",
     label: "web.search",
@@ -136,7 +136,7 @@ export function createWebSearchTool(): AgentTool<typeof webSearchSchema, { query
   };
 }
 
-export function createAskUserTool(): AgentTool<typeof askUserSchema, { question: string; choices?: string[]; waitingForUser: true; isInterrupt: true }> {
+export function createAskUserTool(): OmiTool<typeof askUserSchema, { question: string; choices?: string[]; waitingForUser: true; isInterrupt: true }> {
   return {
     name: "ask_user",
     label: "ask_user",
@@ -157,7 +157,7 @@ export function createAskUserTool(): AgentTool<typeof askUserSchema, { question:
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createWebTools(): AgentTool<any>[] {
+export function createWebTools(): OmiTool<any>[] {
   return [
     createWebFetchTool(),
     createWebSearchTool(),

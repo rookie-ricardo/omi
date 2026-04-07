@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { spawn } from "node:child_process";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse.js";
 
@@ -71,7 +71,7 @@ async function ensurePlaywright(cwd: string, onUpdate?: (delta: any) => void): P
 // Tool Factory
 // ============================================================================
 
-export function createWebBrowserTool(cwd: string): AgentTool<typeof browserSchema, any> {
+export function createWebBrowserTool(cwd: string): OmiTool<typeof browserSchema, any> {
   return {
     name: "web.browser",
     label: "web.browser",

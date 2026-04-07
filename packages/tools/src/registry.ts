@@ -7,7 +7,7 @@
  * - Default tool sets
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 
 import type {
   ToolDefinition,
@@ -122,8 +122,8 @@ export const PLAN_MODE_TOOL_NAMES = new Set(["read", "ls", "grep", "glob"]);
 
 export interface ToolRegistryEntry {
   definition: ToolDefinition;
-  /** Factory function to create the AgentTool instance. */
-  factory: (cwd: string) => AgentTool;
+  /** Factory function to create the OmiTool instance. */
+  factory: (cwd: string) => OmiTool;
 }
 
 export interface ToolRegistry {
@@ -139,10 +139,10 @@ export interface ToolRegistry {
   listAll(): ToolDefinition[];
   /** List tool definitions matching a filter. */
   list(filter?: ToolFilter): ToolDefinition[];
-  /** Create all AgentTool instances matching a filter. */
-  createAll(cwd: string, filter?: ToolFilter): AgentTool[];
-  /** Create a map of tool names to AgentTool instances. */
-  createMap(cwd: string, filter?: ToolFilter): Record<string, AgentTool>;
+  /** Create all OmiTool instances matching a filter. */
+  createAll(cwd: string, filter?: ToolFilter): OmiTool[];
+  /** Create a map of tool names to OmiTool instances. */
+  createMap(cwd: string, filter?: ToolFilter): Record<string, OmiTool>;
   /** Check if a tool is registered. */
   has(name: string): boolean;
 }
@@ -180,19 +180,19 @@ export function createToolRegistry(): ToolRegistry {
       return all.filter(filter);
     },
 
-    createAll(cwd: string, filter?: ToolFilter): AgentTool[] {
+    createAll(cwd: string, filter?: ToolFilter): OmiTool[] {
       const defs = this.list(filter);
       return defs
         .map((def) => {
           const entry = entries.get(def.name);
           return entry ? entry.factory(cwd) : null;
         })
-        .filter((t): t is AgentTool => t !== null);
+        .filter((t): t is OmiTool => t !== null);
     },
 
-    createMap(cwd: string, filter?: ToolFilter): Record<string, AgentTool> {
+    createMap(cwd: string, filter?: ToolFilter): Record<string, OmiTool> {
       const tools = this.createAll(cwd, filter);
-      const map: Record<string, AgentTool> = {};
+      const map: Record<string, OmiTool> = {};
       for (const tool of tools) {
         map[tool.name] = tool;
       }
@@ -235,7 +235,7 @@ export function resetGlobalRegistry(): void {
  * Used by tools that need standardized error handling.
  */
 export async function executeWithStructuredOutput(
-  tool: AgentTool,
+  tool: OmiTool,
   callId: string,
   rawInput: unknown,
 ): Promise<ToolOutput> {

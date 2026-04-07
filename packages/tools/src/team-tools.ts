@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse.js";
 import type { SubAgentManagerClient } from "./subagent.js";
@@ -48,7 +48,7 @@ function getTeamFilePath(cwd: string, teamName: string): string {
 export function createTeamCreateTool(
   cwd: string,
   getClient: () => SubAgentManagerClient | null
-): AgentTool<typeof teamCreateSchema, { teamName: string; file: string; subAgents: any[] }> {
+): OmiTool<typeof teamCreateSchema, { teamName: string; file: string; subAgents: any[] }> {
   return {
     name: "team.create",
     label: "team.create",
@@ -101,7 +101,7 @@ export function createTeamCreateTool(
 export function createTeamDeleteTool(
   cwd: string,
   getClient: () => SubAgentManagerClient | null
-): AgentTool<typeof teamDeleteSchema, { teamName: string; closedCount: number }> {
+): OmiTool<typeof teamDeleteSchema, { teamName: string; closedCount: number }> {
   return {
     name: "team.delete",
     label: "team.delete",

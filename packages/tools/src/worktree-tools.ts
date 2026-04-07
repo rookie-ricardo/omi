@@ -5,7 +5,7 @@
  * Note: These tools depend on external WorktreeMode implementation.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import type { TextContent } from "@mariozechner/pi-ai";
 
@@ -76,7 +76,7 @@ export interface WorktreeToolsConfig {
 /**
  * Create Enter Worktree tool.
  */
-export function createEnterWorktreeTool(config: WorktreeToolsConfig): AgentTool<typeof enterWorktreeSchema> {
+export function createEnterWorktreeTool(config: WorktreeToolsConfig): OmiTool<typeof enterWorktreeSchema> {
   return {
     name: ENTER_WORKTREE_TOOL,
     label: ENTER_WORKTREE_TOOL,
@@ -118,7 +118,7 @@ export function createEnterWorktreeTool(config: WorktreeToolsConfig): AgentTool<
 /**
  * Create Exit Worktree tool.
  */
-export function createExitWorktreeTool(config: WorktreeToolsConfig): AgentTool<typeof exitWorktreeSchema> {
+export function createExitWorktreeTool(config: WorktreeToolsConfig): OmiTool<typeof exitWorktreeSchema> {
   return {
     name: EXIT_WORKTREE_TOOL,
     label: EXIT_WORKTREE_TOOL,
@@ -179,7 +179,7 @@ export function createExitWorktreeTool(config: WorktreeToolsConfig): AgentTool<t
 /**
  * Create List Worktrees tool.
  */
-export function createListWorktreesTool(config: WorktreeToolsConfig): AgentTool<typeof listWorktreesSchema> {
+export function createListWorktreesTool(config: WorktreeToolsConfig): OmiTool<typeof listWorktreesSchema> {
   return {
     name: LIST_WORKTREES_TOOL,
     label: LIST_WORKTREES_TOOL,
@@ -253,7 +253,7 @@ export function createListWorktreesTool(config: WorktreeToolsConfig): AgentTool<
  */
 export function createCheckWorktreeChangesTool(
   config: WorktreeToolsConfig
-): AgentTool<typeof checkWorktreeChangesSchema> {
+): OmiTool<typeof checkWorktreeChangesSchema> {
   return {
     name: CHECK_WORKTREE_CHANGES_TOOL,
     label: CHECK_WORKTREE_CHANGES_TOOL,
@@ -344,11 +344,11 @@ export function createCheckWorktreeChangesTool(
  * Create all worktree tools.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createWorktreeTools(config: WorktreeToolsConfig): AgentTool<any>[] {
+export function createWorktreeTools(config: WorktreeToolsConfig): OmiTool<any>[] {
   return [
-    createEnterWorktreeTool(config) as AgentTool<any>,
-    createExitWorktreeTool(config) as AgentTool<any>,
-    createListWorktreesTool(config) as AgentTool<any>,
-    createCheckWorktreeChangesTool(config) as AgentTool<any>,
+    createEnterWorktreeTool(config) as OmiTool<any>,
+    createExitWorktreeTool(config) as OmiTool<any>,
+    createListWorktreesTool(config) as OmiTool<any>,
+    createCheckWorktreeChangesTool(config) as OmiTool<any>,
   ];
 }

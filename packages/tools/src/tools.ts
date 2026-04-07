@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 
 import {
   createBuiltInToolMap,
@@ -45,19 +45,19 @@ export function listBuiltInToolNames(): ToolName[] {
 
 /**
  * Create all coding tools configured for a specific working directory.
- * Returns a Record mapping tool names to AgentTool instances.
+ * Returns a Record mapping tool names to OmiTool instances.
  */
-export function createAllTools(cwd: string, sessionId?: string): Record<string, AgentTool> {
+export function createAllTools(cwd: string, sessionId?: string): Record<string, OmiTool> {
   const tools = createBuiltInToolMap(cwd);
-  tools.enter_worktree = createEnterWorktreeTool(cwd, sessionId ?? "") as AgentTool;
-  tools.exit_worktree = createExitWorktreeTool(sessionId ?? "") as AgentTool;
+  tools.enter_worktree = createEnterWorktreeTool(cwd, sessionId ?? "") as OmiTool;
+  tools.exit_worktree = createExitWorktreeTool(sessionId ?? "") as OmiTool;
   return tools;
 }
 
 /**
  * Create all tools as an array for direct use with Agent.setTools().
  */
-export function createToolArray(cwd: string): AgentTool[] {
+export function createToolArray(cwd: string): OmiTool[] {
   return Object.values(createAllTools(cwd));
 }
 

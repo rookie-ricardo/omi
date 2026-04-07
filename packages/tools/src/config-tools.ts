@@ -9,7 +9,7 @@
  * - Notification settings
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse";
 
@@ -77,7 +77,7 @@ export function resetConfig(): void {
 // Tool Factories
 // ============================================================================
 
-export function createConfigReadTool(): AgentTool {
+export function createConfigReadTool(): OmiTool {
 	return {
 		name: "config.read",
 		label: "config.read",
@@ -120,7 +120,7 @@ export function createConfigReadTool(): AgentTool {
 	};
 }
 
-export function createConfigWriteTool(): AgentTool {
+export function createConfigWriteTool(): OmiTool {
 	return {
 		name: "config.write",
 		label: "config.write",

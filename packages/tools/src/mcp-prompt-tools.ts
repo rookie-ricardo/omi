@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse";
 import type { McpRegistry } from "@omi/provider";
@@ -21,7 +21,7 @@ export interface McpPromptToolsDependencies {
   registry: McpRegistry;
 }
 
-export function createMcpPromptListTool(deps: McpPromptToolsDependencies): AgentTool<any> {
+export function createMcpPromptListTool(deps: McpPromptToolsDependencies): OmiTool<any> {
   return {
     name: "mcp.prompt.list",
     label: "mcp.prompt.list",
@@ -53,7 +53,7 @@ export function createMcpPromptListTool(deps: McpPromptToolsDependencies): Agent
   };
 }
 
-export function createMcpPromptEvalTool(deps: McpPromptToolsDependencies): AgentTool<any> {
+export function createMcpPromptEvalTool(deps: McpPromptToolsDependencies): OmiTool<any> {
   return {
     name: "mcp.prompt.eval",
     label: "mcp.prompt.eval",

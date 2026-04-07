@@ -23,7 +23,7 @@ describe("grep 工具", () => {
   });
 
   describe("createGrepTool", () => {
-    it("应该创建一个 AgentTool 对象", () => {
+    it("应该创建一个 OmiTool 对象", () => {
       const tool = createGrepTool(testDir);
       expect(tool).toBeDefined();
       expect(tool.name).toBe("grep");

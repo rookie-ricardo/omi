@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { writeFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import type { TextContent, ImageContent } from "@mariozechner/pi-ai";
 import { createReadTool, createLocalReadOperations, type ReadOperations, type ReadToolOptions } from "../src/read";
 
@@ -19,7 +19,7 @@ describe("read 工具", () => {
   });
 
   describe("createReadTool", () => {
-    it("应该创建一个 AgentTool 对象", () => {
+    it("应该创建一个 OmiTool 对象", () => {
       const tool = createReadTool(testDir);
       expect(tool).toBeDefined();
       expect(tool.name).toBe("read");
