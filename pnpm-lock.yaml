@@ -231,15 +231,9 @@ importers:
 
   packages/extensions:
     dependencies:
-      '@mariozechner/pi-agent-core':
-        specifier: ^0.58.4
-        version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
-      '@mariozechner/pi-ai':
-        specifier: ^0.58.4
-        version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
-      '@omi/memory':
+      '@omi/core':
         specifier: workspace:*
-        version: link:../memory
+        version: link:../core
     devDependencies:
       tsup:
         specifier: ^8.4.0
@@ -256,9 +250,6 @@ importers:
       '@omi/core':
         specifier: workspace:*
         version: link:../core
-      '@omi/provider':
-        specifier: workspace:*
-        version: link:../provider
       yaml:
         specifier: ^2.8.2
         version: 2.8.2
@@ -316,9 +307,6 @@ importers:
       '@omi/core':
         specifier: workspace:*
         version: link:../core
-      '@omi/tools':
-        specifier: workspace:*
-        version: link:../tools
       '@sinclair/typebox':
         specifier: ^0.34.49
         version: 0.34.49
@@ -334,6 +322,25 @@ importers:
       minimist:
         specifier: ^1.2.8
         version: 1.2.8
+    devDependencies:
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      vitest:
+        specifier: ^3.1.1
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/sdk:
+    dependencies:
+      '@omi/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@omi/core':
+        specifier: workspace:*
+        version: link:../core
+      '@omi/store':
+        specifier: workspace:*
+        version: link:../store
     devDependencies:
       tsup:
         specifier: ^8.4.0
@@ -397,9 +404,6 @@ importers:
       '@omi/core':
         specifier: workspace:*
         version: link:../core
-      '@omi/settings':
-        specifier: workspace:*
-        version: link:../settings
       '@silvia-odwyer/photon-node':
         specifier: ^0.3.4
         version: 0.3.4
