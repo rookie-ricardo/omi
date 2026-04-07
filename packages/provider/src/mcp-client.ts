@@ -109,6 +109,19 @@ export interface McpResourceContent {
 }
 
 /**
+ * MCP prompt definition.
+ */
+export interface McpPrompt {
+  name: string;
+  description?: string;
+  arguments?: {
+    name: string;
+    description?: string;
+    required?: boolean;
+  }[];
+}
+
+/**
  * MCP tool call result.
  */
 export interface McpToolResult {
@@ -116,6 +129,25 @@ export interface McpToolResult {
   isError?: boolean;
   _meta?: Record<string, unknown>;
   structuredContent?: unknown;
+}
+
+/**
+ * MCP server capabilities.
+ */
+export interface McpPromptMessage {
+  role: "user" | "assistant";
+  content: {
+    type: "text";
+    text: string;
+  } | {
+    type: "resource";
+    resource: McpResourceContent;
+  };
+}
+
+export interface McpGetPromptResult {
+  description?: string;
+  messages: McpPromptMessage[];
 }
 
 /**
@@ -158,6 +190,8 @@ export interface McpClientOptions {
   onToolsChanged?: (tools: McpTool[], serverId: string) => void;
   /** On resources changed callback */
   onResourcesChanged?: (resources: McpResource[], serverId: string) => void;
+  /** On prompts changed callback */
+  onPromptsChanged?: (prompts: McpPrompt[], serverId: string) => void;
 }
 
 // ============================================================================
@@ -178,6 +212,10 @@ export interface McpClient {
   getTools(): McpTool[];
   /** Get available resources */
   getResources(): McpResource[];
+  /** Get available prompts */
+  getPrompts(): McpPrompt[];
+  /** Evaluate a prompt */
+  getPrompt(name: string, args?: Record<string, string>): Promise<McpGetPromptResult>;
   /** Connect to the server */
   connect(): Promise<void>;
   /** Disconnect from the server */
@@ -212,6 +250,7 @@ export class McpClientImpl implements McpClient {
   private capabilities: McpCapabilities | null = null;
   private tools: McpTool[] = [];
   private resources: McpResource[] = [];
+  private prompts: McpPrompt[] = [];
   private instructions: string | null = null;
 
   private readonly config: McpServerConfig;
@@ -221,6 +260,7 @@ export class McpClientImpl implements McpClient {
   private readonly onError?: (error: Error, serverId: string) => void;
   private readonly onToolsChanged?: (tools: McpTool[], serverId: string) => void;
   private readonly onResourcesChanged?: (resources: McpResource[], serverId: string) => void;
+  private readonly onPromptsChanged?: (prompts: McpPrompt[], serverId: string) => void;
   private disconnectPromise: Promise<void> | null = null;
 
   constructor(options: McpClientOptions) {
@@ -251,6 +291,10 @@ export class McpClientImpl implements McpClient {
 
   getResources(): McpResource[] {
     return [...this.resources];
+  }
+
+  getPrompts(): McpPrompt[] {
+    return [...this.prompts];
   }
 
   async connect(): Promise<void> {
@@ -322,6 +366,7 @@ export class McpClientImpl implements McpClient {
       // Fetch initial tools and resources
       await this.refreshTools();
       await this.refreshResources();
+      await this.refreshPrompts();
     } catch (error) {
       await this.closeClientAndTransport();
       this.applyErrorState(error, "disconnected");
@@ -342,6 +387,7 @@ export class McpClientImpl implements McpClient {
       this.instructions = null;
       this.tools = [];
       this.resources = [];
+      this.prompts = [];
       this.setState("disconnected");
     })();
 
@@ -434,6 +480,29 @@ export class McpClientImpl implements McpClient {
       ) as ListResourcesResult;
 
       return result.resources ?? [];
+    } catch (error) {
+      this.applyErrorState(error);
+      this.handleError(this.normalizeError(error));
+      throw error;
+    }
+  }
+
+  async getPrompt(name: string, args?: Record<string, string>): Promise<McpGetPromptResult> {
+    if (this.state !== "connected" || !this.client) {
+      throw new Error(`MCP server ${this.config.id}: not connected`);
+    }
+
+    try {
+      const result = await this.client.request(
+        {
+          method: "prompts/get",
+          params: { name, arguments: args },
+        },
+        // @ts-expect-error - GetPromptResult schema type doesn't perfectly match
+        { method: "prompts/get" }
+      ) as McpGetPromptResult;
+
+      return result;
     } catch (error) {
       this.applyErrorState(error);
       this.handleError(this.normalizeError(error));
@@ -596,6 +665,32 @@ export class McpClientImpl implements McpClient {
     } catch (error) {
       this.applyErrorState(error);
       console.error(`[MCP ${this.config.id}] Failed to refresh resources:`, error);
+    }
+  }
+
+  private async refreshPrompts(): Promise<void> {
+    if (this.state !== "connected" || !this.client) return;
+
+    try {
+      if (!this.capabilities?.prompts) {
+        this.prompts = [];
+        return;
+      }
+
+      const result = await this.client.request(
+        { method: "prompts/list" },
+        ListPromptsResultSchema
+      ) as ListPromptsResult;
+
+      const prevPrompts = this.prompts;
+      this.prompts = result.prompts ?? [];
+
+      if (JSON.stringify(prevPrompts) !== JSON.stringify(this.prompts)) {
+        this.onPromptsChanged?.(this.prompts, this.config.id);
+      }
+    } catch (error) {
+      this.applyErrorState(error);
+      console.error(`[MCP ${this.config.id}] Failed to refresh prompts:`, error);
     }
   }
 

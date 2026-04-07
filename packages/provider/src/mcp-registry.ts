@@ -15,6 +15,9 @@ import type {
   McpResourceContent,
   McpServerConfig,
   McpTool,
+  McpPrompt,
+  McpPromptMessage,
+  McpGetPromptResult,
   McpToolResult,
 } from "./mcp-client";
 import { createMcpClient } from "./mcp-client";
@@ -61,6 +64,7 @@ export interface McpRegistryOptions {
 export interface McpAggregatedCatalog {
   tools: Array<{ serverId: string; serverName: string; tool: McpTool }>;
   resources: Array<{ serverId: string; serverName: string; resource: McpResource }>;
+  prompts: Array<{ serverId: string; serverName: string; prompt: McpPrompt }>;
 }
 
 // ============================================================================
@@ -368,6 +372,64 @@ export class McpRegistry {
   }
 
   // --------------------------------------------------------------------------
+  // Prompt Access
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get prompts from a specific server.
+   */
+  getPrompts(serverId: string): McpPrompt[] {
+    const entry = this.servers.get(serverId);
+    if (!entry || entry.state !== "connected") {
+      return [];
+    }
+
+    return entry.client.getPrompts();
+  }
+
+  /**
+   * Get prompts from all connected servers.
+   */
+  getAllPrompts(): Array<{ serverId: string; serverName: string; prompt: McpPrompt }> {
+    const prompts: Array<{ serverId: string; serverName: string; prompt: McpPrompt }> = [];
+
+    for (const [serverId, entry] of this.servers) {
+      if (entry.state !== "connected") continue;
+
+      const serverPrompts = entry.client.getPrompts();
+      for (const prompt of serverPrompts) {
+        prompts.push({
+          serverId,
+          serverName: entry.config.name,
+          prompt,
+        });
+      }
+    }
+
+    return prompts;
+  }
+
+  /**
+   * Evaluate a prompt on a specific server.
+   */
+  async getPrompt(
+    serverId: string,
+    promptName: string,
+    args?: Record<string, string>
+  ): Promise<McpGetPromptResult> {
+    const entry = this.servers.get(serverId);
+    if (!entry) {
+      throw new Error(`MCP server ${serverId} is not registered`);
+    }
+
+    if (entry.state !== "connected") {
+      throw new Error(`MCP server ${serverId} is not connected`);
+    }
+
+    return entry.client.getPrompt(promptName, args);
+  }
+
+  // --------------------------------------------------------------------------
   // Aggregation
   // --------------------------------------------------------------------------
 
@@ -378,6 +440,7 @@ export class McpRegistry {
     return {
       tools: this.getAllTools(),
       resources: this.getAllResources(),
+      prompts: this.getAllPrompts(),
     };
   }
 
