@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import {
 	wrapRegisteredTool,
 	wrapRegisteredTools,
@@ -39,7 +39,7 @@ const createMockRegisteredTool = (name: string): RegisteredTool => ({
 });
 
 describe("wrapRegisteredTool - 单个工具包装", () => {
-	it("应该包装工具为 AgentTool 格式", () => {
+	it("应该包装工具为 OmiTool 格式", () => {
 		const registeredTool = createMockRegisteredTool("testTool");
 		const runner = createMockRunner();
 

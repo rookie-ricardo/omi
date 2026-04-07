@@ -1,5 +1,5 @@
 // Local type definitions - extensions package has minimal dependencies
-// These match the shapes used from @omi/memory and pi-ai/pi-agent-core
+// These match the shapes used from @omi/memory and @mariozechner/pi-ai
 
 /** Minimal message type for extension context */
 export interface ExtensionMessage {
