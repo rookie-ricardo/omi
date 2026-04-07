@@ -1,0 +1,393 @@
+import { beforeEach, describe, expect, it } from "vitest";
+
+import type { GitRepoState, ProviderConfig, Session, SessionMessage, Task, ToolCall } from "@omi/core";
+import type { ModelListResult } from "@omi/protocol";
+
+import type { RunnerGateway } from "../../src/renderer/lib/runner-gateway";
+import { setRunnerGatewayForTests } from "../../src/renderer/lib/runner-gateway";
+import {
+  deriveThreadTitle,
+  useWorkspaceStore,
+} from "../../src/renderer/store/workspace-store";
+
+interface MockData {
+  sessions: Session[];
+  detailsBySession: Record<string, { session: Session; messages: SessionMessage[]; tasks: Task[] }>;
+  runtimeBySession: Record<string, unknown>;
+  pendingBySession: Record<string, ToolCall[]>;
+  gitState: GitRepoState;
+  modelCatalog: ModelListResult;
+  dialogPaths: string[];
+}
+
+function createGatewayMock(): { gateway: RunnerGateway; getCalls: () => Array<{ method: string; params: unknown }> } {
+  const now = "2026-04-07T09:00:00.000Z";
+  let sessionCounter = 3;
+  const calls: Array<{ method: string; params: unknown }> = [];
+
+  const providerConfig: ProviderConfig = {
+    id: "provider_1",
+    name: "OpenAI",
+    type: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "test-key",
+    model: "gpt-5.4",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const data: MockData = {
+    sessions: [
+      {
+        id: "session_1",
+        title: "thread one",
+        status: "idle",
+        createdAt: now,
+        updatedAt: now,
+        latestUserMessage: "请帮我审查这个页面",
+        latestAssistantMessage: null,
+      },
+      {
+        id: "session_2",
+        title: "thread two",
+        status: "idle",
+        createdAt: now,
+        updatedAt: now,
+        latestUserMessage: "把字体调大一点",
+        latestAssistantMessage: null,
+      },
+    ],
+    detailsBySession: {
+      session_1: {
+        session: {
+          id: "session_1",
+          title: "thread one",
+          status: "idle",
+          createdAt: now,
+          updatedAt: now,
+          latestUserMessage: "请帮我审查这个页面",
+          latestAssistantMessage: null,
+        },
+        messages: [
+          {
+            id: "m_1",
+            sessionId: "session_1",
+            role: "user",
+            content: "请帮我审查这个页面",
+            createdAt: now,
+          },
+        ],
+        tasks: [],
+      },
+      session_2: {
+        session: {
+          id: "session_2",
+          title: "thread two",
+          status: "idle",
+          createdAt: now,
+          updatedAt: now,
+          latestUserMessage: "把字体调大一点",
+          latestAssistantMessage: null,
+        },
+        messages: [
+          {
+            id: "m_2",
+            sessionId: "session_2",
+            role: "user",
+            content: "把字体调大一点",
+            createdAt: now,
+          },
+        ],
+        tasks: [],
+      },
+    },
+    runtimeBySession: {
+      session_1: {
+        sessionId: "session_1",
+        activeRunId: null,
+        pendingRunIds: [],
+        queuedRuns: [],
+        blockedRunId: null,
+        blockedToolCallId: null,
+        pendingApprovalToolCallIds: [],
+        interruptedRunIds: [],
+        selectedProviderConfigId: "provider_1",
+        lastUserPrompt: null,
+        lastAssistantResponse: null,
+        lastActivityAt: now,
+        compaction: {
+          status: "idle",
+          reason: null,
+          requestedAt: null,
+          updatedAt: now,
+          lastSummary: null,
+          lastCompactedAt: null,
+          error: null,
+        },
+      },
+      session_2: {
+        sessionId: "session_2",
+        activeRunId: null,
+        pendingRunIds: [],
+        queuedRuns: [],
+        blockedRunId: null,
+        blockedToolCallId: null,
+        pendingApprovalToolCallIds: [],
+        interruptedRunIds: [],
+        selectedProviderConfigId: "provider_1",
+        lastUserPrompt: null,
+        lastAssistantResponse: null,
+        lastActivityAt: now,
+        compaction: {
+          status: "idle",
+          reason: null,
+          requestedAt: null,
+          updatedAt: now,
+          lastSummary: null,
+          lastCompactedAt: null,
+          error: null,
+        },
+      },
+    },
+    pendingBySession: {
+      session_1: [],
+      session_2: [],
+    },
+    gitState: {
+      hasRepository: true,
+      root: "/Users/zhangyanqi/IdeaProjects/omi",
+      branch: "main",
+      files: [],
+    },
+    modelCatalog: {
+      providerConfigs: [providerConfig],
+      builtInProviders: [],
+    },
+    dialogPaths: ["/Users/zhangyanqi/Documents/demo-folder"],
+  };
+
+  const gateway: RunnerGateway = {
+    invoke: (async (method, params) => {
+      calls.push({ method, params });
+      switch (method) {
+        case "session.list":
+          return data.sessions as never;
+        case "session.get": {
+          const sessionId = (params as { sessionId: string }).sessionId;
+          return data.detailsBySession[sessionId] as never;
+        }
+        case "session.runtime.get": {
+          const sessionId = (params as { sessionId: string }).sessionId;
+          return {
+            sessionId,
+            runtime: data.runtimeBySession[sessionId],
+          } as never;
+        }
+        case "tool.pending.list": {
+          const sessionId = (params as { sessionId: string }).sessionId;
+          return {
+            sessionId,
+            runtime: data.runtimeBySession[sessionId],
+            pendingToolCalls: data.pendingBySession[sessionId] ?? [],
+          } as never;
+        }
+        case "git.status":
+          return data.gitState as never;
+        case "git.diff":
+          return {
+            path: (params as { path: string }).path,
+            status: "modified",
+            leftTitle: "left",
+            rightTitle: "right",
+            rows: [],
+          } as never;
+        case "model.list":
+          return data.modelCatalog as never;
+        case "session.create": {
+          const title = (params as { title: string }).title;
+          const sessionId = `session_${sessionCounter++}`;
+          const session: Session = {
+            id: sessionId,
+            title,
+            status: "idle",
+            createdAt: now,
+            updatedAt: now,
+            latestUserMessage: null,
+            latestAssistantMessage: null,
+          };
+          data.sessions = [session, ...data.sessions];
+          data.detailsBySession[sessionId] = {
+            session,
+            messages: [],
+            tasks: [],
+          };
+          data.runtimeBySession[sessionId] = data.runtimeBySession.session_1;
+          data.pendingBySession[sessionId] = [];
+          return session as never;
+        }
+        case "run.start":
+          return {
+            id: "run_1",
+            sessionId: (params as { sessionId: string }).sessionId,
+          } as never;
+        case "tool.approve":
+          return { ok: true } as never;
+        case "tool.reject":
+          return { ok: true } as never;
+        case "session.title.update": {
+          const { sessionId, title } = params as { sessionId: string; title: string };
+          const session = data.sessions.find((item) => item.id === sessionId);
+          if (!session) {
+            throw new Error("session not found");
+          }
+          session.title = title;
+          data.detailsBySession[sessionId].session.title = title;
+          return { session } as never;
+        }
+        default:
+          return {} as never;
+      }
+    }) as RunnerGateway["invoke"],
+    subscribe: ((listener: (event: { type: string; payload: Record<string, unknown> }) => void) => {
+      void listener;
+      return () => undefined;
+    }) as RunnerGateway["subscribe"],
+    showOpenDialog: (async () => ({
+      canceled: false,
+      filePaths: data.dialogPaths,
+      bookmarks: [],
+    })) as RunnerGateway["showOpenDialog"],
+  };
+
+  return {
+    gateway,
+    getCalls() {
+      return calls;
+    },
+  };
+}
+
+describe("workspace store", () => {
+  beforeEach(() => {
+    setRunnerGatewayForTests(null);
+    useWorkspaceStore.getState().resetForTests();
+  });
+
+  it("initializes mock folders and supports add/remove real folders with reassignment", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+    const initialState = useWorkspaceStore.getState();
+    expect(initialState.folders.some((folder) => folder.kind === "mock")).toBe(true);
+
+    await useWorkspaceStore.getState().addFolderFromDialog();
+    const withRealFolder = useWorkspaceStore.getState();
+    const realFolder = withRealFolder.folders.find((folder) => folder.kind === "real");
+    expect(realFolder).toBeDefined();
+
+    const sessionId = withRealFolder.sessions[0]?.id;
+    if (!sessionId || !realFolder) {
+      throw new Error("missing expected session/folder in test");
+    }
+
+    useWorkspaceStore.setState((state) => ({
+      folderAssignments: {
+        ...state.folderAssignments,
+        [sessionId]: realFolder.id,
+      },
+    }));
+
+    useWorkspaceStore.getState().removeFolder(realFolder.id);
+    const finalState = useWorkspaceStore.getState();
+    expect(finalState.folders.find((folder) => folder.id === realFolder.id)).toBeUndefined();
+    expect(finalState.folderAssignments[sessionId]).not.toBe(realFolder.id);
+  });
+
+  it("prioritizes first user message and switches to manual title after rename", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+    const state = useWorkspaceStore.getState();
+    const session = state.sessions[0];
+    if (!session) {
+      throw new Error("missing session in test");
+    }
+
+    const fromPrompt = deriveThreadTitle(
+      session.title,
+      state.firstUserMessageBySession[session.id],
+      false,
+    );
+    expect(fromPrompt).toContain("请帮我审查这个页面");
+
+    state.startRenameSession(session.id);
+    useWorkspaceStore.getState().setEditingSessionDraft("手动重命名线程");
+    await useWorkspaceStore.getState().commitRenameSession();
+
+    const renamedState = useWorkspaceStore.getState();
+    expect(renamedState.renamedSessionIds[session.id]).toBe(true);
+    expect(
+      renamedState.sessions.find((item) => item.id === session.id)?.title,
+    ).toBe("手动重命名线程");
+  });
+
+  it("accumulates run.delta and clears streaming when run completes", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) {
+      throw new Error("missing session id in test");
+    }
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.started",
+      payload: { runId: "run_1", sessionId, taskId: null },
+    });
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.delta",
+      payload: { runId: "run_1", sessionId, delta: "Hello" },
+    });
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.delta",
+      payload: { runId: "run_1", sessionId, delta: " world" },
+    });
+
+    expect(useWorkspaceStore.getState().streamingBySession[sessionId]?.content).toBe(
+      "Hello world",
+    );
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.completed",
+      payload: { runId: "run_1", sessionId, summary: "done" },
+    });
+
+    expect(useWorkspaceStore.getState().streamingBySession[sessionId]).toBeUndefined();
+  });
+
+  it("creates a session on send when none selected and approves tool calls", async () => {
+    const { gateway, getCalls } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+    useWorkspaceStore.getState().beginNewThread();
+    useWorkspaceStore.getState().setComposerInput("请创建一个全新的线程并执行任务");
+
+    const sessionId = await useWorkspaceStore.getState().sendPrompt();
+    expect(sessionId).toBeTruthy();
+    expect(getCalls().some((call) => call.method === "session.create")).toBe(true);
+    expect(getCalls().some((call) => call.method === "run.start")).toBe(true);
+
+    await useWorkspaceStore.getState().approveToolCall("tool_1");
+    expect(
+      getCalls().some(
+        (call) =>
+          call.method === "tool.approve" &&
+          (call.params as { toolCallId?: string }).toolCallId === "tool_1",
+      ),
+    ).toBe(true);
+  });
+});

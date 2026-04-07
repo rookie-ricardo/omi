@@ -1,15 +1,21 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { IpcRendererEvent } from "electron";
+import type { IpcRendererEvent, OpenDialogOptions } from "electron";
 
-import type { RunnerCommandName } from "@omi/protocol";
+import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/protocol";
 
 contextBridge.exposeInMainWorld("omi", {
-  invoke<T>(method: RunnerCommandName, params?: Record<string, unknown>) {
-    return ipcRenderer.invoke("runner:invoke", method, params ?? {}) as Promise<T>;
+  invoke<TResult = unknown, TName extends RunnerCommandName = RunnerCommandName>(
+    method: TName,
+    params?: RunnerCommandParamsByName[TName],
+  ) {
+    return ipcRenderer.invoke("runner:invoke", method, params ?? {}) as Promise<TResult>;
   },
   subscribe(listener: (event: unknown) => void) {
     const wrapped = (_event: IpcRendererEvent, payload: unknown) => listener(payload);
     ipcRenderer.on("runner:event", wrapped);
     return () => ipcRenderer.removeListener("runner:event", wrapped);
+  },
+  showOpenDialog(options: OpenDialogOptions) {
+    return ipcRenderer.invoke("dialog:showOpenDialog", options);
   },
 });

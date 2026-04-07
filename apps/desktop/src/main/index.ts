@@ -2,7 +2,7 @@ import { type ChildProcess, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
-import { BrowserWindow, app, ipcMain } from "electron";
+import { BrowserWindow, app, ipcMain, dialog } from "electron";
 
 import { type commandMap } from "@omi/protocol";
 
@@ -45,7 +45,7 @@ function createWindow() {
     height: 940,
     minWidth: 1100,
     minHeight: 760,
-    backgroundColor: "#1b1b1f",
+    backgroundColor: "#f4f4f4",
     titleBarStyle: process.platform === "darwin" ? "hidden" : undefined,
     trafficLightPosition: process.platform === "darwin" ? { x: 18, y: 18 } : undefined,
     webPreferences: {
@@ -172,6 +172,11 @@ app.whenReady().then(() => {
     async (_event, method: keyof typeof commandMap, params: unknown) =>
       invokeRunner(method, (params ?? {}) as Record<string, unknown>),
   );
+
+  ipcMain.handle("dialog:showOpenDialog", async (_event, options) => {
+    if (!mainWindow) return { canceled: true, filePaths: [] };
+    return dialog.showOpenDialog(mainWindow, options);
+  });
 
   createWindow();
 
