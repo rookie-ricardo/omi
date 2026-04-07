@@ -99,6 +99,7 @@ export class AgentSession {
   private processingQueue = false;
   private readonly evaluator: PermissionEvaluator;
   private readonly denialTracker = new MemoryDenialTracker();
+  private activeQueryEngine: QueryEngine | null = null;
 
   constructor(private readonly options: AgentSessionOptions) {
     this.provider = options.provider ?? new PiAiProvider();
@@ -133,7 +134,13 @@ export class AgentSession {
       mode: "start",
     });
 
-    void this.processQueue();
+    this.processQueue().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.emit({
+            type: "run.failed",
+            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
+        });
+    });
 
     return run;
   }
@@ -203,7 +210,13 @@ export class AgentSession {
       checkpointDetails: input.checkpointDetails ?? null,
     });
 
-    void this.processQueue();
+    this.processQueue().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.emit({
+            type: "run.failed",
+            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
+        });
+    });
 
     return run;
   }
@@ -249,7 +262,13 @@ export class AgentSession {
       mode: "retry",
     });
 
-    void this.processQueue();
+    this.processQueue().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.emit({
+            type: "run.failed",
+            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
+        });
+    });
     return nextRun;
   }
 
@@ -294,7 +313,13 @@ export class AgentSession {
       mode: "resume",
     });
 
-    void this.processQueue();
+    this.processQueue().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.emit({
+            type: "run.failed",
+            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
+        });
+    });
     return resumedRun;
   }
 
@@ -346,6 +371,7 @@ export class AgentSession {
     }
 
     this.provider.cancel(runId);
+    this.activeQueryEngine?.cancel();
     this.options.database.updateRun(runId, { status: "canceled" });
     this.options.runtime.cancelRun(runId);
 
@@ -361,12 +387,12 @@ export class AgentSession {
   }
 
   approveTool(toolCallId: string): { toolCallId: string; decision: "approved" } {
-    this.provider.approveTool(toolCallId);
+    this.activeQueryEngine?.approveTool(toolCallId);
     return { toolCallId, decision: "approved" };
   }
 
   rejectTool(toolCallId: string): { toolCallId: string; decision: "rejected" } {
-    this.provider.rejectTool(toolCallId);
+    this.activeQueryEngine?.rejectTool(toolCallId);
     return { toolCallId, decision: "rejected" };
   }
 
@@ -468,8 +494,9 @@ export class AgentSession {
       denialTracker: this.denialTracker,
     });
 
+    this.activeQueryEngine = queryEngine;
+
     try {
-      // Execute the query loop using the state machine
       const executeLoop = () =>
         queryEngine.execute({
           session: input.session,
@@ -493,6 +520,8 @@ export class AgentSession {
       }
     } catch (error) {
       await this.handleFailedRun(input, error);
+    } finally {
+      this.activeQueryEngine = null;
     }
   }
 

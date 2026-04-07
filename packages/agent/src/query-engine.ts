@@ -30,8 +30,9 @@ import {
   type ContextPipelineConfig,
   type ContextPipelineResult,
 } from "@omi/memory";
-import { createModelFromConfig, PiAiProvider, CostTracker, createCostTracker } from "@omi/provider";
-import type { ProviderAdapter, ProviderRunResult, ProviderToolRequestedEvent } from "@omi/provider";
+import { createModelFromConfig, PiAiProvider, CostTracker, createCostTracker, buildStableToolCallId } from "@omi/provider";
+import type { ProviderAdapter, ProviderRunResult, ModelToolCall } from "@omi/provider";
+import type { ToolResultMessage, Message as PiAiMessage } from "@mariozechner/pi-ai";
 import { SAFE_TOOL_NAMES, listBuiltInToolNames, createAllTools, requiresApproval, isBuiltInTool } from "@omi/tools";
 import type { ToolName } from "@omi/tools";
 import type { AppStore } from "@omi/store";
@@ -121,17 +122,6 @@ export interface QueryEngineResult {
   error: string | null;
 }
 
-interface ProviderExecutionCompleted {
-  kind: "completed";
-  result: ProviderRunResult;
-}
-
-interface ProviderExecutionCanceled {
-  kind: "canceled";
-}
-
-type ProviderExecutionOutcome = ProviderExecutionCompleted | ProviderExecutionCanceled;
-
 interface PreparedRunContext {
   session: Session;
   run: Run;
@@ -204,6 +194,8 @@ export class QueryEngine {
   private readonly planStateManager = getPlanStateManager();
   private readonly costTracker: CostTracker | null;
   private readonly hookRegistry: import("@omi/extensions").HookRegistry | null;
+  private abortController: AbortController | null = null;
+  private readonly pendingApprovals = new Map<string, { runId: string; resolve: (decision: "approved" | "rejected") => void }>();
 
   constructor(private readonly deps: QueryEngineDeps) {
     this.provider = deps.provider ?? new PiAiProvider();
@@ -239,6 +231,26 @@ export class QueryEngine {
    */
   cancel(): void {
     this.canceled = true;
+    this.abortController?.abort();
+    // Resolve all pending approvals as rejected
+    for (const [id, pending] of this.pendingApprovals.entries()) {
+      this.pendingApprovals.delete(id);
+      pending.resolve("rejected");
+    }
+  }
+
+  approveTool(toolCallId: string): void {
+    const pending = this.pendingApprovals.get(toolCallId);
+    if (!pending) return;
+    this.pendingApprovals.delete(toolCallId);
+    pending.resolve("approved");
+  }
+
+  rejectTool(toolCallId: string): void {
+    const pending = this.pendingApprovals.get(toolCallId);
+    if (!pending) return;
+    this.pendingApprovals.delete(toolCallId);
+    pending.resolve("rejected");
   }
 
   // ==========================================================================
@@ -250,6 +262,7 @@ export class QueryEngine {
     this.currentRunId = input.run.id;
     this.canceled = false;
     this.suspended = false;
+    this.abortController = new AbortController();
 
     // Initialize recovery engine for this run
     this.recoveryEngine = new RecoveryEngine({
@@ -286,46 +299,51 @@ export class QueryEngine {
         prepared.currentHistoryMessages,
       ).tokens;
 
-      // preprocess_context -> calling_model
-      this.transition("calling_model", "context_prepared");
-
       let currentHistoryMessages = prepared.currentHistoryMessages;
-
-      // Run context pipeline before first model call (includes threshold compaction)
-      const pipelineResult = await this.runContextPipeline(
-        input.session,
-        input.providerConfig,
-        currentHistoryMessages,
-        input.run.id,
-      );
-      if (pipelineResult.didCompact) {
-        currentHistoryMessages = pipelineResult.messages;
-        this.state.messages = currentHistoryMessages;
-      }
+      // Build the pi-ai message array that we'll maintain across turns
+      let llmMessages = convertRuntimeMessagesToLlm(currentHistoryMessages);
 
       const retrySettings =
         this.deps.settingsManager?.getRetrySettings?.() ?? DEFAULT_RETRY_SETTINGS;
 
-      // Outer retry loop for transient errors
-      while (this.state.recoveryCount <= (retrySettings.enabled ? retrySettings.maxRetries : 0)) {
+      // Build tools once for all turns
+      const resolvedToolNames = prepared.resolvedSkill?.enabledToolNames.length
+        ? this.filterVisibleTools(prepared.resolvedSkill.enabledToolNames as ToolName[], input.session.id)
+        : this.filterVisibleTools(listBuiltInToolNames(), input.session.id);
+      const tools = this.buildToolsForProvider(this.deps.workspaceRoot, resolvedToolNames);
+
+      // ========== THE AGENTIC LOOP ==========
+      while (true) {
+        // preprocess_context -> calling_model
+        this.transition("calling_model", "context_prepared");
+
+        // Run context pipeline (compaction if needed)
+        const pipelineResult = await this.runContextPipeline(
+          input.session,
+          input.providerConfig,
+          currentHistoryMessages,
+          input.run.id,
+        );
+        if (pipelineResult.didCompact) {
+          currentHistoryMessages = pipelineResult.messages;
+          this.state.messages = currentHistoryMessages;
+          llmMessages = convertRuntimeMessagesToLlm(currentHistoryMessages);
+        }
+
+        // Budget/cancel checks
         if (this.state.budget.maxTurns > 0 && this.state.turnCount >= this.state.budget.maxTurns) {
           return this.terminate("max_turns", null);
         }
-        // Cost budget enforcement via CostTracker
         if (this.costTracker && this.state.budget.maxBudgetUsd > 0) {
           this.costTracker.setBudget(this.state.budget.maxBudgetUsd);
           if (this.costTracker.isBudgetExceeded()) {
             return this.terminate("budget_exceeded", `Cost budget exceeded: ${this.costTracker.formatSummary()}`);
           }
         }
-        if (this.canceled) {
-          return this.terminate("canceled", null);
-        }
-        if (this.suspended) {
-          return this.terminate("suspended", null);
-        }
+        if (this.canceled) return this.terminate("canceled", null);
+        if (this.suspended) return this.terminate("suspended", null);
 
-        // Gate model calls when context health indicates the run is unsafe.
+        // Context health check
         const contextHealth = this.checkContextHealth(currentHistoryMessages, input.providerConfig);
         if (contextHealth.needsAttention) {
           this.emitEvent({
@@ -364,6 +382,7 @@ export class QueryEngine {
                 prepared.branchLeafEntryId,
               );
               this.state.messages = currentHistoryMessages;
+              llmMessages = convertRuntimeMessagesToLlm(currentHistoryMessages);
             }
 
             const postGateHealth = this.checkContextHealth(currentHistoryMessages, input.providerConfig);
@@ -379,7 +398,7 @@ export class QueryEngine {
         }
 
         // Checkpoint: before_model_call
-        this.recoveryEngine.saveCheckpoint("before_model_call", {
+        this.recoveryEngine!.saveCheckpoint("before_model_call", {
           turnCount: this.state.turnCount,
           recoveryCount: this.state.recoveryCount,
           compactTracking: this.state.compactTracking,
@@ -389,21 +408,20 @@ export class QueryEngine {
         // calling_model -> streaming_response
         this.transition("streaming_response", "calling_model");
 
-        let outcome: ProviderExecutionOutcome | null = null;
+        let result: ProviderRunResult;
         try {
-          outcome = await this.callProvider({
+          result = await this.callProviderSingleTurn({
             input,
-            prepared,
-            extensionRunner,
             systemPrompt: executionInput.systemPrompt,
             effectivePrompt: executionInput.effectivePrompt,
-            historyMessages: currentHistoryMessages,
+            llmMessages,
             resolvedSkill: prepared.resolvedSkill,
             providerConfig: input.providerConfig,
+            tools,
           });
         } catch (error) {
           // Error classification and recovery via RecoveryEngine
-          const { action } = this.recoveryEngine.classifyAndDecide(error, {
+          const { action } = this.recoveryEngine!.classifyAndDecide(error, {
             recoveryCount: this.state.recoveryCount,
             compactTracking: this.state.compactTracking,
           });
@@ -422,7 +440,7 @@ export class QueryEngine {
             });
             await this.delayWithAbort(action.delayMs, input.run.id);
             this.state.recoveryCount++;
-            this.transition("calling_model", "retry");
+            this.transition("preprocess_context", "retry");
             continue;
           }
           if (action.kind === "overflow_compact") {
@@ -445,10 +463,10 @@ export class QueryEngine {
               );
               this.state.compactTracking.overflowRecovered = true;
               this.state.messages = currentHistoryMessages;
-              this.transition("calling_model", "overflow_retry");
+              llmMessages = convertRuntimeMessagesToLlm(currentHistoryMessages);
+              this.transition("preprocess_context", "overflow_retry");
               continue;
             }
-            // Compaction failed, fall through to terminal
             return this.terminate(
               "budget_exceeded",
               error instanceof Error ? error.message : String(error),
@@ -457,43 +475,33 @@ export class QueryEngine {
           if (action.kind === "max_output_recovery") {
             this.transition("recovering", "max_output_recovery");
             this.state.compactTracking.maxOutputRecoveryCount++;
-            currentHistoryMessages = [
-              ...currentHistoryMessages,
-              this.createMaxOutputContinuationMessage(),
-            ];
+            const continuationMsg = this.createMaxOutputContinuationMessage();
+            currentHistoryMessages = [...currentHistoryMessages, continuationMsg];
             this.state.messages = currentHistoryMessages;
-            this.transition("calling_model", "max_output_retry");
+            llmMessages = convertRuntimeMessagesToLlm(currentHistoryMessages);
+            this.transition("preprocess_context", "max_output_retry");
             continue;
           }
-          // action.kind === "fail"
           if (action.kind === "fail") {
             return this.terminate(action.terminalReason, error instanceof Error ? error.message : String(error));
           }
-
-          // Unreachable: all action kinds are handled above
           continue;
         }
 
-        // Handle cancellation during streaming
-        if (!outcome || outcome.kind === "canceled") {
-          if (this.suspended) {
-             return this.terminate("suspended", null);
-          }
-          return this.terminate("canceled", null);
-        }
+        // Increment turn count for each model call
+        this.state.turnCount++;
 
-        // Check for cancellation after streaming
-        if (this.canceled) {
-          return this.terminate("canceled", null);
-        }
-        if (this.suspended) {
-          return this.terminate("suspended", null);
-        }
+        // Handle cancellation after streaming
+        if (this.canceled) return this.terminate("canceled", null);
+        if (this.suspended) return this.terminate("suspended", null);
 
-        const result = outcome.result;
+        // Handle error result
+        if (result.error && result.stopReason === "error") {
+          return this.terminate("error", result.error);
+        }
 
         // Checkpoint: after_model_stream
-        this.recoveryEngine.saveCheckpoint("after_model_stream", {
+        this.recoveryEngine!.saveCheckpoint("after_model_stream", {
           turnCount: this.state.turnCount,
           recoveryCount: this.state.recoveryCount,
           compactTracking: this.state.compactTracking,
@@ -513,45 +521,77 @@ export class QueryEngine {
           });
         }
 
-        // streaming_response -> executing_tools or post_tool_merge
-        const resultAny = result as unknown as Record<string, unknown>;
-        const hasToolCalls = Array.isArray(resultAny.toolCalls) && resultAny.toolCalls.length > 0;
-        if (hasToolCalls) {
-          this.transition("executing_tools", "tool_calls_present");
+        // Emit assistant message event
+        this.emitEvent({
+          type: "run.assistant_message",
+          payload: { runId: input.run.id, sessionId: input.session.id, text: result.assistantText },
+        });
+
+        // Append assistant message to LLM message history
+        if (result.assistantMessage) {
+          llmMessages.push(result.assistantMessage as PiAiMessage);
         }
 
-        // Checkpoint: after_tool_batch (before post_tool_merge)
-        this.recoveryEngine.saveCheckpoint("after_tool_batch", {
+        // If no tool calls -> finalize
+        const hasToolCalls = result.stopReason === "tool_use" && result.toolCalls.length > 0;
+        if (!hasToolCalls) {
+          this.transition("post_tool_merge", "model_response_complete");
+
+          // Checkpoint: before_terminal_commit
+          this.recoveryEngine!.saveCheckpoint("before_terminal_commit", {
+            turnCount: this.state.turnCount,
+            recoveryCount: this.state.recoveryCount,
+            compactTracking: this.state.compactTracking,
+            partialAssistantText: result.assistantText,
+          });
+
+          await this.finalizeRun(input, result, extensionRunner);
+          return this.terminate("completed", null, result.assistantText);
+        }
+
+        // streaming_response -> executing_tools
+        this.transition("executing_tools", "tool_calls_present");
+
+        // Execute tools
+        const toolResults = await this.executeToolBatch({
+          toolCalls: result.toolCalls,
+          runId: input.run.id,
+          sessionId: input.session.id,
+          taskId: input.task?.id ?? null,
+          extensionRunner,
+          tools,
+        });
+
+        // Checkpoint: after_tool_batch
+        this.recoveryEngine!.saveCheckpoint("after_tool_batch", {
           turnCount: this.state.turnCount,
           recoveryCount: this.state.recoveryCount,
           compactTracking: this.state.compactTracking,
           partialAssistantText: result.assistantText,
         });
 
-        this.transition("post_tool_merge", "model_response_complete");
-        this.state.turnCount++;
+        // executing_tools -> post_tool_merge
+        this.transition("post_tool_merge", "tool_execution_complete");
 
-        // Checkpoint: before_terminal_commit
-        this.recoveryEngine.saveCheckpoint("before_terminal_commit", {
-          turnCount: this.state.turnCount,
-          recoveryCount: this.state.recoveryCount,
-          compactTracking: this.state.compactTracking,
-          partialAssistantText: result.assistantText,
-        });
+        // Append tool results to LLM messages
+        llmMessages.push(...toolResults);
 
-        // Finalize the run
-        await this.finalizeRun(input, result, extensionRunner);
+        // post_tool_merge -> preprocess_context (THE LOOP BACK!)
+        this.transition("preprocess_context", "tool_results_merged");
 
-        return this.terminate("completed", null, result.assistantText);
+        // Check cancellation/suspension after tool execution
+        if (this.canceled) return this.terminate("canceled", null);
+        if (this.suspended) return this.terminate("suspended", null);
+
+        // Continue the loop for next model call
       }
-
-      // Exhausted retries
-      return this.terminate("error", "Max retries exhausted");
     } catch (error) {
       return this.terminate(
         "error",
         error instanceof Error ? error.message : String(error),
       );
+    } finally {
+      this.abortController = null;
     }
   }
 
@@ -613,295 +653,294 @@ export class QueryEngine {
   }
 
   // ==========================================================================
-  // Provider call
+  // Provider call (single-turn)
   // ==========================================================================
 
-  private async callProvider(params: {
+  private async callProviderSingleTurn(params: {
     input: QueryEngineRunInput;
-    prepared: PreparedRunContext;
-    extensionRunner: import("@omi/extensions").ExtensionRunner;
     systemPrompt: string;
     effectivePrompt: string;
-    historyMessages: RuntimeMessage[];
+    llmMessages: PiAiMessage[];
     resolvedSkill: ResolvedSkill | null;
     providerConfig: ProviderConfig;
-  }): Promise<ProviderExecutionOutcome> {
-    const { input, extensionRunner, systemPrompt, effectivePrompt, historyMessages, resolvedSkill, providerConfig } = params;
-    const pendingToolInputsByName = new Map<string, Array<Record<string, unknown>>>();
+    tools: import("@omi/core").OmiTool[];
+  }): Promise<ProviderRunResult> {
+    const { input, systemPrompt, effectivePrompt, llmMessages, resolvedSkill, providerConfig, tools } = params;
+    const resolvedToolNames = resolvedSkill?.enabledToolNames.length
+      ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
+      : this.filterVisibleTools(listBuiltInToolNames(), input.session.id);
 
-    try {
-      const result = await this.provider.run({
-        runId: input.run.id,
-        sessionId: input.session.id,
-        workspaceRoot: this.deps.workspaceRoot,
-        prompt: effectivePrompt,
-        historyMessages: convertRuntimeMessagesToLlm(historyMessages),
-        systemPrompt,
-        providerConfig,
-        enabledTools: resolvedSkill?.enabledToolNames.length
-          ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
-          : this.filterVisibleTools(listBuiltInToolNames(), input.session.id),
-        tools: this.buildToolsForProvider(this.deps.workspaceRoot, resolvedSkill?.enabledToolNames.length
-          ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
-          : this.filterVisibleTools(listBuiltInToolNames(), input.session.id)),
-        requiresApprovalFn: (toolName: string) => isBuiltInTool(toolName) ? requiresApproval(toolName) : false,
-        toolExecutionMode: resolveToolExecutionMode(
-          resolvedSkill?.enabledToolNames as ToolName[] | undefined,
-        ),
-        preflightToolCheck: async (toolName, toolInput) => {
-          // Hook: PreToolUse — allow hooks to block or modify input
-          if (this.hookRegistry?.hasHooks("PreToolUse")) {
-            const hookOutputs = await this.hookRegistry.execute("PreToolUse", {
-              event: "PreToolUse",
-              toolName,
-              toolInput,
-              sessionId: input.session.id,
-              cwd: this.deps.workspaceRoot,
-            });
-            const { shouldBlock, getBlockReason } = await import("@omi/extensions");
-            if (shouldBlock(hookOutputs)) {
-              const reason = getBlockReason(hookOutputs) ?? `Tool '${toolName}' blocked by PreToolUse hook.`;
-              this.emitEvent({
-                type: "run.tool_denied",
-                payload: {
-                  runId: input.run.id,
-                  sessionId: input.session.id,
-                  toolName,
-                  reason,
-                  source: "hook",
-                },
-              });
-              return { decision: "deny", reason };
-            }
-          }
-          const planMode = this.isPlanMode();
-          const preflight = this.evaluator.preflightCheck({
-            toolName,
-            input: toolInput,
-            planMode,
-            sessionId: input.session.id,
-          });
-          if (preflight.decision !== "deny" && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
-            const replayReason = `Skipped replayed write tool: ${toolName}`;
-            this.emitEvent({
-              type: "run.tool_denied",
-              payload: {
-                runId: input.run.id,
-                sessionId: input.session.id,
-                toolName,
-                reason: replayReason,
-              },
-            });
-            return {
-              decision: "deny",
-              reason: replayReason,
-            };
-          }
-          if (preflight.decision === "deny") {
-            const reason = preflight.reason ?? `Tool '${toolName}' is denied by permission policy.`;
-            this.emitEvent({
-              type: "run.tool_denied",
-              payload: {
-                runId: input.run.id,
-                sessionId: input.session.id,
-                toolName,
-                reason,
-              },
-            });
-            return {
-              decision: "deny",
-              reason,
-            };
-          }
-          const queue = pendingToolInputsByName.get(toolName) ?? [];
-          queue.push(toolInput);
-          pendingToolInputsByName.set(toolName, queue);
-
-          const matchedAllowedPrompt = this.matchApprovedPrompt(toolName, toolInput);
-          if (matchedAllowedPrompt) {
-            this.emitEvent({
-              type: "run.allowed_prompt_matched",
-              payload: {
-                runId: input.run.id,
-                sessionId: input.session.id,
-                toolName,
-                prompt: matchedAllowedPrompt,
-              },
-            });
-            return {
-              decision: "allow",
-              reason: null,
-            };
-          }
-          if (preflight.decision === "ask") {
-            return {
-              decision: "ask",
-              reason: preflight.reason ?? `Tool '${toolName}' requires approval before execution.`,
-            };
-          }
-          return {
-            decision: "allow",
-            reason: null,
-          };
-        },
-        onTextDelta: (delta) => {
-          this.emitEvent({
-            type: "run.delta",
-            payload: {
-              runId: input.run.id,
-              sessionId: input.session.id,
-              delta,
-            },
-          });
-        },
-        onToolRequested: async (event) => {
-          // Preflight check: second-layer validation to prevent bypass
-          const planMode = this.isPlanMode();
-          const preflight = this.evaluator.preflightCheck({
-            toolName: event.toolName,
-            input: event.input,
-            planMode,
-            sessionId: input.session.id,
-          });
-          if (preflight.decision === "deny") {
-            const reason = preflight.reason ?? `Tool '${event.toolName}' is denied by permission policy.`;
-            this.emitEvent({
-              type: "run.tool_denied",
-              payload: {
-                runId: input.run.id,
-                sessionId: input.session.id,
-                toolName: event.toolName,
-                reason,
-              },
-            });
-            return `${input.run.id}:${event.toolName}:denied`;
-          }
-          const matchedAllowedPrompt = this.matchApprovedPrompt(event.toolName, event.input);
-          const requiresApproval =
-            matchedAllowedPrompt
-              ? false
-              : (event.requiresApproval || preflight.decision === "ask");
-          if (matchedAllowedPrompt) {
-            this.emitEvent({
-              type: "run.allowed_prompt_matched",
-              payload: {
-                runId: input.run.id,
-                sessionId: input.session.id,
-                toolName: event.toolName,
-                prompt: matchedAllowedPrompt,
-              },
-            });
-          }
-
-          await extensionRunner.emit({
-            type: "run.tool_requested",
-            payload: {
-              runId: input.run.id,
-              sessionId: input.session.id,
-              toolName: event.toolName,
-              input: event.input,
-              requiresApproval,
-            },
-          });
-          return this.handleToolRequested(
-            input.run.id,
-            input.session.id,
-            input.task?.id ?? null,
-            { ...event, requiresApproval },
-          );
-        },
-        onToolDecision: (toolCallId, decision) => {
-          this.handleToolDecision(input.run.id, input.session.id, toolCallId, decision);
-        },
-        onToolStarted: (toolCallId, toolName) => {
-          this.emitEvent({
-            type: "run.tool_started",
-            payload: { runId: input.run.id, toolCallId, toolName },
-          });
-          void extensionRunner.emit({
-            type: "run.tool_started",
-            payload: {
-              runId: input.run.id,
-              sessionId: input.session.id,
-              toolCallId,
-              toolName,
-            },
-          });
-        },
-        onToolFinished: (toolCallId, toolName, output, isError) => {
-          const toolInputQueue = pendingToolInputsByName.get(toolName) ?? [];
-          const toolInput = toolInputQueue.shift();
-          if (toolInputQueue.length === 0) {
-            pendingToolInputsByName.delete(toolName);
-          } else {
-            pendingToolInputsByName.set(toolName, toolInputQueue);
-          }
-          // Record write tool execution for replay protection
-          this.recoveryEngine?.recordWriteTool(toolCallId, toolName, toolInput);
-
-          this.deps.database.updateToolCall(toolCallId, {
-            output,
-            error: isError ? JSON.stringify(output) : null,
-          });
-          this.emitEvent({
-            type: "run.tool_finished",
-            payload: { runId: input.run.id, toolCallId, toolName, output },
-          });
-          void extensionRunner.emit({
-            type: "run.tool_finished",
-            payload: {
-              runId: input.run.id,
-              sessionId: input.session.id,
-              toolCallId,
-              toolName,
-              output,
-              isError,
-            },
-          });
-          // Hook: PostToolUse / PostToolUseFailure
-          if (this.hookRegistry?.hasHooks("PostToolUse") || this.hookRegistry?.hasHooks("PostToolUseFailure")) {
-            const hookEvent = isError ? "PostToolUseFailure" : "PostToolUse";
-            void this.hookRegistry.execute(hookEvent as import("@omi/extensions").HookEvent, {
-              event: hookEvent,
-              toolName,
-              toolOutput: output,
-              toolUseId: toolCallId,
-              sessionId: input.session.id,
-              cwd: this.deps.workspaceRoot,
-              error: isError ? JSON.stringify(output) : undefined,
-            });
-          }
-
-          // Check if tool output requested a halt/suspension
-          if (!isError && output?.details && typeof output.details === "object" && (output.details as any).isInterrupt) {
-            this.suspended = true;
-            this.provider.cancel(input.run.id);
-          }
-        },
-      });
-      if (!result) {
-        throw new Error(`Run ${input.run.id} did not produce a result.`);
-      }
-
-      if (this.deps.database.getRun(input.run.id)?.status === "canceled") {
+    const result = await this.provider.run({
+      runId: input.run.id,
+      sessionId: input.session.id,
+      workspaceRoot: this.deps.workspaceRoot,
+      prompt: effectivePrompt,
+      historyMessages: llmMessages,
+      systemPrompt,
+      providerConfig,
+      enabledTools: resolvedToolNames,
+      tools: tools.filter(t => resolvedToolNames.includes(t.name)),
+      toolExecutionMode: resolveToolExecutionMode(
+        resolvedSkill?.enabledToolNames as ToolName[] | undefined,
+      ),
+      signal: this.abortController?.signal,
+      onTextDelta: (delta) => {
         this.emitEvent({
-          type: "run.canceled",
-          payload: { runId: input.run.id, sessionId: input.session.id },
+          type: "run.delta",
+          payload: { runId: input.run.id, sessionId: input.session.id, delta },
         });
+      },
+    });
+
+    if (!result) {
+      throw new Error(`Run ${input.run.id} did not produce a result.`);
+    }
+
+    // Check if run was canceled in DB during the call
+    if (this.deps.database.getRun(input.run.id)?.status === "canceled") {
+      throw new Error("Run was canceled");
+    }
+
+    return result;
+  }
+
+  // ==========================================================================
+  // Tool execution
+  // ==========================================================================
+
+  private async executeToolBatch(params: {
+    toolCalls: ModelToolCall[];
+    runId: string;
+    sessionId: string;
+    taskId: string | null;
+    extensionRunner: import("@omi/extensions").ExtensionRunner;
+    tools: import("@omi/core").OmiTool[];
+  }): Promise<ToolResultMessage[]> {
+    const { toolCalls, runId, sessionId, taskId, extensionRunner, tools } = params;
+    const toolResults: ToolResultMessage[] = [];
+
+    const executeSingleTool = async (toolCall: ModelToolCall): Promise<ToolResultMessage> => {
+      const { id: piToolCallId, name: toolName, input: toolInput } = toolCall;
+      const toolCallId = buildStableToolCallId(runId, toolCall, toolName, toolInput);
+      let toolError = false;
+      let toolOutput: any = "Unknown Error";
+
+      try {
+        // 1. PreToolUse hooks
+        if (this.hookRegistry?.hasHooks("PreToolUse")) {
+          const hookOutputs = await this.hookRegistry.execute("PreToolUse", {
+            event: "PreToolUse",
+            toolName,
+            toolInput,
+            sessionId,
+            cwd: this.deps.workspaceRoot,
+          });
+          const { shouldBlock, getBlockReason } = await import("@omi/extensions");
+          if (shouldBlock(hookOutputs)) {
+            const reason = getBlockReason(hookOutputs) ?? `Tool '${toolName}' blocked by PreToolUse hook.`;
+            this.emitEvent({
+              type: "run.tool_denied",
+              payload: { runId, sessionId, toolName, reason, source: "hook" },
+            });
+            toolError = true;
+            toolOutput = { error: reason };
+            return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
+          }
+        }
+
+        // 2. Permission check
+        const planMode = this.isPlanMode();
+        const preflight = this.evaluator.preflightCheck({
+          toolName,
+          input: toolInput,
+          planMode,
+          sessionId,
+        });
+
+        // 3. Replay protection check
+        if (preflight.decision !== "deny" && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
+          const replayReason = `Skipped replayed write tool: ${toolName}`;
+          this.emitEvent({
+            type: "run.tool_denied",
+            payload: { runId, sessionId, toolName, reason: replayReason },
+          });
+          toolError = true;
+          toolOutput = { error: replayReason };
+          return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
+        }
+
+        if (preflight.decision === "deny") {
+          const reason = preflight.reason ?? `Tool '${toolName}' is denied by permission policy.`;
+          this.emitEvent({
+            type: "run.tool_denied",
+            payload: { runId, sessionId, toolName, reason },
+          });
+          toolError = true;
+          toolOutput = { error: reason };
+          return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
+        }
+
+        // 4. Check approved prompts (plan mode)
+        const matchedAllowedPrompt = this.matchApprovedPrompt(toolName, toolInput);
+        const needsApproval = !matchedAllowedPrompt &&
+          (preflight.decision === "ask" || (isBuiltInTool(toolName) ? requiresApproval(toolName) : false));
+
+        if (matchedAllowedPrompt) {
+          this.emitEvent({
+            type: "run.allowed_prompt_matched",
+            payload: { runId, sessionId, toolName, prompt: matchedAllowedPrompt },
+          });
+        }
+
+        // 5. Record tool call in DB
+        this.deps.database.createToolCall({
+          id: toolCallId,
+          runId,
+          sessionId,
+          taskId,
+          toolName,
+          approvalState: needsApproval ? "pending" : "not_required",
+          input: toolInput,
+          output: null,
+          error: null,
+        });
+
+        this.emitEvent({
+          type: "run.tool_requested",
+          payload: { runId, sessionId, toolCallId, toolName, requiresApproval: needsApproval, input: toolInput },
+        });
+
         await extensionRunner.emit({
-          type: "run.canceled",
-          payload: { runId: input.run.id, sessionId: input.session.id },
+          type: "run.tool_requested",
+          payload: { runId, sessionId, toolName, input: toolInput, requiresApproval: needsApproval },
         });
-        return { kind: "canceled" };
+
+        // 6. Block for approval if needed
+        if (needsApproval) {
+          this.deps.runtime.blockOnTool(runId, toolCallId);
+          const session = this.requireSession();
+          this.deps.database.updateSession(sessionId, {
+            status: nextSessionStatus(session.status, "tool_blocked"),
+          });
+          this.emitEvent({
+            type: "run.blocked",
+            payload: { runId, toolCallId, reason: `Waiting for approval: ${toolName}` },
+          });
+
+          // Wait for user decision
+          const decision = await new Promise<"approved" | "rejected">((resolve) => {
+            this.pendingApprovals.set(toolCallId, { runId, resolve });
+          });
+          this.pendingApprovals.delete(toolCallId);
+
+          // Record decision
+          this.handleToolDecision(runId, sessionId, toolCallId, decision);
+
+          if (decision === "rejected") {
+            toolError = true;
+            toolOutput = { error: "Tool execution rejected by user." };
+            return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
+          }
+        }
+
+        // 7. Emit tool started
+        this.emitEvent({
+          type: "run.tool_started",
+          payload: { runId, toolCallId, toolName },
+        });
+        void extensionRunner.emit({
+          type: "run.tool_started",
+          payload: { runId, sessionId, toolCallId, toolName },
+        });
+
+        // 8. Execute the tool
+        const toolDef = tools.find(t => t.name === toolName);
+        if (!toolDef) {
+          toolError = true;
+          toolOutput = { error: `Tool ${toolName} not found` };
+        } else {
+          const execResult = await toolDef.execute(
+            toolCallId,
+            toolInput,
+            this.abortController?.signal ?? new AbortController().signal,
+            (_update) => {
+              // Tool update callback
+            },
+          );
+          toolOutput = execResult.content;
+        }
+      } catch (e) {
+        toolError = true;
+        toolOutput = { error: e instanceof Error ? e.message : String(e) };
       }
 
-      return { kind: "completed", result };
-    } catch (error) {
-      if (this.canceled || this.deps.database.getRun(input.run.id)?.status === "canceled") {
-        return { kind: "canceled" };
+      // 9. Record write tool for replay protection
+      this.recoveryEngine?.recordWriteTool(toolCallId, toolName, toolInput);
+
+      // 10. Update tool call in DB
+      this.deps.database.updateToolCall(toolCallId, {
+        output: toolOutput,
+        error: toolError ? JSON.stringify(toolOutput) : null,
+      });
+
+      // 11. Emit tool finished
+      this.emitEvent({
+        type: "run.tool_finished",
+        payload: { runId, toolCallId, toolName, output: toolOutput },
+      });
+      void extensionRunner.emit({
+        type: "run.tool_finished",
+        payload: { runId, sessionId, toolCallId, toolName, output: toolOutput, isError: toolError },
+      });
+
+      // 12. PostToolUse hooks
+      if (this.hookRegistry?.hasHooks("PostToolUse") || this.hookRegistry?.hasHooks("PostToolUseFailure")) {
+        const hookEvent = toolError ? "PostToolUseFailure" : "PostToolUse";
+        void this.hookRegistry.execute(hookEvent as import("@omi/extensions").HookEvent, {
+          event: hookEvent,
+          toolName,
+          toolOutput,
+          toolUseId: toolCallId,
+          sessionId,
+          cwd: this.deps.workspaceRoot,
+          error: toolError ? JSON.stringify(toolOutput) : undefined,
+        });
       }
-      throw error;
+
+      // 13. Check for interrupt/suspension
+      if (!toolError && toolOutput?.details && typeof toolOutput.details === "object" && (toolOutput.details as any).isInterrupt) {
+        this.suspended = true;
+      }
+
+      return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
+    };
+
+    // Execute sequentially by default
+    for (const toolCall of toolCalls) {
+      if (this.abortController?.signal.aborted || this.canceled) break;
+      const result = await executeSingleTool(toolCall);
+      toolResults.push(result);
     }
+
+    return toolResults;
+  }
+
+  private buildToolResultMessage(
+    piToolCallId: string,
+    toolName: string,
+    output: any,
+    isError: boolean,
+  ): ToolResultMessage {
+    return {
+      role: "toolResult",
+      toolCallId: piToolCallId,
+      toolName,
+      content: Array.isArray(output)
+        ? output
+        : [{ type: "text", text: typeof output === "string" ? output : JSON.stringify(output) }],
+      isError,
+      timestamp: Date.now(),
+    } as ToolResultMessage;
   }
 
   // ==========================================================================
@@ -1130,58 +1169,6 @@ export class QueryEngine {
   // ==========================================================================
   // Tool handling
   // ==========================================================================
-
-  private async handleToolRequested(
-    runId: string,
-    sessionId: string,
-    taskId: string | null,
-    event: ProviderToolRequestedEvent,
-  ): Promise<string> {
-    const toolCallId = event.toolCallId;
-    this.deps.database.createToolCall({
-      id: toolCallId,
-      runId,
-      sessionId,
-      taskId,
-      toolName: event.toolName,
-      approvalState: event.requiresApproval ? "pending" : "not_required",
-      input: event.input,
-      output: null,
-      error: null,
-    });
-
-    this.emitEvent({
-      type: "run.tool_requested",
-      payload: {
-        runId,
-        sessionId,
-        toolCallId,
-        toolName: event.toolName,
-        requiresApproval: event.requiresApproval,
-        input: event.input,
-      },
-    });
-
-    if (event.requiresApproval) {
-      this.deps.runtime.blockOnTool(runId, toolCallId);
-
-      const session = this.requireSession();
-      this.deps.database.updateSession(sessionId, {
-        status: nextSessionStatus(session.status, "tool_blocked"),
-      });
-
-      this.emitEvent({
-        type: "run.blocked",
-        payload: {
-          runId,
-          toolCallId,
-          reason: `Waiting for approval: ${event.toolName}`,
-        },
-      });
-    }
-
-    return toolCallId;
-  }
 
   private handleToolDecision(
     runId: string,
