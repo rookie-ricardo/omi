@@ -2,6 +2,7 @@ import {
   validateToolArguments,
   type Tool,
   type ToolCall,
+  type Static,
   type TSchema,
 } from "@mariozechner/pi-ai";
 
@@ -15,11 +16,11 @@ function normalizeToolArguments(toolName: string, params: unknown): Record<strin
   return params as Record<string, unknown>;
 }
 
-export function parseToolInput<TInput>(
+export function parseToolInput<TInputSchema extends TSchema>(
   toolName: string,
-  schema: TSchema,
+  schema: TInputSchema,
   params: unknown,
-): TInput {
+): Static<TInputSchema> {
   const tool: Tool = {
     name: toolName,
     description: toolName,
@@ -30,8 +31,8 @@ export function parseToolInput<TInput>(
     type: "toolCall",
     id: `${toolName}:input`,
     name: toolName,
-    arguments: normalizeToolArguments(toolName, params) as Record<string, any>,
+    arguments: normalizeToolArguments(toolName, params),
   };
 
-  return validateToolArguments(tool, call) as TInput;
+  return validateToolArguments(tool, call) as Static<TInputSchema>;
 }

@@ -81,7 +81,7 @@ export function createWebFetchTool(): AgentTool<typeof webFetchSchema, { url?: s
     description: "Fetch a web page and return its text content.",
     parameters: webFetchSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { url, maxChars } = parseToolInput("web.fetch", webFetchSchema, params) as WebFetchInput;
+      const { url, maxChars } = parseToolInput("web.fetch", webFetchSchema, params);
       let parsed: URL;
       try {
         parsed = new URL(url);
@@ -116,7 +116,7 @@ export function createWebSearchTool(): AgentTool<typeof webSearchSchema, { query
     description: "Search the web and return top results.",
     parameters: webSearchSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { query, limit } = parseToolInput("web.search", webSearchSchema, params) as WebSearchInput;
+      const { query, limit } = parseToolInput("web.search", webSearchSchema, params);
       const resultLimit = Math.max(1, limit ?? 5);
       const searchUrl = new URL("https://duckduckgo.com/html/");
       searchUrl.searchParams.set("q", query);
@@ -143,7 +143,7 @@ export function createAskUserTool(): AgentTool<typeof askUserSchema, { question:
     description: "Ask the user a clarifying question and wait for a response.",
     parameters: askUserSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { question, choices } = parseToolInput("ask_user", askUserSchema, params) as AskUserInput;
+      const { question, choices } = parseToolInput("ask_user", askUserSchema, params);
       const lines = [question];
       if (choices && choices.length > 0) {
         lines.push("", `Choices: ${choices.join(", ")}`);

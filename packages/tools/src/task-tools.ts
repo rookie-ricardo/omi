@@ -135,7 +135,7 @@ export function createTaskCreateTool(): AgentTool<typeof taskCreateSchema, TaskT
     description: "Create a task record for the session.",
     parameters: taskCreateSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const input = parseToolInput("task.create", taskCreateSchema, params) as TaskCreateInput;
+      const input = parseToolInput("task.create", taskCreateSchema, params);
       const runtime = getTaskToolRuntime();
       const created = runtime.createTask(input);
       return {
@@ -153,7 +153,7 @@ export function createTaskUpdateTool(): AgentTool<typeof taskUpdateSchema, TaskT
     description: "Update an existing task record.",
     parameters: taskUpdateSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const input = parseToolInput("task.update", taskUpdateSchema, params) as TaskUpdateInput;
+      const input = parseToolInput("task.update", taskUpdateSchema, params);
       const runtime = getTaskToolRuntime();
       const updated = runtime.updateTask(input.taskId, input);
       if (!updated) {
@@ -177,7 +177,7 @@ export function createTaskGetTool(): AgentTool<typeof taskGetSchema, TaskToolDet
     description: "Get a task by ID.",
     parameters: taskGetSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { taskId } = parseToolInput("task.get", taskGetSchema, params) as TaskGetInput;
+      const { taskId } = parseToolInput("task.get", taskGetSchema, params);
       const runtime = getTaskToolRuntime();
       const record = runtime.getTask(taskId);
       if (!record) {
@@ -201,7 +201,7 @@ export function createTaskListTool(): AgentTool<typeof taskListSchema, TaskToolD
     description: "List tasks with optional filters.",
     parameters: taskListSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const input = parseToolInput("task.list", taskListSchema, params) as TaskListInput;
+      const input = parseToolInput("task.list", taskListSchema, params);
       const runtime = getTaskToolRuntime();
       const tasks = runtime.listTasks(input);
       if (tasks.length === 0) {
@@ -225,7 +225,7 @@ export function createTaskStopTool(): AgentTool<typeof taskStopSchema, TaskToolD
     description: "Stop a task by marking it dismissed.",
     parameters: taskStopSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { taskId } = parseToolInput("task.stop", taskStopSchema, params) as TaskStopInput;
+      const { taskId } = parseToolInput("task.stop", taskStopSchema, params);
       const runtime = getTaskToolRuntime();
       const stopped = runtime.stopTask(taskId);
       if (!stopped) {
@@ -249,7 +249,7 @@ export function createTaskOutputTool(): AgentTool<typeof taskOutputSchema, TaskT
     description: "Attach an output artifact to a task.",
     parameters: taskOutputSchema,
     execute: async (_toolCallId: string, params: unknown) => {
-      const { taskId, output } = parseToolInput("task.output", taskOutputSchema, params) as TaskOutputInput;
+      const { taskId, output } = parseToolInput("task.output", taskOutputSchema, params);
       const runtime = getTaskToolRuntime();
       const stored = runtime.setTaskOutput(taskId, output);
       if (!stored) {
