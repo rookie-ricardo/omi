@@ -11,13 +11,21 @@ import type {
   ToolCall,
 } from "@omi/core";
 import type { AppStore } from "@omi/store";
+import type { McpRegistry } from "@omi/provider";
+import {
+  type SubAgentManagerClient,
+  type SubAgentToolState,
+  type TaskToolRecord,
+  type TaskToolRuntime,
+  type ToolRuntimeContext,
+} from "@omi/tools";
 
 import {
   AgentSession,
   type AgentSessionOptions,
   type RunnerEventEnvelope,
 } from "./agent-session";
-import { listBuiltInModels, listBuiltInProviders } from "@omi/provider";
+import { listBuiltInModels, listBuiltInProviders, McpRegistry as McpRegistryImpl } from "@omi/provider";
 import { getProviderDefaults, type SettingsManager } from "@omi/settings";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader";
 import type { SessionCompactionSnapshot } from "@omi/memory";
@@ -26,8 +34,15 @@ import {
   createDatabaseSessionRuntimeStore,
   type SessionRuntimeState,
 } from "./session-manager";
+import {
+  SubAgentManager,
+  type SubAgentSpawnRequest,
+  type SubAgentState,
+  type SubAgentStatus,
+} from "./subagent-manager";
 import { getGitDiffPreview, getGitRepoState } from "./vcs";
 import { getLogger } from "./logger";
+import { nowIso } from "@omi/core";
 
 const logger = getLogger("orchestrator");
 
@@ -96,6 +111,10 @@ export class AppOrchestrator {
   private readonly sessionManager: SessionManager;
   private readonly agentSessions = new Map<string, AgentSession>();
   private readonly settingsManager?: SettingsManager;
+  private readonly subAgentManager: SubAgentManager;
+  private readonly mcpRegistry: McpRegistry;
+  private readonly taskToolRuntime: TaskToolRuntime;
+  private readonly toolRuntimeContext: ToolRuntimeContext;
 
   constructor(
     private readonly database: AppStore,
@@ -112,6 +131,14 @@ export class AppOrchestrator {
     this.sessionManager =
       sessionManager ?? new SessionManager(createDatabaseSessionRuntimeStore(database));
     this.settingsManager = settingsManager;
+    this.subAgentManager = new SubAgentManager(workspaceRoot);
+    this.mcpRegistry = new McpRegistryImpl();
+    this.taskToolRuntime = createDatabaseTaskToolRuntime(database);
+    this.toolRuntimeContext = {
+      mcpRegistry: this.mcpRegistry,
+      subAgentClient: createSubAgentRuntimeClient(this.subAgentManager),
+      taskRuntime: this.taskToolRuntime,
+    };
   }
 
   createSession(title: string): Session {
@@ -469,6 +496,7 @@ export class AppOrchestrator {
       resources: this.resources,
       runtime: this.sessionManager.getOrCreate(sessionId),
       settingsManager: this.settingsManager,
+      toolRuntimeContext: this.toolRuntimeContext,
     });
     this.agentSessions.set(sessionId, agentSession);
     logger.debug("AgentSession created", { sessionId, durationMs: Date.now() - startTime });
@@ -500,4 +528,205 @@ function nextTaskStatus(
     return current === "active" ? "review" : current;
   }
   return current;
+}
+
+class DatabaseTaskToolRuntime implements TaskToolRuntime {
+  private readonly meta = new Map<string, { output?: string; stoppedAt?: string }>();
+
+  constructor(private readonly database: AppStore) {}
+
+  createTask(input: {
+    title: string;
+    originSessionId: string;
+    candidateReason: string;
+    autoCreated?: boolean;
+    status?: Task["status"];
+  }): TaskToolRecord {
+    const task = this.database.createTask({
+      title: input.title,
+      originSessionId: input.originSessionId,
+      candidateReason: input.candidateReason,
+      autoCreated: input.autoCreated ?? true,
+      status: input.status ?? "inbox",
+    });
+    return this.toRecord(task);
+  }
+
+  updateTask(taskId: string, input: {
+    title?: string;
+    status?: Task["status"];
+    candidateReason?: string;
+    autoCreated?: boolean;
+  }): TaskToolRecord | null {
+    const current = this.database.getTask(taskId);
+    if (!current) {
+      return null;
+    }
+
+    const updated = this.database.updateTask(taskId, {
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.candidateReason !== undefined ? { candidateReason: input.candidateReason } : {}),
+      ...(input.autoCreated !== undefined ? { autoCreated: input.autoCreated } : {}),
+    });
+    return this.toRecord(updated);
+  }
+
+  getTask(taskId: string): TaskToolRecord | null {
+    const task = this.database.getTask(taskId);
+    if (!task) {
+      return null;
+    }
+    return this.toRecord(task);
+  }
+
+  listTasks(input?: { status?: Task["status"]; originSessionId?: string }): TaskToolRecord[] {
+    return this.database
+      .listTasks()
+      .filter((task) => {
+        if (input?.status && task.status !== input.status) return false;
+        if (input?.originSessionId && task.originSessionId !== input.originSessionId) return false;
+        return true;
+      })
+      .map((task) => this.toRecord(task));
+  }
+
+  stopTask(taskId: string): TaskToolRecord | null {
+    const task = this.database.getTask(taskId);
+    if (!task) {
+      return null;
+    }
+
+    const stoppedAt = nowIso();
+    const updated = this.database.updateTask(taskId, {
+      status: "dismissed",
+    });
+    this.meta.set(taskId, {
+      ...this.meta.get(taskId),
+      stoppedAt,
+    });
+    return this.toRecord(updated);
+  }
+
+  setTaskOutput(taskId: string, output: string): TaskToolRecord | null {
+    const task = this.database.getTask(taskId);
+    if (!task) {
+      return null;
+    }
+
+    this.meta.set(taskId, {
+      ...this.meta.get(taskId),
+      output,
+    });
+    return this.toRecord(task);
+  }
+
+  private toRecord(task: Task): TaskToolRecord {
+    const details = this.meta.get(task.id);
+    return {
+      task,
+      output: details?.output,
+      stoppedAt: details?.stoppedAt,
+    };
+  }
+}
+
+function createDatabaseTaskToolRuntime(database: AppStore): TaskToolRuntime {
+  return new DatabaseTaskToolRuntime(database);
+}
+
+function createSubAgentRuntimeClient(manager: SubAgentManager): SubAgentManagerClient {
+  return {
+    async spawn(input) {
+      const typedInput = (input ?? {}) as SubAgentSpawnRequest;
+      const subAgentId = manager.spawn({
+        ...typedInput,
+        ownerId: "main",
+      });
+      const state = manager.getState(subAgentId);
+      return {
+        subAgentId,
+        name: state?.name ?? subAgentId,
+      };
+    },
+    async send(input) {
+      const typedInput = input as { subAgentId: string; message: string; topic?: string };
+      const message = manager.send(
+        typedInput.subAgentId,
+        typedInput.message,
+        typedInput.topic,
+      );
+      return {
+        success: message !== null,
+        messageId: message?.id,
+      };
+    },
+    async wait(input) {
+      const typedInput = input as { subAgentId: string; timeout?: number };
+      const result = await manager.wait(typedInput.subAgentId, typedInput.timeout);
+      return {
+        status: result.status,
+        result: result.result ?? result.output ?? result.text,
+        error: result.error,
+        timedOut: result.status === "timeout",
+      };
+    },
+    async close(input) {
+      const typedInput = input as { subAgentId: string; force?: boolean };
+      return {
+        success: manager.close(typedInput.subAgentId, typedInput.force ?? false),
+      };
+    },
+    async list(input) {
+      const typedInput = (input ?? {}) as { status?: string; parentId?: string };
+      const status = normalizeSubAgentStatus(typedInput.status);
+      const subAgents = manager.list({
+        status,
+        parentId: typedInput.parentId,
+      }).map((subAgent) => toSubAgentToolState(subAgent.state));
+      return { subAgents };
+    },
+    async get(input) {
+      const typedInput = input as { subAgentId: string };
+      const state = manager.getState(typedInput.subAgentId);
+      return {
+        subAgent: state ? toSubAgentToolState(state) : undefined,
+      };
+    },
+  };
+}
+
+function normalizeSubAgentStatus(status: string | undefined): SubAgentStatus | undefined {
+  switch (status) {
+    case "pending":
+    case "initializing":
+    case "running":
+    case "waiting":
+    case "completed":
+    case "failed":
+    case "canceled":
+    case "closed":
+      return status;
+    default:
+      return undefined;
+  }
+}
+
+function toSubAgentToolState(state: SubAgentState): SubAgentToolState {
+  return {
+    id: state.id,
+    name: state.name,
+    status: state.status === "canceled" ? "closed" : state.status,
+    task: state.task,
+    workspaceRoot: state.workspaceRoot,
+    parentId: state.parentId,
+    createdAt: state.createdAt,
+    startedAt: state.startedAt,
+    completedAt: state.completedAt,
+    result: state.result,
+    error: state.error,
+    progress: state.progress,
+    messages: state.messages,
+    toolCalls: state.toolCalls,
+  };
 }

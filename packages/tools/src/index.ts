@@ -37,6 +37,8 @@ export * from "./subagent";
 export * from "./task-tools";
 export * from "./web-tools";
 export {
+  runWithToolRuntimeContext,
+  getCurrentToolRuntimeContext,
   getMcpRegistryRuntime,
   setMcpRegistryRuntime,
   getSubAgentClientRuntime,
@@ -50,6 +52,7 @@ export {
   type TaskToolCreateInput,
   type TaskToolUpdateInput,
   type TaskToolListInput,
+  type ToolRuntimeContext,
 } from "./runtime";
 
 // Plan Mode Tools

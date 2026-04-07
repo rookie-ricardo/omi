@@ -34,6 +34,10 @@ import {
   type ProviderRunResult,
   type ProviderToolRequestedEvent,
 } from "@omi/provider";
+import {
+  runWithToolRuntimeContext,
+  type ToolRuntimeContext,
+} from "@omi/tools";
 
 import type { ResourceLoader } from "./resource-loader";
 import type { SessionRuntime } from "./session-manager";
@@ -74,6 +78,8 @@ export interface AgentSessionOptions {
   settingsManager?: SettingsManager;
   /** Permission evaluator for rule-based access control. */
   evaluator?: PermissionEvaluator;
+  /** Optional per-run tool runtime context (MCP/SubAgent/Task). */
+  toolRuntimeContext?: ToolRuntimeContext;
 }
 
 interface ExecuteRunInput {
@@ -464,17 +470,22 @@ export class AgentSession {
 
     try {
       // Execute the query loop using the state machine
-      const result = await queryEngine.execute({
-        session: input.session,
-        task: input.task,
-        run: input.run,
-        prompt: input.prompt,
-        images: input.images,
-        providerConfig: input.providerConfig,
-        historyEntryId: input.historyEntryId,
-        checkpointSummary: input.checkpointSummary,
-        checkpointDetails: input.checkpointDetails,
-      });
+      const executeLoop = () =>
+        queryEngine.execute({
+          session: input.session,
+          task: input.task,
+          run: input.run,
+          prompt: input.prompt,
+          images: input.images,
+          providerConfig: input.providerConfig,
+          historyEntryId: input.historyEntryId,
+          checkpointSummary: input.checkpointSummary,
+          checkpointDetails: input.checkpointDetails,
+        });
+
+      const result = this.options.toolRuntimeContext
+        ? await runWithToolRuntimeContext(this.options.toolRuntimeContext, executeLoop)
+        : await executeLoop();
 
       // Handle non-terminal-success cases
       if (result.terminalReason !== "completed") {

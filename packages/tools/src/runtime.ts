@@ -1,7 +1,27 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createId, nowIso, type Task } from "@omi/core";
 import type { McpRegistry } from "@omi/provider";
 
 import type { SubAgentManagerClient } from "./subagent";
+
+export interface ToolRuntimeContext {
+  mcpRegistry?: McpRegistry | null;
+  subAgentClient?: SubAgentManagerClient | null;
+  taskRuntime?: TaskToolRuntime | null;
+}
+
+const runtimeContextStorage = new AsyncLocalStorage<ToolRuntimeContext>();
+
+export function runWithToolRuntimeContext<T>(
+  context: ToolRuntimeContext,
+  fn: () => T,
+): T {
+  return runtimeContextStorage.run(context, fn);
+}
+
+export function getCurrentToolRuntimeContext(): ToolRuntimeContext | null {
+  return runtimeContextStorage.getStore() ?? null;
+}
 
 // ============================================================================
 // MCP Registry Runtime
@@ -10,7 +30,7 @@ import type { SubAgentManagerClient } from "./subagent";
 let globalMcpRegistry: McpRegistry | null = null;
 
 export function getMcpRegistryRuntime(): McpRegistry | null {
-  return globalMcpRegistry;
+  return getCurrentToolRuntimeContext()?.mcpRegistry ?? globalMcpRegistry;
 }
 
 export function setMcpRegistryRuntime(registry: McpRegistry | null): void {
@@ -24,7 +44,7 @@ export function setMcpRegistryRuntime(registry: McpRegistry | null): void {
 let globalSubAgentClient: SubAgentManagerClient | null = null;
 
 export function getSubAgentClientRuntime(): SubAgentManagerClient | null {
-  return globalSubAgentClient;
+  return getCurrentToolRuntimeContext()?.subAgentClient ?? globalSubAgentClient;
 }
 
 export function setSubAgentClientRuntime(client: SubAgentManagerClient | null): void {
@@ -161,6 +181,11 @@ class InMemoryTaskToolRuntime implements TaskToolRuntime {
 let globalTaskRuntime: TaskToolRuntime | null = null;
 
 export function getTaskToolRuntime(): TaskToolRuntime {
+  const scopedRuntime = getCurrentToolRuntimeContext()?.taskRuntime;
+  if (scopedRuntime) {
+    return scopedRuntime;
+  }
+
   if (!globalTaskRuntime) {
     throw new Error("Task runtime is not configured");
   }

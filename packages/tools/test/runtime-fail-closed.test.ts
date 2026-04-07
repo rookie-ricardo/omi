@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createAllTools } from "../src/tools.ts";
 import {
   createInMemoryTaskToolRuntime,
+  runWithToolRuntimeContext,
   resetTaskToolRuntime,
   setMcpRegistryRuntime,
   setSubAgentClientRuntime,
@@ -67,5 +68,33 @@ describe("tool runtime fail-closed behavior", () => {
 
     const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
     expect(text).toContain("Created task");
+  });
+
+  it("uses scoped runtime context for a single execution", async () => {
+    resetTaskToolRuntime();
+    const root = mkdtempSync(join(tmpdir(), "omi-tools-"));
+    const tools = createAllTools(root);
+    const scopedRuntime = createInMemoryTaskToolRuntime();
+
+    const scopedResult = await runWithToolRuntimeContext(
+      { taskRuntime: scopedRuntime },
+      () =>
+        tools["task.create"]?.execute("call-task-create", {
+          title: "Scoped",
+          originSessionId: "S",
+          candidateReason: "C",
+        }),
+    );
+
+    const text = scopedResult?.content?.find((c) => c.type === "text")?.text ?? "";
+    expect(text).toContain("Created task");
+
+    await expect(
+      tools["task.create"]?.execute("call-task-create", {
+        title: "Outside",
+        originSessionId: "S",
+        candidateReason: "C",
+      }),
+    ).rejects.toThrow("Task runtime is not configured");
   });
 });
