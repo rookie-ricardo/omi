@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { delimiter } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { getAgentDir, getBinDir } from "@omi/settings";
+import { getAgentDir, getBinDir } from "@omi/core";
 
 let cachedShellConfig: { shell: string; args: string[] } | null = null;
 

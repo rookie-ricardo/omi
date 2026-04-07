@@ -21,7 +21,6 @@
     "@mariozechner/pi-agent-core": "^0.58.4",
     "@mariozechner/pi-ai": "^0.58.4",
     "@omi/core": "workspace:*",
-    "@omi/settings": "workspace:*",
     "@silvia-odwyer/photon-node": "^0.3.4",
     "diff": "^8.0.3",
     "extract-zip": "^2.0.1",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 export function ensureDir(path: string): string {
   mkdirSync(path, { recursive: true });
@@ -61,4 +61,25 @@ export function toErrorMessage(error: unknown): string {
 
 export function splitLines(value: string): string[] {
   return value.split(/\r?\n/);
+}
+
+/**
+ * Get the agent config directory (e.g., ~/.omi/).
+ * Respects OMI_DIR env var and tilde expansion.
+ */
+export function getAgentDir(): string {
+  const envDir = process.env.OMI_DIR;
+  if (envDir) {
+    if (envDir === "~") return require("node:os").homedir();
+    if (envDir.startsWith("~/")) return require("node:os").homedir() + envDir.slice(1);
+    return envDir;
+  }
+  return join(require("node:os").homedir(), ".omi");
+}
+
+/**
+ * Get path to managed binaries directory (fd, rg).
+ */
+export function getBinDir(): string {
+  return join(getAgentDir(), "bin");
 }
