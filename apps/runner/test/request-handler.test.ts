@@ -80,6 +80,17 @@ describe("runner request handler", () => {
 
     const orchestrator = {
       createSession: vi.fn(),
+      updateSessionTitle: vi.fn((sessionId: string, title: string) => ({
+        session: {
+          id: sessionId,
+          title,
+          status: "idle" as const,
+          createdAt: "2025-03-30T00:00:00.000Z",
+          updatedAt: "2025-03-30T00:00:00.000Z",
+          latestUserMessage: null,
+          latestAssistantMessage: null,
+        },
+      })),
       listSessions: vi.fn(),
       getSessionDetail: vi.fn(),
       getSessionRuntimeState: vi.fn(() => runtimeState),
@@ -197,6 +208,29 @@ describe("runner request handler", () => {
     });
     expect(normalizeResult("session.runtime.get", runtimeResponse)).toEqual(
       parseResult("session.runtime.get", runtimeResponse),
+    );
+
+    const updatedTitleResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_title",
+      method: "session.title.update",
+      params: {
+        sessionId: "session_1",
+        title: "renamed thread",
+      },
+    });
+    expect(updatedTitleResponse).toEqual({
+      session: {
+        id: "session_1",
+        title: "renamed thread",
+        status: "idle",
+        createdAt: "2025-03-30T00:00:00.000Z",
+        updatedAt: "2025-03-30T00:00:00.000Z",
+        latestUserMessage: null,
+        latestAssistantMessage: null,
+      },
+    });
+    expect(normalizeResult("session.title.update", updatedTitleResponse)).toEqual(
+      parseResult("session.title.update", updatedTitleResponse),
     );
 
     const createdBranchResponse = await handleRunnerRequest(orchestrator, {

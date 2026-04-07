@@ -38,6 +38,7 @@ type SubAgentTaskSnapshot = {
 type RunnerRequestOrchestrator = Pick<
   AppOrchestrator,
   | "createSession"
+  | "updateSessionTitle"
   | "listSessions"
   | "getSessionDetail"
   | "getSessionRuntimeState"
@@ -130,6 +131,11 @@ async function executeCommand(
       return orchestrator.listSessions();
     case "session.get":
       return orchestrator.getSessionDetail(String(params.sessionId));
+    case "session.title.update":
+      return orchestrator.updateSessionTitle(
+        String(params.sessionId),
+        String(params.title),
+      );
     case "session.runtime.get": {
       const sessionId = String(params.sessionId);
       return {
