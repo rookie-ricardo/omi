@@ -1236,7 +1236,9 @@ export class QueryEngine {
         this.deps.database.listBranches(input.session.id).at(-1)?.id ??
         null;
       const parentHistoryEntry =
-        this.deps.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
+        branchId
+          ? this.deps.database.getBranchHistory(input.session.id, branchId).at(-1) ?? null
+          : this.deps.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
       const details = {
         mode: input.mode,
         prompt: input.prompt,
@@ -1449,7 +1451,9 @@ export class QueryEngine {
           this.deps.database.listBranches(session.id).at(-1)?.id ??
           null;
         const parentHistoryEntry =
-          this.deps.database.listSessionHistoryEntries?.(session.id).at(-1) ?? null;
+          branchId
+            ? this.deps.database.getBranchHistory(session.id, branchId).at(-1) ?? null
+            : this.deps.database.listSessionHistoryEntries?.(session.id).at(-1) ?? null;
         const details = {
           mode: "pipeline",
           tokensBefore: result.usageEstimate.tokens,

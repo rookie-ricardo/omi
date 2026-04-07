@@ -633,7 +633,9 @@ export class AgentSession {
         this.options.database.listBranches(input.session.id).at(-1)?.id ??
         null;
       const parentHistoryEntry =
-        this.options.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
+        branchId
+          ? this.options.database.getBranchHistory(input.session.id, branchId).at(-1) ?? null
+          : this.options.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
       const details = {
         mode: input.mode,
         prompt: input.prompt,

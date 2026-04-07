@@ -367,8 +367,9 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     });
     db.insert(messagesTable).values(message).run();
 
-    const resolvedParentId = parentHistoryEntryId ?? getLatestSessionHistoryEntry(message.sessionId)?.id ?? null;
     const activeBranchId = branchId ?? getActiveBranchId(message.sessionId) ?? null;
+    const resolvedParentId =
+      parentHistoryEntryId ?? resolveDefaultParentHistoryEntryId(message.sessionId, activeBranchId);
 
     addSessionHistoryEntry({
       sessionId: message.sessionId,
@@ -400,7 +401,8 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     input: Omit<SessionHistoryEntry, "id" | "createdAt" | "updatedAt"> & { id?: string },
   ): SessionHistoryEntry {
     const timestamp = nowIso();
-    const resolvedParentId = input.parentId ?? getLatestSessionHistoryEntry(input.sessionId)?.id ?? null;
+    const resolvedParentId =
+      input.parentId ?? resolveDefaultParentHistoryEntryId(input.sessionId, input.branchId ?? null);
     const entry = sessionHistoryEntrySchema.parse({
       id: input.id ?? createId("hist"),
       ...input,
@@ -857,6 +859,16 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     const parent = getHistoryEntry(parentId);
     if (!parent) return 0;
     return parent.lineageDepth + 1;
+  }
+
+  function resolveDefaultParentHistoryEntryId(
+    sessionId: string,
+    branchId: string | null,
+  ): string | null {
+    if (branchId) {
+      return getBranchHistory(sessionId, branchId).at(-1)?.id ?? null;
+    }
+    return getLatestSessionHistoryEntry(sessionId)?.id ?? null;
   }
 
   function getActiveBranchId(sessionId: string): string | null {

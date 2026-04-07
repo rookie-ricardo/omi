@@ -4,6 +4,7 @@ import { createId, nowIso } from "@omi/core";
 import type { AppStore } from "@omi/store";
 import type { ProviderRunInput, ProviderRunResult } from "@omi/provider";
 import type { SessionRuntimeMessageEnvelope } from "@omi/memory";
+import { ContextPipeline } from "@omi/memory";
 
 import {
   QueryEngine,
@@ -949,6 +950,7 @@ describe("QueryEngine", () => {
       const baseDatabase = createTestDatabase(session, run);
       const parentEntryId = createId("history");
       const branchId = createId("branch");
+      const foreignBranchId = createId("branch");
       const historyEntries: Array<Record<string, unknown>> = [
         {
           id: parentEntryId,
@@ -960,6 +962,19 @@ describe("QueryEngine", () => {
           details: null,
           branchId,
           lineageDepth: 3,
+          originRunId: null,
+          createdAt: nowIso(),
+        },
+        {
+          id: createId("history"),
+          sessionId: session.id,
+          parentId: null,
+          kind: "message",
+          messageId: createId("msg"),
+          summary: null,
+          details: null,
+          branchId: foreignBranchId,
+          lineageDepth: 9,
           originRunId: null,
           createdAt: nowIso(),
         },
@@ -977,6 +992,8 @@ describe("QueryEngine", () => {
         }],
         getActiveBranchId: () => branchId,
         listSessionHistoryEntries: () => historyEntries as never[],
+        getBranchHistory: (_sessionId, targetBranchId) =>
+          historyEntries.filter((entry) => entry.branchId === targetBranchId) as never[],
         addSessionHistoryEntry: (input) => {
           const created = {
             id: createId("history"),
@@ -1060,6 +1077,148 @@ describe("QueryEngine", () => {
       expect(summarized.every((entry) => typeof entry.role === "string" && typeof entry.token === "string")).toBe(true);
       const fallbackTokens = [...summarized, ...kept].map((entry) => `${entry.role}:${entry.token}`);
       expect(fallbackTokens.some((token) => token.startsWith("user:"))).toBe(true);
+    });
+
+    it("writes pipeline compaction summaries against active branch lineage", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const baseDatabase = createTestDatabase(session, run);
+      const branchId = createId("branch");
+      const foreignBranchId = createId("branch");
+      const parentEntryId = createId("history");
+      const historyEntries: Array<Record<string, unknown>> = [
+        {
+          id: parentEntryId,
+          sessionId: session.id,
+          parentId: null,
+          kind: "branch_summary",
+          messageId: null,
+          summary: "feature-checkpoint",
+          details: null,
+          branchId,
+          lineageDepth: 2,
+          originRunId: null,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        },
+        {
+          id: createId("history"),
+          sessionId: session.id,
+          parentId: null,
+          kind: "message",
+          messageId: createId("msg"),
+          summary: null,
+          details: null,
+          branchId: foreignBranchId,
+          lineageDepth: 10,
+          originRunId: null,
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        },
+      ];
+
+      const database: AppStore = {
+        ...baseDatabase,
+        listBranches: () => [{
+          id: branchId,
+          sessionId: session.id,
+          headEntryId: parentEntryId,
+          title: "main",
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        }],
+        getActiveBranchId: () => branchId,
+        listSessionHistoryEntries: () => historyEntries as never[],
+        getBranchHistory: (_sessionId, targetBranchId) =>
+          historyEntries.filter((entry) => entry.branchId === targetBranchId) as never[],
+        addSessionHistoryEntry: (input) => {
+          const created = {
+            id: createId("history"),
+            ...input,
+            createdAt: nowIso(),
+            updatedAt: nowIso(),
+          };
+          historyEntries.push(created);
+          return created as never;
+        },
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: () => {},
+        resources: makeStaticResources(),
+        runtime: createMockRuntime(session.id),
+      };
+      const engine = new QueryEngine(deps);
+
+      const compactionSnapshot = {
+        version: 1 as const,
+        summary: {
+          version: 1 as const,
+          goal: "Pipeline compact summary",
+          constraints: [],
+          progress: {
+            done: [],
+            inProgress: [],
+            blocked: [],
+          },
+          keyDecisions: [],
+          nextSteps: [],
+          criticalContext: [],
+        },
+        compactedAt: nowIso(),
+        firstKeptHistoryEntryId: null,
+        firstKeptTimestamp: null,
+        tokensBefore: 150,
+        tokensKept: 60,
+      };
+
+      const executeSpy = vi.spyOn(ContextPipeline.prototype, "execute").mockResolvedValue({
+        messages: [],
+        didCompact: true,
+        compactionSnapshot,
+        usageEstimate: {
+          tokens: 150,
+          usageTokens: 0,
+          trailingTokens: 150,
+          lastUsageIndex: null,
+        },
+      });
+      const reportSpy = vi.spyOn(ContextPipeline.prototype, "getReport").mockReturnValue({
+        stages: [{ name: "context_collapse", didModify: true, reason: "threshold" }],
+      });
+
+      try {
+        await (
+          engine as unknown as {
+            runContextPipeline: (
+              session: Session,
+              providerConfig: ProviderConfig,
+              messages: unknown[],
+              runId: string,
+            ) => Promise<unknown>;
+          }
+        ).runContextPipeline(
+          session,
+          createTestProviderConfig(),
+          [{
+            role: "user",
+            content: "pipeline input",
+            timestamp: Date.now(),
+          }],
+          run.id,
+        );
+      } finally {
+        executeSpy.mockRestore();
+        reportSpy.mockRestore();
+      }
+
+      const latestEntry = historyEntries.at(-1) as Record<string, unknown>;
+      expect(latestEntry.kind).toBe("branch_summary");
+      expect(latestEntry.parentId).toBe(parentEntryId);
+      expect(latestEntry.lineageDepth).toBe(3);
     });
   });
 

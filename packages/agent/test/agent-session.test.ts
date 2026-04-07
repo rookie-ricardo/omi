@@ -478,6 +478,94 @@ describe("agent session", () => {
     ).toBe(true);
   });
 
+  it("writes manual compaction summaries against the active branch lineage", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Compaction Branch Lineage");
+    const runtime = new SessionManager().getOrCreate(session.id);
+    const providerConfig = database.upsertProviderConfig(makeProviderConfig());
+    runtime.setSelectedProviderConfig(providerConfig.id);
+    const mainBranch = database.createBranch({
+      id: createId("branch"),
+      sessionId: session.id,
+      headEntryId: null,
+      title: "main",
+    });
+    database.setActiveBranchId(session.id, mainBranch.id);
+    const provider = {
+      async run(): Promise<ProviderRunResult> {
+        return { assistantText: "done" };
+      },
+      cancel() {},
+      approveTool() {},
+      rejectTool() {},
+    };
+
+    const agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: () => {},
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+      compactionSummarizer: makeTestCompactionSummarizer(),
+    });
+
+    const firstRun = agentSession.startRun({
+      prompt: "root prompt",
+      providerConfig,
+      taskId: null,
+    });
+    await waitFor(() => database.getRun(firstRun.id)?.status === "completed");
+
+    const rootEntry = (database.listSessionHistoryEntries?.(session.id) ?? []).find(
+      (entry) => entry.kind === "message",
+    );
+    expect(rootEntry).toBeTruthy();
+
+    const featureBranch = database.createBranch({
+      id: createId("branch"),
+      sessionId: session.id,
+      headEntryId: rootEntry?.id ?? null,
+      title: "feature",
+    });
+    const featureCheckpoint = database.addSessionHistoryEntry?.({
+      sessionId: session.id,
+      parentId: rootEntry?.id ?? null,
+      kind: "branch_summary",
+      messageId: null,
+      summary: "feature-head",
+      details: { source: "test" },
+      branchId: featureBranch.id,
+      lineageDepth: (rootEntry?.lineageDepth ?? 0) + 1,
+      originRunId: null,
+    });
+    expect(featureCheckpoint).toBeTruthy();
+
+    database.addMessage({
+      sessionId: session.id,
+      role: "user",
+      content: "main-latest",
+      parentHistoryEntryId: rootEntry?.id ?? null,
+      branchId: mainBranch.id,
+      originRunId: null,
+    });
+
+    database.setActiveBranchId(session.id, featureBranch.id);
+    const compaction = await agentSession.compactSession();
+
+    const historyEntries = database.listSessionHistoryEntries?.(session.id) ?? [];
+    const summaryEntry = historyEntries.find(
+      (entry) =>
+        entry.kind === "branch_summary"
+        && entry.summary === compaction.summary.goal
+        && entry.branchId === featureBranch.id,
+    );
+    expect(summaryEntry).toBeTruthy();
+    expect(summaryEntry?.parentId).toBe(featureCheckpoint?.id ?? null);
+    expect(summaryEntry?.lineageDepth).toBe((featureCheckpoint?.lineageDepth ?? -1) + 1);
+  });
+
   it("auto compacts long histories before the next run when approaching budget", async () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Threshold");
