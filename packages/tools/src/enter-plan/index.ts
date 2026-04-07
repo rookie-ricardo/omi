@@ -5,7 +5,7 @@
  * 需要用户审批（checkPermissions 返回 ask）。
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 
 export const enterPlanSchema = Type.Object({
@@ -47,7 +47,7 @@ export function setPlanStateManager(manager: PlanStateManager): void {
  * - AI 自主判断任务复杂，需要先规划
  * - 用户要求 AI "先制定计划"
  */
-export function createEnterPlanTool(sessionId: string): AgentTool {
+export function createEnterPlanTool(sessionId: string): OmiTool {
 	return {
 		name: "plan.enter",
 		label: "plan.enter",

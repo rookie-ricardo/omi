@@ -6,7 +6,7 @@
  * - remove: 删除 worktree（有严格的变更检测 fail-closed）
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 
 export const exitWorktreeSchema = Type.Object({
@@ -67,7 +67,7 @@ export function setExitWorktreeStateManager(manager: ExitWorktreeStateManager): 
  * - 任务失败，需要清理 worktree
  * - 切换回主工作目录
  */
-export function createExitWorktreeTool(sessionId: string): AgentTool {
+export function createExitWorktreeTool(sessionId: string): OmiTool {
 	return {
 		name: "exit_worktree",
 		label: "exit_worktree",

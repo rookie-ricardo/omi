@@ -6,7 +6,7 @@
  * - 用户批准后自动放行这些命令
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 
 export const exitPlanSchema = Type.Object({
@@ -80,7 +80,7 @@ function validateAllowedPrompt(prompt: AllowedPrompt): boolean {
  * - AI 完成探索，提交计划供用户审批
  * - 声明需要执行的命令类别
  */
-export function createExitPlanTool(sessionId: string): AgentTool {
+export function createExitPlanTool(sessionId: string): OmiTool {
 	return {
 		name: "plan.exit",
 		label: "plan.exit",

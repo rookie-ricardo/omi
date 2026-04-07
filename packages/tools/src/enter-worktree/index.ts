@@ -7,7 +7,7 @@
  * - 支持 sparse checkout 优化
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
 import { randomUUID } from "node:crypto";
 
@@ -72,7 +72,7 @@ export function setWorktreeStateManager(manager: WorktreeStateManager): void {
 export function createEnterWorktreeTool(
 	repoRoot: string,
 	sessionId: string,
-): AgentTool {
+): OmiTool {
 	return {
 		name: "enter_worktree",
 		label: "enter_worktree",
