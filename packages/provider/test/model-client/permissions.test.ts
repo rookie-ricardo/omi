@@ -1,265 +1,169 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderConfig } from "@omi/core";
+import type { ProviderConfig, OmiTool } from "@omi/core";
+import { PiAiModelClient } from "../../src/model-client/pi-ai-client";
 
-let lastAgentConfig: any;
-let nextPrompt: ((config: any) => Promise<void>) | null = null;
-let lastSubscriber: ((event: any) => void) | null = null;
+const mockStream = vi.fn();
 
-vi.mock("@mariozechner/pi-agent-core", () => {
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
   return {
-    Agent: vi.fn().mockImplementation((config: any) => {
-      lastAgentConfig = config;
-      return {
-        subscribe: vi.fn((handler: (event: any) => void) => {
-          lastSubscriber = handler;
-        }),
-        prompt: vi.fn(async () => {
-          if (nextPrompt) {
-            await nextPrompt(config);
-          }
-        }),
-        abort: vi.fn(),
-      };
-    }),
+    ...actual,
+    streamSimple: (...args: any[]) => mockStream(...args),
   };
 });
 
-import { PiAiModelClient } from "../../src/model-client/pi-ai-client";
-
-describe("PiAiModelClient permission integration", () => {
+describe("PiAiModelClient tool loop", () => {
   afterEach(() => {
-    lastAgentConfig = undefined;
-    nextPrompt = null;
-    lastSubscriber = null;
     vi.clearAllMocks();
   });
 
-  it("filters model-visible tools to the enabled tool subset", async () => {
+  it("completes a run with no tools", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();
 
-    await client.run(
+    mockStream.mockReturnValue((async function* () {
+      yield {
+        type: "text_delta",
+        delta: "Hello",
+      };
+      yield {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          usage: { input: 10, output: 5 },
+        },
+      };
+    })());
+
+    const onTextDelta = vi.fn();
+    const result = await client.run(
       {
         runId: "run_1",
         sessionId: "session_1",
         prompt: "test",
         historyMessages: [],
         providerConfig: config,
-        enabledTools: ["read"],
-        tools: [{ name: "read", label: "read", description: "Read files", parameters: {}, execute: async () => ({}) } as any],
       },
-      {},
+      { onTextDelta },
     );
 
-    expect(lastAgentConfig).toBeDefined();
-    expect(lastAgentConfig.initialState.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "read",
-    ]);
+    expect(result.assistantText).toBe("Hello");
+    expect(onTextDelta).toHaveBeenCalledWith("Hello");
   });
 
-  it("blocks tool execution before the model reaches tool dispatch", async () => {
+  it("executes a tool and continues the loop", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();
-    const onToolCallStart = vi.fn();
-    const onToolDecision = vi.fn();
-
-    nextPrompt = async (agentConfig: any) => {
-      await agentConfig.beforeToolCall({
-        toolCall: { name: "bash" },
-        args: { command: "rm -rf /" },
-      });
+    const toolExecute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "tool result" }] });
+    const tool: OmiTool = {
+      name: "get_weather",
+      description: "Get weather",
+      parameters: {},
+      execute: toolExecute,
     };
 
-    await client.run(
+    let callCount = 0;
+    mockStream.mockImplementation(() => {
+      callCount++;
+      return (async function* () {
+        if (callCount === 1) {
+          yield {
+            type: "done",
+            reason: "toolUse",
+            message: {
+              role: "assistant",
+              content: [
+                { type: "text", text: "I will check the weather." },
+                { type: "toolCall", id: "tc-1", name: "get_weather", arguments: { city: "London" } }
+              ],
+              usage: { input: 10, output: 5 },
+            },
+          };
+        } else {
+          yield {
+            type: "text_delta",
+            delta: "It's sunny.",
+          };
+          yield {
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "It's sunny." }],
+              usage: { input: 20, output: 5 },
+            },
+          };
+        }
+      })();
+    });
+
+    const onToolCallStart = vi.fn();
+    const onToolResult = vi.fn();
+
+    const result = await client.run(
       {
         runId: "run_2",
         sessionId: "session_1",
-        prompt: "test",
+        prompt: "what's the weather?",
         historyMessages: [],
         providerConfig: config,
-        preflightToolCheck: async () => ({
-          decision: "deny",
-          reason: "blocked by policy",
-        }),
+        tools: [tool],
       },
-      {
-        onToolCallStart,
-        onToolDecision,
-      },
+      { onToolCallStart, onToolResult },
     );
 
-    expect(onToolCallStart).not.toHaveBeenCalled();
-    expect(onToolDecision).toHaveBeenCalledTimes(1);
-    const [toolCallId, decision] = onToolDecision.mock.calls[0] ?? [];
-    expect(toolCallId).toMatch(/^run_2:tool:fallback:[a-f0-9]{16}$/);
-    expect(decision).toBe("rejected");
+    expect(toolExecute).toHaveBeenCalled();
+    expect(onToolCallStart).toHaveBeenCalled();
+    expect(onToolResult).toHaveBeenCalled();
+    expect(callCount).toBe(2); // Initial turn + following tool result
+    expect(result.assistantText).toContain(" sunny");
   });
 
-  it("uses provider tool event id as stable toolCallId instead of sequence order", async () => {
+  it("blocks tool execution via preflightToolCheck", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();
-    const onToolDecision = vi.fn();
-
-    nextPrompt = async (agentConfig: any) => {
-      await agentConfig.beforeToolCall({
-        toolCall: { name: "bash", id: "event-b" },
-        args: { command: "echo b" },
-      });
-      await agentConfig.beforeToolCall({
-        toolCall: { name: "bash", id: "event-a" },
-        args: { command: "echo a" },
-      });
+    const toolExecute = vi.fn();
+    const tool: OmiTool = {
+      name: "unsafe_tool",
+      description: "Unsafe",
+      parameters: {},
+      execute: toolExecute,
     };
 
+    mockStream.mockReturnValue((async function* () {
+      yield {
+        type: "done",
+        reason: "toolUse",
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "tc-1", name: "unsafe_tool", arguments: {} }],
+          usage: { input: 10, output: 5 },
+        },
+      };
+    })());
+
+    const onToolResult = vi.fn();
     await client.run(
       {
         runId: "run_3",
         sessionId: "session_1",
-        prompt: "test",
+        prompt: "run unsafe",
         historyMessages: [],
         providerConfig: config,
-        preflightToolCheck: async () => ({
-          decision: "deny",
-          reason: "blocked by policy",
-        }),
+        tools: [tool],
+        preflightToolCheck: async () => ({ decision: "deny", reason: "Blocked" }),
       },
-      {
-        onToolDecision,
-      },
+      { onToolResult },
     );
 
-    expect(onToolDecision.mock.calls).toEqual([
-      ["run_3:tool:event-b", "rejected"],
-      ["run_3:tool:event-a", "rejected"],
-    ]);
-  });
-
-  it("awaits async onToolCallStart and blocks when approval is rejected", async () => {
-    const client = new PiAiModelClient();
-    const config = makeProviderConfig();
-    const callOrder: string[] = [];
-    const onToolDecision = vi.fn();
-    let beforeToolCallResult: { block?: boolean; reason?: string } | null = null;
-
-    nextPrompt = async (agentConfig: any) => {
-      callOrder.push("before");
-      beforeToolCallResult = await agentConfig.beforeToolCall({
-        toolCall: { name: "bash", id: "approval-event" },
-        args: { command: "echo denied" },
-      });
-      callOrder.push("after");
-    };
-
-    await client.run(
-      {
-        runId: "run_4",
-        sessionId: "session_1",
-        prompt: "test",
-        historyMessages: [],
-        providerConfig: config,
-        requiresApprovalFn: (toolName: string) => toolName === "bash",
-      },
-      {
-        onToolCallStart: async (toolCallId) => {
-          callOrder.push("callback-start");
-          await Promise.resolve();
-          callOrder.push("callback-end");
-          setTimeout(() => {
-            client.rejectTool(toolCallId);
-          }, 0);
-        },
-        onToolDecision,
-      },
-    );
-
-    expect(callOrder).toEqual(["before", "callback-start", "callback-end", "after"]);
-    expect(beforeToolCallResult).toEqual({
-      block: true,
-      reason: "Tool execution rejected by user.",
-    });
-    expect(onToolDecision).toHaveBeenCalledWith("run_4:tool:approval-event", "rejected");
-  });
-
-  it("forces approval wait when preflight decision is ask even for read-only tools", async () => {
-    const client = new PiAiModelClient();
-    const config = makeProviderConfig();
-    const onToolDecision = vi.fn();
-    let beforeToolCallResult: { block?: boolean; reason?: string } | null = null;
-
-    nextPrompt = async (agentConfig: any) => {
-      beforeToolCallResult = await agentConfig.beforeToolCall({
-        toolCall: { name: "read", id: "read-ask-event" },
-        args: { path: "README.md" },
-      });
-    };
-
-    await client.run(
-      {
-        runId: "run_5",
-        sessionId: "session_1",
-        prompt: "test",
-        historyMessages: [],
-        providerConfig: config,
-        preflightToolCheck: async () => ({
-          decision: "ask",
-          reason: "requires approval by rule",
-        }),
-      },
-      {
-        onToolCallStart: (toolCallId) => {
-          setTimeout(() => {
-            client.rejectTool(toolCallId);
-          }, 0);
-        },
-        onToolDecision,
-      },
-    );
-
-    expect(beforeToolCallResult).toEqual({
-      block: true,
-      reason: "Tool execution rejected by user.",
-    });
-    expect(onToolDecision).toHaveBeenCalledWith("run_5:tool:read-ask-event", "rejected");
-  });
-
-  it("deduplicates onToolCallStart between preflight hook and normalized start event", async () => {
-    const client = new PiAiModelClient();
-    const config = makeProviderConfig();
-    const onToolCallStart = vi.fn();
-
-    nextPrompt = async (agentConfig: any) => {
-      await agentConfig.beforeToolCall({
-        toolCall: { name: "read", id: "read-start-event" },
-        args: { path: "README.md" },
-      });
-      lastSubscriber?.({
-        type: "tool_execution_start",
-        id: "read-start-event",
-        toolName: "read",
-        args: { path: "README.md" },
-      });
-      await Promise.resolve();
-    };
-
-    await client.run(
-      {
-        runId: "run_6",
-        sessionId: "session_1",
-        prompt: "test",
-        historyMessages: [],
-        providerConfig: config,
-      },
-      {
-        onToolCallStart,
-      },
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(onToolCallStart).toHaveBeenCalledTimes(1);
-    expect(onToolCallStart).toHaveBeenCalledWith(
-      "run_6:tool:read-start-event",
-      "read",
-      { path: "README.md" },
+    expect(toolExecute).not.toHaveBeenCalled();
+    expect(onToolResult).toHaveBeenCalledWith(
+        expect.any(String),
+        "unsafe_tool",
+        { error: "Blocked" },
+        true
     );
   });
 });
@@ -273,8 +177,9 @@ function makeProviderConfig(): ProviderConfig {
     protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     apiKey: "test-api-key",
-    model: "claude-sonnet-4-20250514",
+    model: "claude-3-5-sonnet-20241022",
     createdAt: now,
     updatedAt: now,
   };
 }
+

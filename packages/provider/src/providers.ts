@@ -1,8 +1,6 @@
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
 
-import type { ProviderConfig } from "@omi/core";
+import type { OmiTool, ThinkingLevel, ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
 import { PiAiModelClient } from "./model-client/pi-ai-client";
@@ -26,7 +24,7 @@ export interface ProviderRunInput {
   providerConfig: ProviderConfig;
   enabledTools?: ToolName[];
   /** Pre-built tools injected by the agent layer */
-  tools?: AgentTool[];
+  tools?: OmiTool[];
   /** Callback to check if a tool requires user approval */
   requiresApprovalFn?: (toolName: string) => boolean;
   thinkingLevel?: ThinkingLevel;
@@ -90,7 +88,7 @@ export function buildAgentInitialState(input: ProviderRunInput) {
 /**
  * PiAiProvider - unified provider implementation backed by PiAiModelClient.
  *
- * All calls route through pi-ai via PiAiModelClient (which wraps pi-agent-core Agent).
+ * All calls route through pi-ai via PiAiModelClient (which implements its own agentic loop).
  * The query layer sees no protocol branching - all protocol differences are
  * encapsulated in the pi-ai abstraction layer.
  */

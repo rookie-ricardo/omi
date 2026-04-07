@@ -1,10 +1,5 @@
-import {
-  Agent,
-  type AgentEvent,
-  type AgentTool,
-  ThinkingLevel,
-} from "@mariozechner/pi-agent-core";
-import type { Message } from "@mariozechner/pi-ai";
+import type { OmiTool } from "@omi/core";
+import { type AssistantMessage, type Message, type ToolResultMessage, type StopReason, streamSimple } from "@mariozechner/pi-ai";
 import { createHash } from "node:crypto";
 import { createModelFromConfig } from "../model-registry";
 import { ALLOW_TOOL_PREFLIGHT_DECISION } from "./types";
@@ -14,19 +9,10 @@ import type {
   ModelClientRunInput,
   ModelClientRunResult,
   ModelStopReason,
-  ModelStreamEvent,
   ToolPreflightDecision,
 } from "./types";
 import { routeProtocol } from "./protocol-router";
-import {
-  classifyPiAiError,
-  isRecoverableError,
-  normalizeEvent,
-} from "./normalizer";
-
-// ============================================================================
-// PiAiModelClient Implementation
-// ============================================================================
+import { classifyPiAiError, isRecoverableError } from "./normalizer";
 
 interface PendingApproval {
   runId: string;
@@ -38,13 +24,6 @@ interface RuntimeToolCall {
   toolCallId: string;
   toolName: string;
   phase: "requested" | "started" | "finished";
-}
-
-function toRecord(value: unknown): Record<string, unknown> | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 function canonicalizeForHash(value: unknown): unknown {
@@ -61,38 +40,13 @@ function canonicalizeForHash(value: unknown): unknown {
   return value;
 }
 
-function normalizeToolEventId(rawId: string): string {
-  return rawId.replace(/[^a-zA-Z0-9:_-]/g, "_");
-}
-
-function extractToolEventId(toolCall: unknown): string | null {
-  const record = toRecord(toolCall);
-  if (!record) {
-    return null;
-  }
-  const eventId =
-    (typeof record.id === "string" && record.id)
-    || (typeof record.toolCallId === "string" && record.toolCallId)
-    || (typeof record.callId === "string" && record.callId)
-    || null;
-  if (!eventId || eventId.trim().length === 0) {
-    return null;
-  }
-  return normalizeToolEventId(eventId);
-}
-
 function buildStableToolCallId(
   runId: string,
   toolCall: unknown,
   toolName: string,
   args: Record<string, unknown>,
 ): string {
-  const toolEventId = extractToolEventId(toolCall);
-  if (toolEventId) {
-    return `${runId}:tool:${toolEventId}`;
-  }
-
-  const toolCallSnapshot = JSON.stringify(canonicalizeForHash(toRecord(toolCall) ?? {}));
+  const toolCallSnapshot = JSON.stringify(canonicalizeForHash(toolCall ?? {}));
   const argsSnapshot = JSON.stringify(canonicalizeForHash(args));
   const fingerprint = createHash("sha1")
     .update(`${toolName}|${toolCallSnapshot}|${argsSnapshot}`)
@@ -101,23 +55,10 @@ function buildStableToolCallId(
   return `${runId}:tool:fallback:${fingerprint}`;
 }
 
-/**
- * PiAiModelClient - unified model client implementation.
- *
- * This client wraps @mariozechner/pi-agent-core Agent and normalizes all events
- * to the unified ModelStreamEvent format. Protocol differences are handled
- * internally by pi-ai, so the query loop remains protocol-agnostic.
- *
- * Key design principles:
- * - All protocol routing is based on providerConfig.protocol when present
- * - Events are normalized to ModelStreamEvent format
- * - No direct use of openai or @anthropic-ai/sdk
- * - Protocol-specific behavior is encapsulated in pi-ai
- */
 export class PiAiModelClient implements ModelClient {
-  private readonly activeAgents = new Map<string, Agent>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly toolCallsByRun = new Map<string, RuntimeToolCall[]>();
+  private readonly abortControllers = new Map<string, AbortController>();
 
   async run(
     input: ModelClientRunInput,
@@ -136,141 +77,206 @@ export class PiAiModelClient implements ModelClient {
       preflightToolCheck,
     } = input;
 
-    // Validate protocol routing contract before model execution.
     routeProtocol(providerConfig);
+
+    const abortController = new AbortController();
+    this.abortControllers.set(runId, abortController);
 
     const toolCalls: RuntimeToolCall[] = [];
     this.toolCallsByRun.set(runId, toolCalls);
     const startedToolCallIds = new Set<string>();
-    const context = {
-      runId,
-      sessionId,
-      currentToolCallId: undefined as string | undefined,
-      toolCallIdMap: new Map<string, string>(),
-      messageIdCounter: 0,
-    };
 
-    const agent = new Agent({
-      initialState: {
-        systemPrompt: systemPrompt ?? "",
-        model: createModelFromConfig(providerConfig),
-        tools: input.tools ?? [],
-        messages: historyMessages,
-        thinkingLevel: (thinkingLevel ?? "off") as ThinkingLevel,
-      } as never,
-      convertToLlm: (msgs: Message[]) => msgs as never,
-      transformContext: async (msgs: Message[]) => msgs as never,
-      sessionId,
-      getApiKey: () => providerConfig.apiKey,
-      toolExecution: toolExecutionMode ?? "sequential",
-      beforeToolCall: async ({
-        toolCall,
-        args,
-      }: {
-        toolCall: { name: string };
-        args: Record<string, unknown>;
-      }) => {
-        const toolName = toolCall.name;
-        const toolCallId = buildStableToolCallId(runId, toolCall, toolName, args);
-        context.currentToolCallId = toolCallId;
-        const toolEventId = extractToolEventId(toolCall);
-        if (toolEventId) {
-          context.toolCallIdMap.set(toolEventId, toolCallId);
-        }
-        const preflight: ToolPreflightDecision =
-          (await preflightToolCheck?.(toolName, args))
-          ?? ALLOW_TOOL_PREFLIGHT_DECISION;
-        if (preflight.decision === "deny") {
-          await callbacks.onToolDecision?.(toolCallId, "rejected");
-          return {
-            block: true,
-            reason: preflight.reason ?? `Tool '${toolName}' is denied by policy.`,
-          };
-        }
+    const model = createModelFromConfig(providerConfig);
+    const apiTools = (input.tools ?? [])
+      .filter((t) => !enabledTools || enabledTools.includes(t.name))
+      .map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters as any,
+    }));
 
-        const requiresReview = preflight.decision === "ask" || (input.requiresApprovalFn?.(toolName) ?? false);
-
-        toolCalls.push({
-          toolCallId,
-          toolName,
-          phase: "requested",
-        });
-
-        // Emit normalized tool call start event
-        await callbacks.onToolCallStart?.(toolCallId, toolName, args);
-        startedToolCallIds.add(toolCallId);
-
-        if (!requiresReview) {
-          return undefined;
-        }
-
-        const decision = await new Promise<"approved" | "rejected">((resolve) => {
-          this.pendingApprovals.set(toolCallId, {
-            runId,
-            toolCallId,
-            resolve,
-          });
-        });
-        this.pendingApprovals.delete(toolCallId);
-
-        if (decision === "approved") {
-          await callbacks.onToolDecision?.(toolCallId, "approved");
-          return undefined;
-        }
-
-        await callbacks.onToolDecision?.(toolCallId, "rejected");
-        return {
-          block: true,
-          reason: "Tool execution rejected by user.",
-        };
-      },
-    } as never);
-
-    this.activeAgents.set(runId, agent);
     await callbacks.onRequestStart?.(runId, sessionId);
+
+    // Initial message array
+    const messages = [...historyMessages] as Message[];
+    
+    // Auto-append prompt if present
+    if (prompt && prompt.trim().length > 0) {
+      messages.push({
+        role: "user",
+        timestamp: Date.now(),
+        content: prompt,
+      });
+    }
 
     let latestAssistantText = "";
     let finalStopReason: ModelStopReason = "end_turn";
     let finalToolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
     let finalUsage = { inputTokens: 0, outputTokens: 0 };
     let finalError: string | null = null;
-
-    agent.subscribe((event: AgentEvent) => {
-      const normalizedEvents = normalizeEvent(event, context);
-
-      for (const normalized of normalizedEvents) {
-        void this.emitNormalizedEvent(normalized, callbacks, startedToolCallIds);
-
-        if (normalized.type === "assistant_delta") {
-          latestAssistantText += normalized.delta;
-        }
-        if (normalized.type === "complete") {
-          finalStopReason = normalized.stopReason;
-          finalToolCalls = normalized.toolCalls;
-          finalUsage = normalized.usage;
-        }
-        if (normalized.type === "error") {
-          finalError = normalized.error;
-        }
-        if (normalized.type === "tool_call_start") {
-          context.currentToolCallId = normalized.toolCallId;
-        }
-        if (normalized.type === "tool_call_end") {
-          context.currentToolCallId = undefined;
-        }
-      }
-    });
+    let keepRunning = true;
 
     try {
-      await agent.prompt(prompt);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorClass = classifyPiAiError(error);
-      const recoverable = isRecoverableError(errorClass);
-      await callbacks.onError?.(errorMessage, errorClass, recoverable);
-      finalError = errorMessage;
+      while (keepRunning && !abortController.signal.aborted) {
+        let streamFinished = false;
+        let turnAssistantMessage: AssistantMessage | undefined = undefined;
+
+        try {
+          const stream = streamSimple(
+            model,
+            {
+              systemPrompt: systemPrompt ?? undefined,
+              messages,
+              tools: apiTools,
+            },
+            {
+              signal: abortController.signal,
+              reasoning: (thinkingLevel && thinkingLevel !== "off") ? (thinkingLevel as any) : undefined,
+            }
+          );
+
+          for await (const event of stream) {
+            if (abortController.signal.aborted) {
+                break;
+            }
+            switch (event.type) {
+              case "text_delta":
+                latestAssistantText += event.delta;
+                await callbacks.onTextDelta?.(event.delta);
+                break;
+              case "toolcall_start":
+                break;
+              case "toolcall_delta":
+                break;
+              case "done":
+                streamFinished = true;
+                turnAssistantMessage = event.message;
+                finalStopReason = this.mapStopReason(event.reason);
+                finalUsage = {
+                  inputTokens: event.message.usage.input,
+                  outputTokens: event.message.usage.output,
+                };
+                if (event.message.usage.cacheRead) {
+                    (finalUsage as any).cacheReadTokens = event.message.usage.cacheRead;
+                }
+                if (event.message.usage.cacheWrite) {
+                    (finalUsage as any).cacheCreationTokens = event.message.usage.cacheWrite;
+                }
+                await callbacks.onUsage?.(finalUsage);
+                // Extract text for completion emit 
+                break;
+              case "error":
+                streamFinished = true;
+                turnAssistantMessage = event.error;
+                finalError = event.error.errorMessage ?? "Unknown error";
+                finalStopReason = "error";
+                break;
+            }
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorClass = classifyPiAiError(error);
+          const recoverable = isRecoverableError(errorClass);
+          await callbacks.onError?.(errorMessage, errorClass, recoverable);
+          finalError = errorMessage;
+          finalStopReason = "error";
+          break;
+        }
+
+        if (!turnAssistantMessage) {
+            break;
+        }
+
+        messages.push(turnAssistantMessage);
+
+        const toolCallsInMessage = turnAssistantMessage.content.filter((c) => c.type === "toolCall") as any[];
+        
+        if (toolCallsInMessage.length === 0 || finalStopReason !== "tool_use") {
+          keepRunning = false;
+          finalToolCalls = toolCallsInMessage.map(t => ({ id: t.id, name: t.name, input: t.arguments }));
+          break;
+        }
+
+        const toolResultMessages: ToolResultMessage[] = [];
+        const executeTool = async (piToolCall: any) => {
+          const toolName = piToolCall.name;
+          const args = piToolCall.arguments;
+          const toolCallId = buildStableToolCallId(runId, piToolCall, toolName, args);
+          
+          let toolError: boolean = false;
+          let toolOutput: any = "Unknown Error";
+
+          try {
+            const preflight: ToolPreflightDecision =
+              (await preflightToolCheck?.(toolName, args)) ?? ALLOW_TOOL_PREFLIGHT_DECISION;
+
+            if (preflight.decision === "deny") {
+              await callbacks.onToolCallStart?.(toolCallId, toolName, args);
+              startedToolCallIds.add(toolCallId);
+              toolError = true;
+              toolOutput = { error: preflight.reason ?? `Tool '${toolName}' is denied by policy.` };
+            } else {
+              const requiresReview = preflight.decision === "ask" || (input.requiresApprovalFn?.(toolName) ?? false);
+              
+              await callbacks.onToolCallStart?.(toolCallId, toolName, args);
+              startedToolCallIds.add(toolCallId);
+
+              if (requiresReview) {
+                const decision = await new Promise<"approved" | "rejected">((resolve) => {
+                  this.pendingApprovals.set(toolCallId, { runId, toolCallId, resolve });
+                });
+                this.pendingApprovals.delete(toolCallId);
+
+                if (decision === "rejected") {
+                  toolError = true;
+                  toolOutput = { error: "Tool execution rejected by user." };
+                }
+              }
+
+              if (!toolError) {
+                const toolDef = (input.tools ?? []).find(t => t.name === toolName);
+                if (!toolDef) {
+                  toolError = true;
+                  toolOutput = { error: `Tool ${toolName} not found` };
+                } else {
+                  const result = await toolDef.execute(toolCallId, args, abortController.signal, (update) => {
+                    callbacks.onUpdate?.(toolCallId, toolName, typeof update === 'string' ? update : JSON.stringify(update), update);
+                  });
+                  toolOutput = result.content;
+                }
+              }
+            }
+          } catch (e) {
+             toolError = true;
+             toolOutput = { error: e instanceof Error ? e.message : String(e) };
+          }
+
+          toolResultMessages.push({
+            role: "toolResult",
+            toolCallId: piToolCall.id,
+            toolName: toolName,
+            content: Array.isArray(toolOutput) ? toolOutput : [{ type: "text", text: typeof toolOutput === "string" ? toolOutput : JSON.stringify(toolOutput) }],
+            isError: toolError,
+            timestamp: Date.now()
+          });
+
+          await callbacks.onToolResult?.(toolCallId, toolName, toolOutput, toolError);
+          await callbacks.onToolCallEnd?.(toolCallId, toolName, toolOutput, toolError);
+        };
+
+        if (toolExecutionMode === "parallel") {
+          await Promise.all(toolCallsInMessage.map(tc => executeTool(tc)));
+        } else {
+          for (const tc of toolCallsInMessage) {
+            if (abortController.signal.aborted) break;
+            await executeTool(tc);
+          }
+        }
+
+        messages.push(...toolResultMessages);
+      }
     } finally {
-      this.activeAgents.delete(runId);
+      this.abortControllers.delete(runId);
       this.toolCallsByRun.delete(runId);
     }
 
@@ -283,23 +289,27 @@ export class PiAiModelClient implements ModelClient {
     };
   }
 
+  private mapStopReason(reason: StopReason | string): ModelStopReason {
+    if (reason === "length") return "max_tokens";
+    if (reason === "toolUse") return "tool_use";
+    if (reason === "stop") return "end_turn";
+    if (reason === "error" || reason === "aborted") return "error";
+    return "end_turn";
+  }
+
   cancel(runId: string): void {
-    const agent = this.activeAgents.get(runId);
-    if (!agent) {
-      return;
-    }
+    const abortController = this.abortControllers.get(runId);
+    if (!abortController) return;
 
     this.resolvePendingApprovalsForRun(runId, "rejected");
-    (agent as unknown as { abort(): void }).abort();
-    this.activeAgents.delete(runId);
+    abortController.abort();
+    this.abortControllers.delete(runId);
     this.toolCallsByRun.delete(runId);
   }
 
   approveTool(toolCallId: string): void {
     const pending = this.pendingApprovals.get(toolCallId);
-    if (!pending) {
-      return;
-    }
+    if (!pending) return;
 
     this.pendingApprovals.delete(toolCallId);
     pending.resolve("approved");
@@ -307,82 +317,21 @@ export class PiAiModelClient implements ModelClient {
 
   rejectTool(toolCallId: string): void {
     const pending = this.pendingApprovals.get(toolCallId);
-    if (!pending) {
-      return;
-    }
+    if (!pending) return;
 
     this.pendingApprovals.delete(toolCallId);
     pending.resolve("rejected");
   }
 
-  private async emitNormalizedEvent(
-    event: ModelStreamEvent,
-    callbacks: ModelClientCallbacks,
-    startedToolCallIds: Set<string>,
-  ): Promise<void> {
-    switch (event.type) {
-      case "assistant_delta":
-        await callbacks.onTextDelta?.(event.delta);
-        break;
-      case "tool_call_start":
-        if (!startedToolCallIds.has(event.toolCallId)) {
-          await callbacks.onToolCallStart?.(event.toolCallId, event.toolName, event.input);
-          startedToolCallIds.add(event.toolCallId);
-        }
-        break;
-      case "tool_call_end":
-        await callbacks.onToolCallEnd?.(
-          event.toolCallId,
-          event.toolName,
-          event.result,
-          event.isError,
-        );
-        break;
-      case "tool_result":
-        await callbacks.onToolResult?.(
-          event.toolCallId,
-          event.toolName,
-          event.output,
-          event.isError,
-        );
-        break;
-      case "update":
-        await callbacks.onUpdate?.(
-          event.toolCallId,
-          event.toolName,
-          event.delta,
-          event.partialResult,
-        );
-        break;
-      case "usage":
-        await callbacks.onUsage?.(event.usage);
-        break;
-      case "error":
-        await callbacks.onError?.(event.error, event.errorClass, event.recoverable);
-        break;
-      case "request_start":
-        await callbacks.onRequestStart?.(event.runId, event.sessionId);
-        break;
-      case "complete":
-        break;
-    }
-  }
-
   private resolvePendingApprovalsForRun(runId: string, decision: "approved" | "rejected"): void {
     for (const [toolCallId, pending] of this.pendingApprovals.entries()) {
-      if (pending.runId !== runId) {
-        continue;
-      }
+      if (pending.runId !== runId) continue;
       this.pendingApprovals.delete(toolCallId);
       pending.resolve(decision);
     }
   }
-
 }
 
-/**
- * Create a new PiAiModelClient instance.
- */
 export function createModelClient(): ModelClient {
   return new PiAiModelClient();
 }
