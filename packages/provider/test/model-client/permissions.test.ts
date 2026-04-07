@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderConfig, OmiTool } from "@omi/core";
+import type { ProviderConfig } from "@omi/core";
 import { PiAiModelClient } from "../../src/model-client/pi-ai-client";
 
 const mockStream = vi.fn();
@@ -12,12 +12,12 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-describe("PiAiModelClient tool loop", () => {
+describe("PiAiModelClient single-turn", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("completes a run with no tools", async () => {
+  it("completes a single-turn run with no tools", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();
 
@@ -50,57 +50,30 @@ describe("PiAiModelClient tool loop", () => {
     );
 
     expect(result.assistantText).toBe("Hello");
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.toolCalls).toEqual([]);
+    expect(result.error).toBeNull();
     expect(onTextDelta).toHaveBeenCalledWith("Hello");
   });
 
-  it("executes a tool and continues the loop", async () => {
+  it("returns tool calls without executing them", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();
-    const toolExecute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "tool result" }] });
-    const tool: OmiTool = {
-      name: "get_weather",
-      description: "Get weather",
-      parameters: {},
-      execute: toolExecute,
-    };
 
-    let callCount = 0;
-    mockStream.mockImplementation(() => {
-      callCount++;
-      return (async function* () {
-        if (callCount === 1) {
-          yield {
-            type: "done",
-            reason: "toolUse",
-            message: {
-              role: "assistant",
-              content: [
-                { type: "text", text: "I will check the weather." },
-                { type: "toolCall", id: "tc-1", name: "get_weather", arguments: { city: "London" } }
-              ],
-              usage: { input: 10, output: 5 },
-            },
-          };
-        } else {
-          yield {
-            type: "text_delta",
-            delta: "It's sunny.",
-          };
-          yield {
-            type: "done",
-            reason: "stop",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "It's sunny." }],
-              usage: { input: 20, output: 5 },
-            },
-          };
-        }
-      })();
-    });
-
-    const onToolCallStart = vi.fn();
-    const onToolResult = vi.fn();
+    mockStream.mockReturnValue((async function* () {
+      yield {
+        type: "done",
+        reason: "toolUse",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I will check the weather." },
+            { type: "toolCall", id: "tc-1", name: "get_weather", arguments: { city: "London" } },
+          ],
+          usage: { input: 10, output: 5 },
+        },
+      };
+    })());
 
     const result = await client.run(
       {
@@ -109,62 +82,73 @@ describe("PiAiModelClient tool loop", () => {
         prompt: "what's the weather?",
         historyMessages: [],
         providerConfig: config,
-        tools: [tool],
       },
-      { onToolCallStart, onToolResult },
+      {},
     );
 
-    expect(toolExecute).toHaveBeenCalled();
-    expect(onToolCallStart).toHaveBeenCalled();
-    expect(onToolResult).toHaveBeenCalled();
-    expect(callCount).toBe(2); // Initial turn + following tool result
-    expect(result.assistantText).toContain(" sunny");
+    // Provider now returns tool calls but does NOT execute them
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe("get_weather");
+    expect(result.toolCalls[0].input).toEqual({ city: "London" });
+    expect(result.assistantText).toContain("check the weather");
   });
 
-  it("blocks tool execution via preflightToolCheck", async () => {
+  it("handles stream errors", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();
-    const toolExecute = vi.fn();
-    const tool: OmiTool = {
-      name: "unsafe_tool",
-      description: "Unsafe",
-      parameters: {},
-      execute: toolExecute,
-    };
 
     mockStream.mockReturnValue((async function* () {
       yield {
-        type: "done",
-        reason: "toolUse",
-        message: {
+        type: "error",
+        error: {
           role: "assistant",
-          content: [{ type: "toolCall", id: "tc-1", name: "unsafe_tool", arguments: {} }],
-          usage: { input: 10, output: 5 },
+          errorMessage: "Rate limited",
+          content: [],
+          usage: { input: 0, output: 0 },
         },
       };
     })());
 
-    const onToolResult = vi.fn();
-    await client.run(
+    const onError = vi.fn();
+    const result = await client.run(
       {
         runId: "run_3",
         sessionId: "session_1",
-        prompt: "run unsafe",
+        prompt: "test",
         historyMessages: [],
         providerConfig: config,
-        tools: [tool],
-        preflightToolCheck: async () => ({ decision: "deny", reason: "Blocked" }),
       },
-      { onToolResult },
+      { onError },
     );
 
-    expect(toolExecute).not.toHaveBeenCalled();
-    expect(onToolResult).toHaveBeenCalledWith(
-        expect.any(String),
-        "unsafe_tool",
-        { error: "Blocked" },
-        true
+    expect(result.error).toBe("Rate limited");
+    expect(result.stopReason).toBe("error");
+    expect(onError).toHaveBeenCalled();
+  });
+
+  it("handles exceptions from stream", async () => {
+    const client = new PiAiModelClient();
+    const config = makeProviderConfig();
+
+    mockStream.mockImplementation(() => {
+      throw new Error("Network failure");
+    });
+
+    const onError = vi.fn();
+    const result = await client.run(
+      {
+        runId: "run_4",
+        sessionId: "session_1",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: config,
+      },
+      { onError },
     );
+
+    expect(result.error).toBe("Network failure");
+    expect(result.stopReason).toBe("error");
   });
 });
 
@@ -182,4 +166,3 @@ function makeProviderConfig(): ProviderConfig {
     updatedAt: now,
   };
 }
-

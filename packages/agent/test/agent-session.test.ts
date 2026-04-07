@@ -57,22 +57,9 @@ describe("agent session", () => {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
         input.onTextDelta?.("hello");
-        const toolCallId =
-          (await input.onToolRequested?.({
-            runId: input.runId,
-            sessionId: input.sessionId,
-            toolCallId: "tool-call-1",
-            toolName: "read",
-            input: { path: "README.md" },
-            requiresApproval: false,
-          })) ?? "tool-call-1";
-        input.onToolStarted?.(toolCallId, "read");
-        input.onToolFinished?.(toolCallId, "read", { ok: true }, false);
-        return { assistantText: "done" };
+        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
     const resources: ResourceLoader = {
       workspaceRoot: process.cwd(),
@@ -212,11 +199,9 @@ describe("agent session", () => {
     runtime.setSelectedProviderConfig(storedProviderConfig.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
-        return { assistantText: "branch done" };
+        return { assistantText: "branch done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -286,11 +271,9 @@ describe("agent session", () => {
           await firstRunGate;
         }
         finishedRuns.push(input.runId);
-        return { assistantText: `done-${input.runId}` };
+        return { assistantText: `done-${input.runId}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -339,11 +322,9 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}` };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -397,11 +378,9 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}` };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -493,11 +472,9 @@ describe("agent session", () => {
     database.setActiveBranchId(session.id, mainBranch.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
-        return { assistantText: "done" };
+        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -584,11 +561,9 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}` };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -656,11 +631,9 @@ describe("agent session", () => {
           shouldOverflow = false;
           throw new Error("prompt is too long: 99999 tokens > 8192 maximum");
         }
-        return { assistantText: "recovered" };
+        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -703,11 +676,9 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}` };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -796,11 +767,9 @@ describe("agent session", () => {
         if (callRecords.length === 1) {
           throw new Error("boom");
         }
-        return { assistantText: "retried" };
+        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -869,11 +838,9 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         executedRuns.push(input.runId);
-        return { assistantText: "resumed" };
+        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool() {},
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -913,33 +880,13 @@ describe("agent session", () => {
     const approvalGate = new Promise<void>((resolve) => {
       approvalGateResolve = resolve;
     });
-    let onToolDecision:
-      | ((toolCallId: string, decision: "approved" | "rejected") => void)
-      | null = null;
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-        onToolDecision = input.onToolDecision ?? null;
-        const toolCallId =
-          (await input.onToolRequested?.({
-            runId: input.runId,
-            sessionId: input.sessionId,
-            toolCallId: "tool-call-approve",
-            toolName: "bash",
-            input: { command: "echo", args: ["approve"] },
-            requiresApproval: true,
-          })) ?? "tool-call-approve";
-        latestToolCallId = toolCallId;
+        latestToolCallId = "tool-call-approve";
         await approvalGate;
-        input.onToolStarted?.(toolCallId, "bash");
-        input.onToolFinished?.(toolCallId, "bash", { ok: true }, false);
-        return { assistantText: "approved" };
+        return { assistantText: "approved", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
-      approveTool(toolCallId: string) {
-        onToolDecision?.(toolCallId, "approved");
-        approvalGateResolve();
-      },
-      rejectTool() {},
     };
 
     const agentSession = new AgentSession({
@@ -987,31 +934,13 @@ describe("agent session", () => {
     const rejectGate = new Promise<void>((resolve) => {
       rejectGateResolve = resolve;
     });
-    let onToolDecision:
-      | ((toolCallId: string, decision: "approved" | "rejected") => void)
-      | null = null;
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-        onToolDecision = input.onToolDecision ?? null;
-        const toolCallId =
-          (await input.onToolRequested?.({
-            runId: input.runId,
-            sessionId: input.sessionId,
-            toolCallId: "tool-call-reject",
-            toolName: "bash",
-            input: { command: "echo", args: ["reject"] },
-            requiresApproval: true,
-          })) ?? "tool-call-reject";
-        latestToolCallId = toolCallId;
+        latestToolCallId = "tool-call-reject";
         await rejectGate;
         throw new Error("Tool rejected");
       },
       cancel() {},
-      approveTool() {},
-      rejectTool(toolCallId: string) {
-        onToolDecision?.(toolCallId, "rejected");
-        rejectGateResolve();
-      },
     };
 
     const agentSession = new AgentSession({
@@ -1403,6 +1332,9 @@ function createMemoryDatabase(): AppStore {
         return providerConfigs.get(providerId) ?? null;
       }
       return providerConfigs.values().next().value ?? null;
+    },
+    deleteProviderConfig(id: string) {
+      providerConfigs.delete(id);
     },
     loadSessionRuntimeSnapshot(sessionId) {
       return runtimeRows.get(sessionId) ?? null;

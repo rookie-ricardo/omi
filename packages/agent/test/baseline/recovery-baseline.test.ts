@@ -168,6 +168,7 @@ function createMemoryDatabase(): AppStore {
       providerConfigs.set(config.id, config); return config;
     },
     getProviderConfig(pid) { if (pid) return providerConfigs.get(pid) ?? null; return providerConfigs.values().next().value ?? null; },
+    deleteProviderConfig(id: string) { providerConfigs.delete(id); },
     loadSessionRuntimeSnapshot(sid) { return runtimeRows.get(sid) ?? null; },
     saveSessionRuntimeSnapshot(input) { runtimeRows.set(input.sessionId, input); },
     createBranch(input) {
@@ -216,7 +217,7 @@ describe("Recovery baseline", () => {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         callRecords.push({ runId: input.runId, prompt: input.prompt });
         if (callRecords.length === 1) throw new Error("boom");
-        return { assistantText: "retried" };
+        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -257,7 +258,7 @@ describe("Recovery baseline", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         executedRuns.push(input.runId);
-        return { assistantText: "resumed" };
+        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -286,7 +287,7 @@ describe("Recovery baseline", () => {
 
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-        return { assistantText: "done" };
+        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -318,7 +319,7 @@ describe("Recovery baseline", () => {
         calls.push(input);
         callCount++;
         if (callCount <= 1) throw new Error("503 Service Unavailable");
-        return { assistantText: "recovered" };
+        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };

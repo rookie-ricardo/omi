@@ -82,7 +82,7 @@ function makeProvider(calls: ProviderRunInput[]) {
   return {
     async run(input: ProviderRunInput): Promise<ProviderRunResult> {
       calls.push(input);
-      return { assistantText: `done-${calls.length}` };
+      return { assistantText: `done-${calls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
     },
     cancel() {},
     approveTool() {},
@@ -245,6 +245,9 @@ function createMemoryDatabase(): AppStore {
       if (providerId) return providerConfigs.get(providerId) ?? null;
       return providerConfigs.values().next().value ?? null;
     },
+    deleteProviderConfig(id: string) {
+      providerConfigs.delete(id);
+    },
     loadSessionRuntimeSnapshot(sessionId) { return runtimeRows.get(sessionId) ?? null; },
     saveSessionRuntimeSnapshot(input) { runtimeRows.set(input.sessionId, input); },
     createBranch(input) {
@@ -312,7 +315,7 @@ describe("Session baseline", () => {
         calls.push(input);
         callCount++;
         if (callCount === 1) await gate;
-        return { assistantText: `done-${callCount}` };
+        return { assistantText: `done-${callCount}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };

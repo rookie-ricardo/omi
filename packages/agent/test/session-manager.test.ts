@@ -682,6 +682,7 @@ function createMockDatabase(): AppStore & {
     getProviderConfig() {
       return null;
     },
+    deleteProviderConfig() {},
     loadSessionRuntimeSnapshot(sessionId) {
       return runtimeRows.get(sessionId) ?? null;
     },

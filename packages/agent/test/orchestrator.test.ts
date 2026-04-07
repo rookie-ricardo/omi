@@ -743,6 +743,9 @@ function createMemoryDatabase(): AppStore {
       }
       return providerConfigs.values().next().value ?? null;
     },
+    deleteProviderConfig(id: string) {
+      providerConfigs.delete(id);
+    },
     loadSessionRuntimeSnapshot(sessionId) {
       return runtimeRows.get(sessionId) ?? null;
     },

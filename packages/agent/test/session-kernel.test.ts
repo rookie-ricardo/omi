@@ -719,6 +719,9 @@ function createMockDatabase(): AppStore {
       if (providerId) return providerConfigs.get(providerId) ?? null;
       return providerConfigs.values().next().value ?? null;
     },
+    deleteProviderConfig(id: string) {
+      providerConfigs.delete(id);
+    },
     loadSessionRuntimeSnapshot(sessionId) {
       return runtimeRows.get(sessionId) ?? null;
     },

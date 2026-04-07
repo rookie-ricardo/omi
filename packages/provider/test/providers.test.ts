@@ -220,15 +220,7 @@ describe("PiAiProvider", () => {
     };
   });
 
-  describe("工具审批", () => {
-    it("应该批准工具执行", () => {
-      expect(() => provider.approveTool("tool-call-1")).not.toThrow();
-    });
-
-    it("应该拒绝工具执行", () => {
-      expect(() => provider.rejectTool("tool-call-1")).not.toThrow();
-    });
-  });
+  // 工具审批已迁移到 QueryEngine 层，不再由 Provider 处理
 
   describe("取消运行", () => {
     it("应该能够取消活动运行", () => {
@@ -251,15 +243,7 @@ describe("PiAiProvider", () => {
       expect(typeof provider.cancel).toBe("function");
     });
 
-    it("应该实现 approveTool 方法", () => {
-      expect(provider).toHaveProperty("approveTool");
-      expect(typeof provider.approveTool).toBe("function");
-    });
-
-    it("应该实现 rejectTool 方法", () => {
-      expect(provider).toHaveProperty("rejectTool");
-      expect(typeof provider.rejectTool).toBe("function");
-    });
+    // approveTool/rejectTool 已迁移到 QueryEngine 层
   });
 });
 
@@ -305,16 +289,10 @@ describe("ProviderRunInput 接口", () => {
       prompt: "test",
       historyMessages: [],
       providerConfig: makeConfig(),
-      onTextDelta: (delta) => {},
-      onToolRequested: async (event) => "tool-id",
-      onToolDecision: (id, decision) => {},
-      onToolStarted: (id, name) => {},
-      onToolUpdate: (id, delta) => {},
-      onToolFinished: (id, name, output, isError) => {},
+      onTextDelta: (delta: string) => {},
     };
 
     expect(typeof input.onTextDelta).toBe("function");
-    expect(typeof input.onToolRequested).toBe("function");
   });
 });
 
