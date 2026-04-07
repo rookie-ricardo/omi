@@ -148,7 +148,7 @@ export const eventRecordSchema = z.object({
 });
 
 export const skillSourceSchema = z.object({
-  scope: z.enum(["workspace", "user"]),
+  scope: z.enum(["workspace", "user", "bundled"]),
   client: z.enum(["agent", "claude"]),
   basePath: z.string(),
   skillPath: z.string(),
