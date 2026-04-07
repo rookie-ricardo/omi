@@ -59,6 +59,7 @@ export class Agent {
 	private eventBuffer: SDKMessage[] = [];
 	private eventResolvers: Array<(value: IteratorResult<SDKMessage>) => void> = [];
 	private runDone = false;
+	private runDoneResolvers: Array<() => void> = [];
 	private messageLog: Message[] = [];
 	private startTime = 0;
 	private turnCount = 0;
@@ -74,7 +75,7 @@ export class Agent {
 		this.database = createAppDatabase(":memory:");
 
 		// Seed the provider configuration
-		const providerConfig = this.seedProviderConfig();
+		this.seedProviderConfig();
 
 		// Create orchestrator wired to our event bridge
 		this.orchestrator = new AppOrchestrator(
@@ -110,6 +111,7 @@ export class Agent {
 		this.runDone = false;
 		this.eventBuffer = [];
 		this.eventResolvers = [];
+		this.runDoneResolvers = [];
 		this.turnCount = 0;
 
 		const opts = { ...this.options, ...overrides };
@@ -246,21 +248,14 @@ export class Agent {
 	 */
 	abort(): void {
 		if (this.sessionId) {
-			const sessions = this.database.listSessions();
-			for (const session of sessions) {
-				if (session.id === this.sessionId) {
-					// Cancel any active runs
-					const runs = this.database.listRuns(session.id);
-					for (const run of runs) {
-						if (run.status === "running" || run.status === "queued") {
-							this.orchestrator.cancelRun(run.id);
-						}
-					}
+			const runs = this.database.listRuns(this.sessionId);
+			for (const run of runs) {
+				if (run.status === "running" || run.status === "queued") {
+					this.orchestrator.cancelRun(run.id);
 				}
 			}
 		}
-		this.runDone = true;
-		this.resolveAllPending();
+		this.markRunDone();
 	}
 
 	/**
@@ -296,27 +291,41 @@ export class Agent {
 			return Promise.resolve(null);
 		}
 
-		// Wait for next event
+		// Wait for next event or run completion
 		return new Promise<SDKMessage | null>((resolve) => {
-			// Set a timeout to detect when the run is done
-			const checkInterval = setInterval(() => {
-				if (this.runDone) {
-					clearInterval(checkInterval);
-					resolve(null);
-				}
-			}, 100);
+			const onDone = () => {
+				// Remove the event resolver since done was signaled first
+				const idx = this.eventResolvers.indexOf(onEvent);
+				if (idx >= 0) this.eventResolvers.splice(idx, 1);
+				resolve(null);
+			};
 
-			this.eventResolvers.push((result) => {
-				clearInterval(checkInterval);
+			const onEvent = (result: IteratorResult<SDKMessage>) => {
+				// Remove the done resolver since an event arrived first
+				const doneIdx = this.runDoneResolvers.indexOf(onDone);
+				if (doneIdx >= 0) this.runDoneResolvers.splice(doneIdx, 1);
 				resolve(result.value as SDKMessage);
-			});
+			};
+
+			this.runDoneResolvers.push(onDone);
+			this.eventResolvers.push(onEvent);
 		});
 	}
 
 	private resolveAllPending(): void {
-		for (const resolver of this.eventResolvers) {
-			resolver({ value: undefined as unknown as SDKMessage, done: true });
+		// Event resolvers are cleaned up via markRunDone().
+		// This is kept for backward compatibility but just clears stale entries.
+		this.eventResolvers = [];
+	}
+
+	private markRunDone(): void {
+		this.runDone = true;
+		// Resolve all "done" waiters
+		for (const resolver of this.runDoneResolvers) {
+			resolver();
 		}
+		this.runDoneResolvers = [];
+		// Clear any remaining event resolvers
 		this.eventResolvers = [];
 	}
 
@@ -365,7 +374,7 @@ export class Agent {
 			}
 
 			case "query_loop.terminal": {
-				this.runDone = true;
+				this.markRunDone();
 
 				const terminalReason = (payload.reason as string) ?? "completed";
 				const isError = terminalReason !== "completed";
@@ -380,15 +389,11 @@ export class Agent {
 					errors: payload.error ? [payload.error as string] : undefined,
 				};
 
-				// Resolve any pending event waiters
-				setTimeout(() => this.resolveAllPending(), 0);
-
 				return resultMessage;
 			}
 
 			case "run.canceled": {
-				this.runDone = true;
-				setTimeout(() => this.resolveAllPending(), 0);
+				this.markRunDone();
 				return {
 					type: "result",
 					subtype: "error_during_execution",
@@ -400,8 +405,7 @@ export class Agent {
 			}
 
 			case "run.failed": {
-				this.runDone = true;
-				setTimeout(() => this.resolveAllPending(), 0);
+				this.markRunDone();
 				return {
 					type: "result",
 					subtype: "error_during_execution",
@@ -410,6 +414,30 @@ export class Agent {
 					durationMs: Date.now() - this.startTime,
 					errors: [(payload.error as string) ?? "Unknown error"],
 				};
+			}
+
+			case "run.assistant_message": {
+				return {
+					type: "assistant",
+					message: {
+						role: "assistant" as const,
+						content: [{ type: "text" as const, text: (payload.text as string) ?? "" }],
+					},
+				} satisfies SDKAssistantMessage;
+			}
+
+			case "run.completed": {
+				const summary = (payload.summary as string) ?? "";
+				if (summary) {
+					return {
+						type: "assistant",
+						message: {
+							role: "assistant" as const,
+							content: [{ type: "text" as const, text: summary }],
+						},
+					} satisfies SDKAssistantMessage;
+				}
+				return null;
 			}
 
 			default:
