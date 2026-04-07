@@ -5,8 +5,10 @@ import type {
   McpClient,
   McpClientOptions,
   McpConnectionState,
+  McpGetPromptResult,
   McpResource,
   McpResourceContent,
+  McpPrompt,
   McpServerInfo,
   McpTool,
   McpToolResult,
@@ -30,6 +32,7 @@ function createFakeClient(options: McpClientOptions): FakeMcpClient {
     getCapabilities: (): McpCapabilities | null => null,
     getTools: (): McpTool[] => [],
     getResources: (): McpResource[] => [],
+    getPrompts: (): McpPrompt[] => [],
     connect: vi.fn(async () => {
       client.emitState("connected");
     }),
@@ -39,6 +42,7 @@ function createFakeClient(options: McpClientOptions): FakeMcpClient {
     callTool: vi.fn(async (): Promise<McpToolResult> => ({ content: [] })),
     readResource: vi.fn(async (): Promise<McpResourceContent> => ({ uri: "file:///mock" })),
     listResources: vi.fn(async (): Promise<McpResource[]> => []),
+    getPrompt: vi.fn(async (): Promise<McpGetPromptResult> => ({ messages: [] })),
     dispose: vi.fn(async () => {
       await client.disconnect();
     }),
