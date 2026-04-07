@@ -58,7 +58,19 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): OmiTool<
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+		description: `Reads a file from the local filesystem. You can access any file directly by using this tool.
+
+Usage:
+- The file_path parameter must be an absolute path, not a relative path
+- By default, it reads up to ${DEFAULT_MAX_LINES} lines starting from the beginning of the file, or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first)
+- When you already know which part of the file you need, only read that part. This can be important for larger files.
+- Results are returned using cat -n format, with line numbers starting at 1
+- This tool can read images (e.g., PNG, JPG, GIF, WebP). When reading an image file the contents are presented visually as the LLM is multimodal.
+- This tool can read PDF files (.pdf). For large PDFs (more than 10 pages), you MUST provide the offset/limit parameters to read specific page ranges. Maximum 20 pages per request.
+- This tool can read Jupyter notebooks (.ipynb files) and returns all cells with their outputs, combining code, text, and visualizations.
+- This tool can only read files, not directories. To read a directory, use an ls command via the Bash tool.
+- You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path.
+- If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.`,
 		parameters: readSchema,
 		execute: async (
 			_toolCallId: string,

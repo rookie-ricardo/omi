@@ -31,7 +31,7 @@ describe("write 工具", () => {
 
     it("应该包含正确的 description", () => {
       const tool = createWriteTool(testDir);
-      expect(tool.description).toContain("Write content to a file");
+      expect(tool.description).toContain("Writes a file to the local filesystem");
     });
 
     it("应该包含必需的参数", () => {

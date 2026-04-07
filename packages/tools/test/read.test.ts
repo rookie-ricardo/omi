@@ -33,7 +33,7 @@ describe("read 工具", () => {
 
     it("应该包含正确的 description", () => {
       const tool = createReadTool(testDir);
-      expect(tool.description).toContain("Read the contents of a file");
+      expect(tool.description).toContain("Reads a file from the local filesystem");
     });
 
     it("应该包含 path 参数", () => {

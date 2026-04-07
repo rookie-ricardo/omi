@@ -179,7 +179,44 @@ export function createBashTool(cwd: string, options?: BashToolOptions): OmiTool<
 	return {
 		name: "bash",
 		label: "bash",
-		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Executes a given bash command and returns its output.
+
+The working directory persists between commands, but shell state does not. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file.
+
+IMPORTANT: Avoid using this tool to run \`find\`, \`grep\`, \`cat\`, \`head\`, \`tail\`, \`sed\`, \`awk\`, or \`echo\` commands, unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool:
+ - File search: Use Glob (NOT find or ls)
+ - Content search: Use Grep (NOT grep or rg)
+ - Read files: Use Read (NOT cat/head/tail)
+ - Edit files: Use Edit (NOT sed/awk)
+ - Write files: Use Write (NOT echo >/cat <<EOF)
+
+# Instructions
+- Always quote file paths that contain spaces with double quotes in your command
+- Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of \`cd\`
+- You may specify an optional timeout in seconds. By default, there is no timeout.
+- When issuing multiple commands:
+  - If the commands are independent and can run in parallel, make multiple tool calls in a single message
+  - If the commands depend on each other and must run sequentially, use a single call with '&&' to chain them together
+  - Use ';' only when you need to run commands sequentially but don't care if earlier commands fail
+  - DO NOT use newlines to separate commands (newlines are ok in quoted strings)
+- For git commands:
+  - Prefer to create a new commit rather than amending an existing commit
+  - Before running destructive operations (e.g., git reset --hard, git push --force, git checkout --), consider whether there is a safer alternative. Only use destructive operations when they are truly the best approach.
+  - Never skip hooks (--no-verify) or bypass signing unless the user has explicitly asked for it
+- Avoid unnecessary \`sleep\` commands — do not sleep between commands that can run immediately
+
+# Committing changes with git
+When the user asks you to create a git commit:
+1. Run git status and git diff to see changes, and git log for recent commit message style
+2. Draft a concise commit message focusing on the "why" rather than the "what"
+3. Stage relevant files and create the commit with Co-Authored-By trailer
+4. If pre-commit hook fails, fix the issue and create a NEW commit (do NOT amend)
+
+# Creating pull requests
+Use the gh command for GitHub-related tasks. When creating a PR:
+1. Run git status, git diff, git log to understand the full commit history
+2. Draft a short PR title (under 70 characters) and summary
+3. Push to remote with -u flag if needed, then create PR using gh pr create`,
 		parameters: bashSchema,
 		execute: async (
 			_toolCallId: string,

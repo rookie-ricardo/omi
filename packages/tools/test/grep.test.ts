@@ -32,7 +32,7 @@ describe("grep 工具", () => {
 
     it("应该包含正确的 description", () => {
       const tool = createGrepTool(testDir);
-      expect(tool.description).toContain("Search file contents for a pattern");
+      expect(tool.description).toContain("search tool built on ripgrep");
     });
 
     it("应该包含必需的参数", () => {
@@ -216,7 +216,7 @@ describe("grep 工具", () => {
 
     it("应该描述搜索功能", () => {
       const tool = createGrepTool(testDir);
-      expect(tool.description).toContain("Search file contents");
+      expect(tool.description).toContain("search tool built on ripgrep");
     });
 
     it("应该描述输出限制", () => {

@@ -78,7 +78,16 @@ export function createWebFetchTool(): OmiTool<typeof webFetchSchema, { url?: str
   return {
     name: "web.fetch",
     label: "web.fetch",
-    description: "Fetch a web page and return its text content.",
+    description: `Fetches content from a URL, converts HTML to plain text, and returns it.
+
+Usage:
+- IMPORTANT: Will FAIL for authenticated/private URLs. Check if the URL points to an authenticated service first.
+- URL must be a fully-formed valid URL. HTTP is auto-upgraded to HTTPS.
+- Read-only operation. Results may be summarized. Responses are cached for 15 minutes.
+- When the URL redirects, the tool informs you and provides the redirect URL.
+- For GitHub URLs, prefer using the gh CLI via Bash tool instead.
+- Prefer MCP-provided web fetch tool if one is available.
+- Use maxChars parameter to limit the response length.`,
     parameters: webFetchSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const { url, maxChars } = parseToolInput("web.fetch", webFetchSchema, params);
@@ -113,7 +122,13 @@ export function createWebSearchTool(): OmiTool<typeof webSearchSchema, { query: 
   return {
     name: "web.search",
     label: "web.search",
-    description: "Search the web and return top results.",
+    description: `Allows searching the web for up-to-date information.
+
+Usage:
+- Returns results formatted as numbered search result blocks with titles, URLs, and snippets.
+- CRITICAL: After answering a question using search results, you MUST include a "Sources:" section with the relevant URLs from the results.
+- IMPORTANT: Use the correct year in search queries to get current results.
+- Use the limit parameter to control how many results are returned (default: 5).`,
     parameters: webSearchSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const { query, limit } = parseToolInput("web.search", webSearchSchema, params);
@@ -140,7 +155,13 @@ export function createAskUserTool(): OmiTool<typeof askUserSchema, { question: s
   return {
     name: "ask_user",
     label: "ask_user",
-    description: "Ask the user a clarifying question and wait for a response.",
+    description: `Ask the user a question during execution to get preferences, clarifications, or decisions.
+
+Usage:
+- Users can always provide a custom answer even when choices are provided.
+- If you recommend a specific option, make it the first choice with "(Recommended)" suffix.
+- Provide choices array for structured questions where predefined answers make sense.
+- In plan mode, use this to clarify requirements BEFORE finalizing the plan, not to ask "Is my plan ready?"`,
     parameters: askUserSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const { question, choices } = parseToolInput("ask_user", askUserSchema, params);

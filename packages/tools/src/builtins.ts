@@ -105,6 +105,22 @@ import {
   createWebBrowserTool,
   browserSchema,
 } from "./browser-tools";
+import {
+  createSkillTool,
+  skillSchema,
+} from "./skill";
+import {
+  createCronCreateTool,
+  createCronDeleteTool,
+  createCronListTool,
+  cronCreateSchema,
+  cronDeleteSchema,
+  cronListSchema,
+} from "./cron-tools";
+import {
+  createRemoteTriggerTool,
+  remoteTriggerSchema,
+} from "./remote-trigger";
 
 // ============================================================================
 // Tool Search
@@ -969,6 +985,85 @@ const ENTRIES: BuiltInEntry[] = [
       },
     ),
     factory: (cwd) => createWebBrowserTool(cwd),
+  },
+  {
+    definition: defineTool(
+      "skill",
+      "Execute a skill (slash command) within the main conversation.",
+      skillSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "none",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT, TOOL_ERROR_CODES.COMMAND_FAILED],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createSkillTool(),
+  },
+  {
+    definition: defineTool(
+      "cron.create",
+      "Schedule a prompt to be enqueued at a future time.",
+      cronCreateSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "conflict",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT, TOOL_ERROR_CODES.QUOTA_EXCEEDED],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createCronCreateTool(),
+  },
+  {
+    definition: defineTool(
+      "cron.delete",
+      "Cancel a scheduled cron job by ID.",
+      cronDeleteSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT, TOOL_ERROR_CODES.TASK_NOT_FOUND],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createCronDeleteTool(),
+  },
+  {
+    definition: defineTool(
+      "cron.list",
+      "List scheduled cron jobs.",
+      cronListSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "none",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: () => createCronListTool(),
+  },
+  {
+    definition: defineTool(
+      "remote_trigger",
+      "Manage scheduled remote agents (triggers) via the API.",
+      remoteTriggerSchema,
+      {
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        riskLevel: "medium",
+        idempotencyPolicy: "none",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT, TOOL_ERROR_CODES.NETWORK_ERROR],
+        auditFields: [...WRITE_AUDIT_FIELDS],
+      },
+    ),
+    factory: () => createRemoteTriggerTool(),
   },
 ];
 

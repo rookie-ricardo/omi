@@ -132,7 +132,19 @@ export function createTaskCreateTool(): OmiTool<typeof taskCreateSchema, TaskToo
   return {
     name: "task.create",
     label: "task.create",
-    description: "Create a task record for the session.",
+    description: `Create a task record for tracking multi-step work.
+
+When to use:
+- Complex tasks requiring 3+ steps
+- User provides multiple tasks to accomplish
+- Plan mode -- break down the plan into trackable tasks
+
+When NOT to use:
+- Single simple tasks that can be done in one step
+- Trivial changes (e.g., fixing a typo)
+- Tasks with fewer than 3 steps
+
+Fields: title (human-readable), originSessionId (session context), candidateReason (why this task exists), status (inbox/active/review/done/dismissed).`,
     parameters: taskCreateSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const input = parseToolInput("task.create", taskCreateSchema, params);
@@ -150,7 +162,13 @@ export function createTaskUpdateTool(): OmiTool<typeof taskUpdateSchema, TaskToo
   return {
     name: "task.update",
     label: "task.update",
-    description: "Update an existing task record.",
+    description: `Update an existing task record.
+
+Usage:
+- Only mark a task as "done" when it is FULLY completed -- never if tests are failing or work is partial.
+- Status workflow: inbox -> active -> review -> done. Use "dismissed" for cancelled tasks.
+- Check staleness with task.get first if the task may have been updated by another agent.
+- You can update title, status, or candidateReason fields.`,
     parameters: taskUpdateSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const input = parseToolInput("task.update", taskUpdateSchema, params);
@@ -174,7 +192,7 @@ export function createTaskGetTool(): OmiTool<typeof taskGetSchema, TaskToolDetai
   return {
     name: "task.get",
     label: "task.get",
-    description: "Get a task by ID.",
+    description: `Get full details of a task by its ID. Returns title, status, origin session, candidate reason, timestamps, output, and stop time. Use this to verify task state before updating, especially to check if blockers are resolved.`,
     parameters: taskGetSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const { taskId } = parseToolInput("task.get", taskGetSchema, params);
@@ -198,7 +216,7 @@ export function createTaskListTool(): OmiTool<typeof taskListSchema, TaskToolDet
   return {
     name: "task.list",
     label: "task.list",
-    description: "List tasks with optional filters.",
+    description: `List tasks with optional filters by status or origin session. Prefer working on tasks in ID order (lowest ID first) to maintain consistency.`,
     parameters: taskListSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       const input = parseToolInput("task.list", taskListSchema, params);

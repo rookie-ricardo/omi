@@ -219,3 +219,69 @@ export function getSearchSkillsRuntime(): SearchSkillsFn | null {
 export function setSearchSkillsRuntime(fn: SearchSkillsFn | null): void {
   globalSearchSkills = fn;
 }
+
+// ============================================================================
+// Skill Executor Runtime
+// ============================================================================
+
+export type SkillExecutor = (skill: string, args?: string) => Promise<{ content: string; details?: unknown }>;
+
+let skillExecutorRuntime: SkillExecutor | null = null;
+
+export function getSkillExecutorRuntime(): SkillExecutor | null {
+  return skillExecutorRuntime;
+}
+
+export function setSkillExecutorRuntime(executor: SkillExecutor): void {
+  skillExecutorRuntime = executor;
+}
+
+// ============================================================================
+// Cron Runtime
+// ============================================================================
+
+export interface CronJob {
+  id: string;
+  cron: string;
+  prompt: string;
+  recurring: boolean;
+  durable: boolean;
+  createdAt: string;
+  nextFireAt?: string;
+}
+
+export interface CronRuntime {
+  create: (cron: string, prompt: string, options: { recurring?: boolean; durable?: boolean }) => Promise<CronJob>;
+  delete: (id: string) => Promise<boolean>;
+  list: () => Promise<CronJob[]>;
+}
+
+let cronRuntime: CronRuntime | null = null;
+
+export function getCronRuntime(): CronRuntime | null {
+  return cronRuntime;
+}
+
+export function setCronRuntime(runtime: CronRuntime): void {
+  cronRuntime = runtime;
+}
+
+// ============================================================================
+// Remote Trigger Runtime
+// ============================================================================
+
+export type RemoteTriggerAction = "list" | "get" | "create" | "update" | "run";
+
+export interface RemoteTriggerRuntime {
+  execute: (action: RemoteTriggerAction, triggerId?: string, body?: Record<string, unknown>) => Promise<unknown>;
+}
+
+let remoteTriggerRuntime: RemoteTriggerRuntime | null = null;
+
+export function getRemoteTriggerRuntime(): RemoteTriggerRuntime | null {
+  return remoteTriggerRuntime;
+}
+
+export function setRemoteTriggerRuntime(runtime: RemoteTriggerRuntime): void {
+  remoteTriggerRuntime = runtime;
+}

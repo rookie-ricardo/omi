@@ -65,8 +65,15 @@ export function createEditTool(cwd: string, options?: EditToolOptions): OmiTool<
 	return {
 		name: "edit",
 		label: "edit",
-		description:
-			"Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.",
+		description: `Performs exact string replacements in files.
+
+Usage:
+- You must use the Read tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
+- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + tab. Everything after that is the actual file content to match. Never include any part of the line number prefix in the oldText or newText.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
+- The edit will FAIL if oldText is not unique in the file. Either provide a larger string with more surrounding context to make it unique, or split your edit into multiple smaller edits.
+- For renaming variables or replacing all occurrences of a string, make multiple targeted edits.`,
 		parameters: editSchema,
 		execute: async (
 			_toolCallId: string,

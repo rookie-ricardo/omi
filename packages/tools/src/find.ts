@@ -65,7 +65,14 @@ export function createFindTool(cwd: string, options?: FindToolOptions): OmiTool<
 	return {
 		name: "glob",
 		label: "glob",
-		description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
+		description: `Fast file pattern matching tool that works with any codebase size.
+
+Usage:
+- Supports glob patterns like "**/*.js" or "src/**/*.ts"
+- Returns matching file paths sorted relative to the search directory
+- Use this tool when you need to find files by name patterns
+- Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).
+- When doing an open-ended search that may require multiple rounds of globbing and grepping, use the Agent tool instead`,
 		parameters: findSchema,
 		execute: async (
 			_toolCallId: string,

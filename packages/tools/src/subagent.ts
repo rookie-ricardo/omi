@@ -213,7 +213,23 @@ export function createSubagentSpawnTool(
   return {
     name: SUBAGENT_SPAWN_TOOL,
     label: SUBAGENT_SPAWN_TOOL,
-    description: "Spawn a new SubAgent to execute a task in parallel. The SubAgent will start working immediately after spawning. Use subagent.wait to wait for completion or subagent.list to monitor progress.",
+    description: `Launch a new agent to handle complex, multi-step tasks autonomously.
+
+Usage:
+- Always include a short description (3-5 words) in the name parameter of what the agent will do.
+- Launch multiple agents concurrently when possible for better performance.
+- Agent result is not visible to the user directly -- send a text summary back to the user after completion.
+- Use subagent.send to continue a previously spawned agent with additional instructions.
+- Use subagent.wait to wait for completion or subagent.list to monitor progress.
+
+When NOT to use:
+- Reading a specific file (use Read instead)
+- Searching for a specific class/function (use Glob/Grep instead)
+- Searching in 2-3 files (use Read instead)
+
+Writing the prompt:
+- Brief the agent like a smart colleague who just walked in. Explain what you are trying to accomplish and why.
+- Never delegate understanding -- make sure the task description is self-contained.`,
     parameters: subagentSpawnSchema,
     execute: async (_toolCallId, params: unknown) => {
       const typedParams = (params ?? {}) as SubagentSpawnInput;

@@ -71,8 +71,13 @@ export function createExitWorktreeTool(sessionId: string): OmiTool {
 	return {
 		name: "exit_worktree",
 		label: "exit_worktree",
-		description:
-			"Exit the current worktree. Choose 'keep' to preserve the worktree for later manual work, or 'remove' to delete it. The remove action has safety checks: it will fail if there are uncommitted changes or new commits, unless you set discard_changes: true.",
+		description: `Exit the current worktree. Only operates on worktrees created by enter_worktree in the current session.
+
+Actions:
+- "keep": Preserve the worktree directory for later manual work or merging
+- "remove": Delete the worktree. Has safety checks: will fail if there are uncommitted changes or new commits, unless you set discard_changes: true
+
+Use discard_changes: true only when you are certain the worktree changes are no longer needed.`,
 
 		parameters: exitWorktreeSchema,
 

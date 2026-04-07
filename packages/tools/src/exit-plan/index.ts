@@ -84,8 +84,15 @@ export function createExitPlanTool(sessionId: string): OmiTool {
 	return {
 		name: "plan.exit",
 		label: "plan.exit",
-		description:
-			"Exit plan mode and submit the plan for user approval. The plan will be reviewed by the user, and if approved, you will be able to execute the planned changes. Optionally, you can declare allowed_prompts to auto-approve specific command categories.",
+		description: `Exit plan mode and submit the plan for user approval.
+
+Usage:
+- You must have written or prepared a plan before calling this tool.
+- Use this when the task requires implementing code changes after planning.
+- Do NOT use this for research-only tasks that don't require code changes.
+- The plan will be reviewed by the user. If approved, you can execute the planned changes.
+- Optionally declare allowed_prompts to auto-approve specific command categories (e.g., "run tests", "install dependencies") when the user accepts the plan.
+- Include a plan_file_path if you saved the plan to disk for reference.`,
 
 		parameters: exitPlanSchema,
 

@@ -32,7 +32,7 @@ describe("edit 工具", () => {
 
     it("应该包含正确的 description", () => {
       const tool = createEditTool(testDir);
-      expect(tool.description).toContain("Edit a file by replacing exact text");
+      expect(tool.description).toContain("Performs exact string replacements in files");
     });
 
     it("应该包含必需的参数", () => {

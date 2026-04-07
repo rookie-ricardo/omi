@@ -32,7 +32,7 @@ describe("find 工具", () => {
 
     it("应该包含正确的 description", () => {
       const tool = createFindTool(testDir);
-      expect(tool.description).toContain("Search for files by glob pattern");
+      expect(tool.description).toContain("Fast file pattern matching tool");
     });
 
     it("应该包含必需的参数", () => {

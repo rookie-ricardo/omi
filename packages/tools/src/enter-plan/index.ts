@@ -51,8 +51,23 @@ export function createEnterPlanTool(sessionId: string): OmiTool {
 	return {
 		name: "plan.enter",
 		label: "plan.enter",
-		description:
-			"Enter plan mode to explore the codebase and create a plan before making changes. In plan mode, you can only use read-only tools (read, grep, glob, ls, tool.search, ask_user). This is useful when a task is complex or affects multiple files. Use this when you need to understand the codebase structure before implementing.",
+		description: `Enter plan mode to explore the codebase and create a plan before making changes.
+
+When to use:
+- New features that require understanding existing architecture
+- Tasks with multiple possible approaches that need evaluation
+- Multi-file changes where order and dependencies matter
+- Unclear requirements that need exploration before implementation
+
+When NOT to use:
+- Single-line fixes or trivial changes
+- Tasks where the user gave specific, clear instructions
+- Simple bug fixes with obvious solutions
+
+What happens in plan mode:
+- You can only use read-only tools (read, grep, glob, ls, ask_user)
+- Write/edit/bash operations are blocked until you exit plan mode
+- Use this time to understand the codebase, then call plan.exit with your plan`,
 
 		parameters: enterPlanSchema,
 

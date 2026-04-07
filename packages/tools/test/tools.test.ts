@@ -78,6 +78,11 @@ describe("tools", () => {
       "team.create",
       "team.delete",
       "web.browser",
+      "skill",
+      "cron.create",
+      "cron.delete",
+      "cron.list",
+      "remote_trigger",
       "enter_worktree",
       "exit_worktree",
     ]);

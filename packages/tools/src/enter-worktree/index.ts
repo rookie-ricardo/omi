@@ -76,8 +76,17 @@ export function createEnterWorktreeTool(
 	return {
 		name: "enter_worktree",
 		label: "enter_worktree",
-		description:
-			"Create an isolated worktree for parallel work. This creates a new git worktree with its own working directory and branch. Use this for parallel tasks, sub-agents, or when you need to work on multiple branches simultaneously without interference.",
+		description: `Create an isolated git worktree for parallel work.
+
+IMPORTANT: ONLY use this when the user explicitly says "worktree". Do NOT use this for:
+- Normal branch switching (use git checkout/switch)
+- Regular bug fixes or feature development
+- Any task that doesn't explicitly require worktree isolation
+
+What it does:
+- Creates a new git worktree in .claude/worktrees/ with its own working directory and branch
+- Use this for parallel tasks, sub-agents, or when you need to work on multiple branches simultaneously without interference
+- Supports sparse checkout via sparse_paths for large monorepos`,
 
 		parameters: enterWorktreeSchema,
 
