@@ -25,7 +25,7 @@ describe("tool schema parse", () => {
       tool.execute("task-create-invalid", {
         originSessionId: "session-1",
         candidateReason: "missing title",
-      })
+      } as any)
     ).rejects.toThrow("Validation failed");
 
     expect(createTaskSpy).not.toHaveBeenCalled();
@@ -38,7 +38,7 @@ describe("tool schema parse", () => {
     await expect(
       tool.execute("web-search-invalid", {
         limit: 3,
-      })
+      } as any)
     ).rejects.toThrow("Validation failed");
 
     expect(fetchSpy).not.toHaveBeenCalled();

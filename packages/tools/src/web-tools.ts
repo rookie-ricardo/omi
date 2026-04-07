@@ -1,5 +1,4 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 import { parseToolInput } from "./input-parse";
 
@@ -7,7 +6,7 @@ import { parseToolInput } from "./input-parse";
 // Schemas
 // ============================================================================
 
-export const webFetchSchema: TSchema = Type.Object({
+export const webFetchSchema = Type.Object({
   url: Type.String({ description: "URL to fetch" }),
   maxChars: Type.Optional(Type.Number({ description: "Maximum number of characters to return" })),
 });
@@ -17,7 +16,7 @@ export interface WebFetchInput {
   maxChars?: number;
 }
 
-export const webSearchSchema: TSchema = Type.Object({
+export const webSearchSchema = Type.Object({
   query: Type.String({ description: "Search query" }),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results" })),
 });
@@ -27,7 +26,7 @@ export interface WebSearchInput {
   limit?: number;
 }
 
-export const askUserSchema: TSchema = Type.Object({
+export const askUserSchema = Type.Object({
   question: Type.String({ description: "Question to ask the user" }),
   choices: Type.Optional(Type.Array(Type.String(), { description: "Optional answer choices" })),
 });
@@ -157,7 +156,8 @@ export function createAskUserTool(): AgentTool<typeof askUserSchema, { question:
   };
 }
 
-export function createWebTools(): AgentTool[] {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createWebTools(): AgentTool<any>[] {
   return [
     createWebFetchTool(),
     createWebSearchTool(),

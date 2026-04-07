@@ -106,7 +106,8 @@ function createToolSearchTool(): AgentTool {
 // Shared Helpers
 // ============================================================================
 
-type BuiltInToolFactory = (cwd: string) => AgentTool;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BuiltInToolFactory = (cwd: string) => AgentTool<any>;
 
 const READ_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash"];
 const WRITE_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash", "retryCount"];

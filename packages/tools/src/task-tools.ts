@@ -1,5 +1,4 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@mariozechner/pi-ai";
 import { Type } from "@mariozechner/pi-ai";
 
 import { parseToolInput } from "./input-parse";
@@ -48,7 +47,7 @@ export interface TaskOutputInput {
   output: string;
 }
 
-export const taskCreateSchema: TSchema = Type.Object({
+export const taskCreateSchema = Type.Object({
   title: Type.String({ description: "Human-readable task title" }),
   originSessionId: Type.String({ description: "Origin session ID" }),
   candidateReason: Type.String({ description: "Why this task exists" }),
@@ -64,7 +63,7 @@ export const taskCreateSchema: TSchema = Type.Object({
   ),
 });
 
-export const taskUpdateSchema: TSchema = Type.Object({
+export const taskUpdateSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
   title: Type.Optional(Type.String({ description: "Updated title" })),
   status: Type.Optional(
@@ -80,11 +79,11 @@ export const taskUpdateSchema: TSchema = Type.Object({
   autoCreated: Type.Optional(Type.Boolean({ description: "Updated auto-created flag" })),
 });
 
-export const taskGetSchema: TSchema = Type.Object({
+export const taskGetSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
 });
 
-export const taskListSchema: TSchema = Type.Object({
+export const taskListSchema = Type.Object({
   status: Type.Optional(
     Type.Union([
       Type.Literal("inbox"),
@@ -97,11 +96,11 @@ export const taskListSchema: TSchema = Type.Object({
   originSessionId: Type.Optional(Type.String({ description: "Filter by origin session ID" })),
 });
 
-export const taskStopSchema: TSchema = Type.Object({
+export const taskStopSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
 });
 
-export const taskOutputSchema: TSchema = Type.Object({
+export const taskOutputSchema = Type.Object({
   taskId: Type.String({ description: "Task ID" }),
   output: Type.String({ description: "Task output" }),
 });
@@ -267,7 +266,8 @@ export function createTaskOutputTool(): AgentTool<typeof taskOutputSchema, TaskT
   };
 }
 
-export function createTaskTools(): AgentTool[] {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createTaskTools(): AgentTool<any>[] {
   return [
     createTaskCreateTool(),
     createTaskUpdateTool(),
