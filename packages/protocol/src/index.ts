@@ -122,6 +122,11 @@ export const runResumeParamsSchema = z.object({
   runId: z.string(),
 });
 
+export const runEventsUnsubscribeParamsSchema = z.object({
+  runId: z.string(),
+  subscriptionId: z.string(),
+});
+
 export const sessionModelSwitchParamsSchema = z.object({
   sessionId: z.string(),
   providerConfigId: z.string(),
@@ -305,6 +310,7 @@ export const commandMap = {
     runId: z.string(),
     events: z.array(z.string()),
   }),
+  "run.events.unsubscribe": runEventsUnsubscribeParamsSchema,
   "tool.approve": toolApprovalParamsSchema,
   "tool.reject": z.object({ toolCallId: z.string() }),
   "tool.pending.list": z.object({ sessionId: z.string() }),
@@ -458,6 +464,9 @@ export const resultSchemas = {
   },
   get "run.events.subscribe"() {
     return runEventsSubscribeResultSchema;
+  },
+  get "run.events.unsubscribe"() {
+    return runEventsUnsubscribeResultSchema;
   },
   get "skill.refresh"() {
     return skillRefreshResultSchema;
@@ -616,6 +625,12 @@ export const runEventsSubscribeResultSchema = z.object({
   runId: z.string(),
   subscriptionId: z.string(),
   events: z.array(z.string()),
+});
+
+export const runEventsUnsubscribeResultSchema = z.object({
+  runId: z.string(),
+  subscriptionId: z.string(),
+  unsubscribed: z.boolean(),
 });
 
 export const agentSendResultSchema = z.object({
@@ -848,6 +863,7 @@ export type AgentGetParams = z.infer<typeof agentGetParamsSchema>;
 export type AgentDelegateParams = z.infer<typeof agentDelegateParamsSchema>;
 export type RunRetryParams = z.infer<typeof runRetryParamsSchema>;
 export type RunResumeParams = z.infer<typeof runResumeParamsSchema>;
+export type RunEventsUnsubscribeParams = z.infer<typeof runEventsUnsubscribeParamsSchema>;
 export type SessionModelSwitchParams = z.infer<typeof sessionModelSwitchParamsSchema>;
 export type ProviderConfigSaveParams = z.infer<typeof providerConfigSaveParamsSchema>;
 export type SessionHistoryListParams = z.infer<typeof sessionHistoryListParamsSchema>;
@@ -910,6 +926,7 @@ export type PlanStepsListResult = z.infer<typeof planStepsListResultSchema>;
 export type RunState = z.infer<typeof runStateSchema>;
 export type RunStateGetResult = z.infer<typeof runStateGetResultSchema>;
 export type RunEventsSubscribeResult = z.infer<typeof runEventsSubscribeResultSchema>;
+export type RunEventsUnsubscribeResult = z.infer<typeof runEventsUnsubscribeResultSchema>;
 
 export const skillRefreshResultSchema = z.object({
   refreshedAt: z.string(),

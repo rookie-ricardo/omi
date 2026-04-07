@@ -36,6 +36,10 @@ describe("protocol", () => {
     });
     expect(parseCommand("run.retry", { runId: "run_1" })).toMatchObject({ runId: "run_1" });
     expect(parseCommand("run.resume", { runId: "run_1" })).toMatchObject({ runId: "run_1" });
+    expect(parseCommand("run.events.unsubscribe", {
+      runId: "run_1",
+      subscriptionId: "sub_1",
+    })).toMatchObject({ runId: "run_1", subscriptionId: "sub_1" });
     expect(parseCommand("extension.list", {})).toEqual({});
     expect(parseCommand("model.list", {})).toEqual({});
   });
@@ -317,6 +321,13 @@ describe("protocol", () => {
       events: ["run.completed", "run.failed"],
     });
     expect(runSubscription.subscriptionId).toBe("sub_1");
+
+    const runUnsubscribe = parseResult("run.events.unsubscribe", {
+      runId: "run_1",
+      subscriptionId: "sub_1",
+      unsubscribed: true,
+    });
+    expect(runUnsubscribe.unsubscribed).toBe(true);
 
     const refreshedSkills = parseResult("skill.refresh", {
       refreshedAt: "2025-03-30T00:00:00.000Z",

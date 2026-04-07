@@ -352,8 +352,33 @@ describe("runner request handler", () => {
       }),
     ).toEqual([]);
 
-    const refreshedSkillsResponse = await handleRunnerRequest(orchestrator, {
+    const runEventsUnsubscribeResponse = await handleRunnerRequest(orchestrator, {
       id: "rpc_5c",
+      method: "run.events.unsubscribe",
+      params: {
+        runId: "run_1",
+        subscriptionId: runEventSubscription.subscriptionId,
+      },
+    });
+    expect(runEventsUnsubscribeResponse).toEqual({
+      runId: "run_1",
+      subscriptionId: runEventSubscription.subscriptionId,
+      unsubscribed: true,
+    });
+    expect(normalizeResult("run.events.unsubscribe", runEventsUnsubscribeResponse)).toEqual(
+      parseResult("run.events.unsubscribe", runEventsUnsubscribeResponse),
+    );
+
+    expect(
+      collectRunEventDeliveries("run.completed", {
+        runId: "run_1",
+        sessionId: "session_1",
+        summary: "done again",
+      }),
+    ).toEqual([]);
+
+    const refreshedSkillsResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_5d",
       method: "skill.refresh",
       params: {},
     });

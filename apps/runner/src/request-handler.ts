@@ -233,6 +233,11 @@ async function executeCommand(
         String(params.runId),
         Array.isArray(params.events) ? params.events.map((eventName) => String(eventName)) : [],
       );
+    case "run.events.unsubscribe":
+      return unsubscribeRunEvents(
+        String(params.runId),
+        String(params.subscriptionId),
+      );
     case "session.compact":
       return orchestrator.compactSession(String(params.sessionId));
     case "tool.approve":
@@ -502,6 +507,27 @@ function subscribeRunEvents(
     runId,
     subscriptionId,
     events: normalizedEvents,
+  };
+}
+
+function unsubscribeRunEvents(
+  runId: string,
+  subscriptionId: string,
+): { runId: string; subscriptionId: string; unsubscribed: boolean } {
+  const subscriptions = runEventSubscriptions.get(runId) ?? [];
+  const nextSubscriptions = subscriptions.filter((subscription) => subscription.subscriptionId !== subscriptionId);
+  const unsubscribed = nextSubscriptions.length !== subscriptions.length;
+
+  if (nextSubscriptions.length === 0) {
+    runEventSubscriptions.delete(runId);
+  } else {
+    runEventSubscriptions.set(runId, nextSubscriptions);
+  }
+
+  return {
+    runId,
+    subscriptionId,
+    unsubscribed,
   };
 }
 
