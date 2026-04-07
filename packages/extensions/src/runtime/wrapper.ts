@@ -5,7 +5,14 @@
  * Tool call and tool result interception is handled by AgentSession via agent-core hooks.
  */
 
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+/** Minimal AgentTool interface - avoids direct pi-agent-core dependency */
+interface AgentTool {
+	name: string;
+	label?: string;
+	description: string;
+	parameters: unknown;
+	execute: (toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: (result: unknown) => void) => Promise<unknown>;
+}
 import type { ExtensionRunner } from "./runner";
 
 /**

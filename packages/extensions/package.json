@@ -18,9 +18,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "^0.58.4",
-    "@mariozechner/pi-ai": "^0.58.4",
-    "@omi/memory": "workspace:*"
+    "@omi/core": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.4.0",

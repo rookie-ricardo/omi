@@ -1,7 +1,21 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+// Local type definitions - extensions package has minimal dependencies
+// These match the shapes used from @omi/memory and pi-ai/pi-agent-core
 
-import type { Message } from "@mariozechner/pi-ai";
-import type { RuntimeMessage } from "@omi/memory";
+/** Minimal message type for extension context */
+export interface ExtensionMessage {
+  role: string;
+  content: unknown;
+  timestamp: number;
+}
+
+/** Minimal runtime message compatible with @omi/memory RuntimeMessage */
+export type RuntimeMessage = ExtensionMessage;
+
+/** Minimal tool result type */
+export interface ExtensionToolResult {
+  content: unknown;
+  isError?: boolean;
+}
 
 export interface ExtensionEvent {
   type: string;
@@ -13,7 +27,7 @@ export interface ExtensionRunInput {
   sessionId: string;
   workspaceRoot: string;
   systemPrompt: string;
-  messages: Message[];
+  messages: ExtensionMessage[];
 }
 
 export interface ExtensionContext {
@@ -46,8 +60,6 @@ export interface ExtensionRunnerState {
 
 export interface ExtensionRuntimeResult {
   systemPrompt: string;
-  messages: Message[];
+  messages: ExtensionMessage[];
   diagnostics: string[];
 }
-
-export type ExtensionToolResult = AgentToolResult<unknown>;

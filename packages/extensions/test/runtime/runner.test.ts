@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import { createRuntimeCustomMessage } from "@omi/memory";
 import { ExtensionRunner } from "../../src/runtime/runner";
-import type { ExtensionDefinition, ExtensionRunInput } from "../../src/runtime/types";
+import type { ExtensionDefinition, ExtensionRunInput, RuntimeMessage } from "../../src/runtime/types";
+
+/** Create a minimal runtime message for testing (replaces @omi/memory import) */
+function createRuntimeCustomMessage(
+  source: string,
+  text: string,
+  isSystem: boolean,
+  metadata: Record<string, unknown>,
+  timestamp: number,
+): RuntimeMessage {
+  return {
+    role: isSystem ? "system" : "assistant",
+    content: [{ type: "text", text, source, metadata }],
+    timestamp,
+  };
+}
 
 describe("extension runner", () => {
   it("runs hooks and aggregates prompts and messages", async () => {
