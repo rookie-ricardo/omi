@@ -142,6 +142,7 @@ describe("runner request handler", () => {
         createdAt: "2025-03-30T00:00:00.000Z",
         updatedAt: "2025-03-30T00:00:00.000Z",
       })),
+      deleteProviderConfig: vi.fn(() => ({ deleted: true })),
       compactSession: vi.fn(async () => {
         const summary: CompactionSummaryDocument = {
           version: 1,

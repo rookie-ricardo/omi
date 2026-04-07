@@ -14,6 +14,7 @@ import {
   Monitor,
   Paperclip,
   Plus,
+  Square,
   SquareTerminal,
   UserCircle,
   Box,
@@ -49,6 +50,8 @@ export default function ThreadLayout({
   const uiPanels = useWorkspaceStore((state) => state.uiPanels);
   const setComposerInput = useWorkspaceStore((state) => state.setComposerInput);
   const sendPrompt = useWorkspaceStore((state) => state.sendPrompt);
+  const cancelRun = useWorkspaceStore((state) => state.cancelRun);
+  const streamingBySession = useWorkspaceStore((state) => state.streamingBySession);
   const openComposerFileDialog = useWorkspaceStore((state) => state.openComposerFileDialog);
   const removeSelectedFile = useWorkspaceStore((state) => state.removeSelectedFile);
   const clearSelectedFiles = useWorkspaceStore((state) => state.clearSelectedFiles);
@@ -58,6 +61,7 @@ export default function ThreadLayout({
   const closeAllPanels = useWorkspaceStore((state) => state.closeAllPanels);
   const toggleDiffPanel = useWorkspaceStore((state) => state.toggleDiffPanel);
 
+  const executeSlashCommand = useWorkspaceStore((state) => state.executeSlashCommand);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const commitRef = useRef<HTMLDivElement>(null);
@@ -85,6 +89,9 @@ export default function ThreadLayout({
   const unstagedCount =
     gitState?.files.filter((file) => file.unstaged).length ?? 0;
   const branchLabel = gitState?.branch ?? "non-git";
+  const isStreaming = Boolean(
+    selectedSessionId && streamingBySession[selectedSessionId],
+  );
 
   const slashCommands = useMemo(
     () => [
@@ -256,7 +263,7 @@ export default function ThreadLayout({
                       title={command.title}
                       subtitle={command.subtitle}
                       icon={command.icon}
-                      onClick={() => setComposerInput(`/${command.title.toLowerCase()} `)}
+                      onClick={() => void executeSlashCommand(command.title)}
                     />
                   ))}
                 </ul>
@@ -421,17 +428,27 @@ export default function ThreadLayout({
                   </div>
                 </div>
 
-                <button
-                  onClick={() => void handleSend()}
-                  disabled={!composerInput.trim()}
-                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
-                    composerInput.trim()
-                      ? "bg-black dark:bg-white text-white dark:text-black hover:scale-105 active:scale-95 shadow-md"
-                      : "bg-gray-100 dark:bg-[#2a2a2a] text-gray-400 dark:text-gray-600 cursor-not-allowed"
-                  }`}
-                >
-                  <ArrowUp size={18} strokeWidth={2.5} />
-                </button>
+                {isStreaming ? (
+                  <button
+                    onClick={() => void cancelRun()}
+                    className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500 hover:bg-red-600 text-white transition-all hover:scale-105 active:scale-95 shadow-md"
+                    title="停止生成"
+                  >
+                    <Square size={14} fill="currentColor" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => void handleSend()}
+                    disabled={!composerInput.trim()}
+                    className={`w-9 h-9 rounded-full flex items-center justify-center transition-all ${
+                      composerInput.trim()
+                        ? "bg-black dark:bg-white text-white dark:text-black hover:scale-105 active:scale-95 shadow-md"
+                        : "bg-gray-100 dark:bg-[#2a2a2a] text-gray-400 dark:text-gray-600 cursor-not-allowed"
+                    }`}
+                  >
+                    <ArrowUp size={18} strokeWidth={2.5} />
+                  </button>
+                )}
               </div>
             </div>
           </div>

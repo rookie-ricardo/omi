@@ -44,6 +44,7 @@ export const runStartParamsSchema = z.object({
   sessionId: z.string(),
   taskId: z.string().nullable().default(null),
   prompt: z.string().min(1),
+  contextFiles: z.array(z.string()).optional(),
 });
 
 export const taskUpdateParamsSchema = z.object({
@@ -141,9 +142,14 @@ export const sessionModelSwitchParamsSchema = z.object({
 export const providerConfigSaveParamsSchema = z.object({
   id: z.string().optional(),
   type: z.string().min(1),
+  protocol: z.enum(["anthropic-messages", "openai-chat", "openai-responses"]).optional(),
   baseUrl: z.string().default(""),
   model: z.string().min(1),
   apiKey: z.string().min(1),
+});
+
+export const providerConfigDeleteParamsSchema = z.object({
+  id: z.string(),
 });
 
 export const sessionCompactParamsSchema = z.object({
@@ -329,6 +335,7 @@ export const commandMap = {
   "session.history.continue": sessionHistoryContinueParamsSchema,
   "session.model.switch": sessionModelSwitchParamsSchema,
   "provider.config.save": providerConfigSaveParamsSchema,
+  "provider.config.delete": providerConfigDeleteParamsSchema,
   "session.compact": sessionCompactParamsSchema,
   "extension.list": z.object({}).default({}),
   "model.list": z.object({}).default({}),
@@ -388,6 +395,7 @@ export const resultSchemas = {
   "session.runtime.get": sessionRuntimeGetResultSchema,
   "session.model.switch": sessionModelSwitchResultSchema,
   "provider.config.save": providerConfigResultSchema,
+  "provider.config.delete": z.object({ deleted: z.boolean() }),
   "session.compact": sessionCompactResultSchema,
   "session.history.list": sessionHistoryListResultSchema,
   "session.history.continue": runSchema,

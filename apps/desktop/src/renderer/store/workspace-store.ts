@@ -14,6 +14,7 @@ import type {
   RunnerCommandName,
   RunnerCommandParamsByName,
   SessionRuntimeGetResult,
+  ToolListResult,
   ToolPendingListResult,
 } from "@omi/protocol";
 
@@ -59,9 +60,12 @@ interface WorkspaceStoreData {
   sessionDetailsById: Record<string, SessionDetailResponse>;
   sessionRuntimeById: Record<string, SessionRuntimeGetResult["runtime"]>;
   pendingToolCallsBySession: Record<string, ToolCall[]>;
+  toolCallsBySession: Record<string, ToolCall[]>;
+  activeToolsBySession: Record<string, Array<{ toolCallId: string; toolName: string }>>;
   firstUserMessageBySession: Record<string, string | null>;
   renamedSessionIds: Record<string, boolean>;
   streamingBySession: Record<string, StreamingState>;
+  errorBySession: Record<string, string>;
   gitState: GitRepoState | null;
   diffPreview: GitDiffPreview | null;
   diffPath: string | null;
@@ -105,6 +109,15 @@ interface WorkspaceStoreActions {
   toggleDiffPanel: () => Promise<void>;
   openDiffPreview: (path: string) => Promise<void>;
   switchModel: (providerConfigId: string) => Promise<void>;
+  saveProviderConfig: (params: {
+    id?: string;
+    type: string;
+    protocol?: string;
+    baseUrl?: string;
+    model: string;
+    apiKey: string;
+  }) => Promise<void>;
+  deleteProviderConfig: (id: string) => Promise<void>;
   setReasoningLevel: (level: ReasoningLevel) => void;
   setUiPanelOpen: (
     panel: keyof WorkspaceStoreData["uiPanels"],
@@ -113,6 +126,7 @@ interface WorkspaceStoreActions {
   closeAllPanels: () => void;
   approveToolCall: (toolCallId: string) => Promise<void>;
   rejectToolCall: (toolCallId: string) => Promise<void>;
+  cancelRun: () => Promise<void>;
   addFolderFromDialog: () => Promise<void>;
   toggleFolder: (folderId: string) => void;
   removeFolder: (folderId: string) => void;
@@ -121,6 +135,7 @@ interface WorkspaceStoreActions {
   setEditingSessionDraft: (value: string) => void;
   cancelRenameSession: () => void;
   commitRenameSession: () => Promise<void>;
+  executeSlashCommand: (command: string) => Promise<void>;
   handleRunnerEvent: (event: RunnerEventEnvelope) => Promise<void>;
 }
 
@@ -148,9 +163,12 @@ function createInitialData(): WorkspaceStoreData {
     sessionDetailsById: {},
     sessionRuntimeById: {},
     pendingToolCallsBySession: {},
+    toolCallsBySession: {},
+    activeToolsBySession: {},
     firstUserMessageBySession: {},
     renamedSessionIds: {},
     streamingBySession: {},
+    errorBySession: {},
     gitState: null,
     diffPreview: null,
     diffPath: null,
@@ -420,10 +438,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       }));
     }
 
+    const files = get().selectedFiles;
     await invokeRunner("run.start", {
       sessionId,
       taskId: null,
       prompt,
+      ...(files.length > 0 ? { contextFiles: files } : {}),
     });
 
     set((state) => ({
@@ -481,12 +501,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   async refreshSession(sessionId) {
-    const [detail, runtime, pendingTools] = await Promise.all([
+    const [detail, runtime, pendingTools, allTools] = await Promise.all([
       invokeRunner<SessionDetailResponse, "session.get">("session.get", { sessionId }),
       invokeRunner<SessionRuntimeGetResult, "session.runtime.get">("session.runtime.get", {
         sessionId,
       }),
       invokeRunner<ToolPendingListResult, "tool.pending.list">("tool.pending.list", {
+        sessionId,
+      }),
+      invokeRunner<ToolListResult, "tool.list">("tool.list", {
         sessionId,
       }),
     ]);
@@ -504,6 +527,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       pendingToolCallsBySession: {
         ...state.pendingToolCallsBySession,
         [sessionId]: pendingTools.pendingToolCalls,
+      },
+      toolCallsBySession: {
+        ...state.toolCallsBySession,
+        [sessionId]: allTools.toolCalls,
       },
       firstUserMessageBySession: {
         ...state.firstUserMessageBySession,
@@ -668,6 +695,23 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     await get().refreshSession(sessionId);
   },
 
+  async saveProviderConfig(params) {
+    await invokeRunner("provider.config.save", {
+      id: params.id,
+      type: params.type,
+      protocol: params.protocol as "anthropic-messages" | "openai-chat" | "openai-responses" | undefined,
+      baseUrl: params.baseUrl ?? "",
+      model: params.model,
+      apiKey: params.apiKey,
+    });
+    await get().loadModelCatalog();
+  },
+
+  async deleteProviderConfig(id) {
+    await invokeRunner("provider.config.delete", { id });
+    await get().loadModelCatalog();
+  },
+
   setReasoningLevel(level) {
     const sessionId = get().selectedSessionId;
     set((state) => {
@@ -717,6 +761,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       toolCallId,
     });
     await Promise.all([get().refreshSelectedSession(), get().loadGitStatus()]);
+  },
+
+  async cancelRun() {
+    const sessionId = get().selectedSessionId;
+    if (!sessionId) return;
+    const runtime = get().sessionRuntimeById[sessionId];
+    const activeRunId = runtime?.activeRunId;
+    if (!activeRunId) return;
+    await invokeRunner("run.cancel", { runId: activeRunId });
   },
 
   async addFolderFromDialog() {
@@ -882,6 +935,74 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     });
   },
 
+  async executeSlashCommand(command) {
+    const lower = command.toLowerCase();
+    switch (lower) {
+      case "model":
+        set((state) => ({
+          composerInput: "",
+          uiPanels: { ...state.uiPanels, slashMenuOpen: false, modelMenuOpen: true },
+        }));
+        break;
+      case "reasoning":
+        set((state) => ({
+          composerInput: "",
+          uiPanels: { ...state.uiPanels, slashMenuOpen: false, reasoningMenuOpen: true },
+        }));
+        break;
+      case "compact": {
+        const sessionId = get().selectedSessionId;
+        if (sessionId) {
+          set((state) => ({
+            composerInput: "",
+            uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+          }));
+          await invokeRunner("session.compact", { sessionId });
+          await get().refreshSession(sessionId);
+        }
+        break;
+      }
+      case "计划模式":
+      case "plan": {
+        const sessionId = get().selectedSessionId;
+        if (sessionId) {
+          set((state) => ({
+            composerInput: "",
+            uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+          }));
+          await invokeRunner("session.mode.enter", { sessionId, mode: "plan" });
+          await get().refreshSession(sessionId);
+        }
+        break;
+      }
+      case "状态":
+      case "status": {
+        const sessionId = get().selectedSessionId;
+        set((state) => ({
+          composerInput: "",
+          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+        }));
+        if (sessionId) {
+          const runtime = get().sessionRuntimeById[sessionId];
+          const status = runtime?.activeRunId ? "运行中" : "空闲";
+          set((state) => ({
+            errorBySession: {
+              ...state.errorBySession,
+              [sessionId]: `会话 ID: ${sessionId} | 状态: ${status}`,
+            },
+          }));
+        }
+        break;
+      }
+      default:
+        set((state) => ({
+          composerInput: "",
+          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+        }));
+        break;
+    }
+  },
+
   async handleRunnerEvent(event) {
     const sessionId =
       typeof event.payload.sessionId === "string" ? event.payload.sessionId : null;
@@ -911,15 +1032,50 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }
 
     if (event.type === "run.started" && sessionId) {
-      set((state) => ({
-        streamingBySession: {
-          ...state.streamingBySession,
-          [sessionId]: {
-            runId,
-            content: "",
+      set((state) => {
+        const nextErrors = { ...state.errorBySession };
+        delete nextErrors[sessionId];
+        return {
+          streamingBySession: {
+            ...state.streamingBySession,
+            [sessionId]: {
+              runId,
+              content: "",
+            },
           },
-        },
-      }));
+          errorBySession: nextErrors,
+        };
+      });
+    }
+
+    if (event.type === "run.tool_started" && sessionId) {
+      const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+      const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
+      if (toolCallId) {
+        set((state) => ({
+          activeToolsBySession: {
+            ...state.activeToolsBySession,
+            [sessionId]: [
+              ...(state.activeToolsBySession[sessionId] ?? []),
+              { toolCallId, toolName },
+            ],
+          },
+        }));
+      }
+    }
+
+    if (event.type === "run.tool_finished" && sessionId) {
+      const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+      if (toolCallId) {
+        set((state) => ({
+          activeToolsBySession: {
+            ...state.activeToolsBySession,
+            [sessionId]: (state.activeToolsBySession[sessionId] ?? []).filter(
+              (t) => t.toolCallId !== toolCallId,
+            ),
+          },
+        }));
+      }
     }
 
     if (
@@ -931,8 +1087,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       set((state) => {
         const nextStreaming = { ...state.streamingBySession };
         delete nextStreaming[sessionId];
+        const nextErrors = { ...state.errorBySession };
+        if (event.type === "run.failed") {
+          const errorMsg =
+            typeof event.payload.error === "string"
+              ? event.payload.error
+              : "运行失败";
+          nextErrors[sessionId] = errorMsg;
+        }
         return {
           streamingBySession: nextStreaming,
+          errorBySession: nextErrors,
         };
       });
     }

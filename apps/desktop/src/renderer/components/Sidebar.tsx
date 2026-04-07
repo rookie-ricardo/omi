@@ -6,6 +6,7 @@ import {
   Box,
   Clock,
   Cog,
+  Cpu,
   Edit,
   Filter,
   Folder,
@@ -44,7 +45,7 @@ export default function Sidebar({
   isDarkMode,
   setIsDarkMode,
 }: SidebarProps) {
-  const isSettings = currentView === "settings" || currentView === "config";
+  const isSettings = currentView === "settings" || currentView === "config" || currentView === "providers";
   const bridgeAvailable = useWorkspaceStore((state) => state.bridgeAvailable);
   const sessions = useWorkspaceStore((state) => state.sessions);
   const selectedSessionId = useWorkspaceStore((state) => state.selectedSessionId);
@@ -130,6 +131,12 @@ export default function Sidebar({
               label="配置"
               active={currentView === "config"}
               onClick={() => setCurrentView("config")}
+            />
+            <NavItem
+              icon={<Cpu size={16} />}
+              label="模型提供商"
+              active={currentView === "providers"}
+              onClick={() => setCurrentView("providers")}
             />
             <NavItem icon={<Edit size={16} />} label="个性化" />
             <NavItem icon={<Box size={16} />} label="MCP 服务器" />

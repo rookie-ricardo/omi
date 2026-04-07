@@ -56,6 +56,7 @@ export interface AppStore {
     input: Omit<ProviderConfig, "id" | "createdAt" | "updatedAt"> & { id?: string },
   ): ProviderConfig;
   getProviderConfig(providerId?: string): ProviderConfig | null;
+  deleteProviderConfig(id: string): void;
   loadSessionRuntimeSnapshot(sessionId: string): { sessionId: string; snapshot: string; updatedAt: string } | null;
   saveSessionRuntimeSnapshot(input: { sessionId: string; snapshot: string; updatedAt: string }): void;
 

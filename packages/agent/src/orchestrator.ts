@@ -289,6 +289,11 @@ export class AppOrchestrator {
     });
   }
 
+  deleteProviderConfig(id: string): { deleted: boolean } {
+    this.database.deleteProviderConfig(id);
+    return { deleted: true };
+  }
+
   listTasks(): Task[] {
     return this.database.listTasks();
   }

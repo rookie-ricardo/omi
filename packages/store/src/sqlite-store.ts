@@ -716,6 +716,10 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     return row ? parseStoredProviderConfig(row) : null;
   }
 
+  function deleteProviderConfig(id: string): void {
+    db.delete(providerConfigsTable).where(eq(providerConfigsTable.id, id)).run();
+  }
+
   function loadSessionRuntimeSnapshot(sessionId: string): {
     sessionId: string;
     snapshot: string;
@@ -933,6 +937,7 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     listProviderConfigs,
     upsertProviderConfig,
     getProviderConfig,
+    deleteProviderConfig,
     loadSessionRuntimeSnapshot,
     saveSessionRuntimeSnapshot,
     createBranch,

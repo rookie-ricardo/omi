@@ -2,6 +2,7 @@ import { ViewType } from '../App';
 import NewThread from './views/NewThread';
 import Settings from './views/Settings';
 import Config from './views/Config';
+import Providers from './views/Providers';
 import Plugins from './views/Plugins';
 import Chat from './views/Chat';
 import Automations from './views/Automations';
@@ -19,6 +20,7 @@ export default function MainContent({ currentView, setCurrentView }: MainContent
       )}
       {currentView === 'settings' && <Settings />}
       {currentView === 'config' && <Config />}
+      {currentView === 'providers' && <Providers />}
       {currentView === 'plugins' && <Plugins />}
       {currentView === 'chat' && <Chat />}
       {currentView === 'automations' && <Automations />}

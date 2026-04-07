@@ -1,8 +1,11 @@
-import { Copy, MoreHorizontal, Terminal, Undo } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Check, Copy, MoreHorizontal, Terminal, Undo } from "lucide-react";
 
 import type { GitChangedFile, GitDiffPreview, SessionMessage, ToolCall } from "@omi/core";
 
 import ThreadLayout from "../ThreadLayout";
+import MarkdownRenderer from "../MarkdownRenderer";
+import ToolCallCard from "../ToolCallCard";
 import {
   deriveThreadTitle,
   useWorkspaceStore,
@@ -26,6 +29,9 @@ export default function Chat() {
   const openDiffPreview = useWorkspaceStore((state) => state.openDiffPreview);
   const approveToolCall = useWorkspaceStore((state) => state.approveToolCall);
   const rejectToolCall = useWorkspaceStore((state) => state.rejectToolCall);
+  const errorBySession = useWorkspaceStore((state) => state.errorBySession);
+  const toolCallsBySession = useWorkspaceStore((state) => state.toolCallsBySession);
+  const activeToolsBySession = useWorkspaceStore((state) => state.activeToolsBySession);
 
   const selectedSession = selectedSessionId
     ? sessions.find((session) => session.id === selectedSessionId) ?? null
@@ -40,6 +46,46 @@ export default function Chat() {
   const streamingContent = selectedSessionId
     ? streamingBySession[selectedSessionId]?.content ?? ""
     : "";
+  const isStreaming = Boolean(
+    selectedSessionId && streamingBySession[selectedSessionId],
+  );
+  const errorMessage = selectedSessionId
+    ? errorBySession[selectedSessionId] ?? null
+    : null;
+  const toolCalls = selectedSessionId
+    ? toolCallsBySession[selectedSessionId] ?? []
+    : [];
+  const activeTools = selectedSessionId
+    ? activeToolsBySession[selectedSessionId] ?? []
+    : [];
+  const activeToolIds = new Set(activeTools.map((t) => t.toolCallId));
+
+  const timelineItems = useMemo(() => {
+    const items: Array<
+      | { kind: "message"; message: SessionMessage }
+      | { kind: "toolCall"; toolCall: ToolCall }
+    > = [];
+    const messagesByTime = [...messages].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    const toolsByTime = [...toolCalls].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    let mi = 0;
+    let ti = 0;
+    while (mi < messagesByTime.length || ti < toolsByTime.length) {
+      const msg = messagesByTime[mi];
+      const tool = toolsByTime[ti];
+      if (msg && (!tool || new Date(msg.createdAt).getTime() <= new Date(tool.createdAt).getTime())) {
+        items.push({ kind: "message", message: msg });
+        mi++;
+      } else if (tool) {
+        items.push({ kind: "toolCall", toolCall: tool });
+        ti++;
+      }
+    }
+    return items;
+  }, [messages, toolCalls]);
 
   const title = selectedSession
     ? deriveThreadTitle(
@@ -48,6 +94,14 @@ export default function Chat() {
         Boolean(renamedSessionIds[selectedSession.id]),
       )
     : "聊天";
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isStreaming || streamingContent) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [streamingContent, isStreaming, timelineItems.length]);
 
   const rightPanel = (
     <GitPanel
@@ -65,24 +119,49 @@ export default function Chat() {
         <div className="max-w-3xl mx-auto space-y-6">
           {!selectedSessionId ? (
             <EmptyState label="选择左侧线程，或在新线程页输入提示开始构建。" />
-          ) : messages.length === 0 && !streamingContent ? (
+          ) : messages.length === 0 && !streamingContent && !isStreaming ? (
             <EmptyState label="当前线程还没有消息，输入提示后会在这里实时显示。" />
           ) : (
             <>
-              {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
-              ))}
+              {timelineItems.map((item) =>
+                item.kind === "message" ? (
+                  <MessageBubble key={item.message.id} message={item.message} />
+                ) : (
+                  <ToolCallCard
+                    key={item.toolCall.id}
+                    toolCall={item.toolCall}
+                    isActive={activeToolIds.has(item.toolCall.id)}
+                  />
+                ),
+              )}
+
+              {isStreaming && !streamingContent ? (
+                <div className="flex justify-start">
+                  <div className="flex items-center gap-1.5 px-4 py-3">
+                    <span className="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:0ms]" />
+                    <span className="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:150ms]" />
+                    <span className="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:300ms]" />
+                  </div>
+                </div>
+              ) : null}
 
               {streamingContent ? (
                 <div className="flex justify-start">
-                  <div className="bg-white dark:bg-[#252525] border border-gray-200 dark:border-white/10 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] text-[15px] leading-relaxed text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
-                    {streamingContent}
+                  <div className="bg-white dark:bg-[#252525] border border-gray-200 dark:border-white/10 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] text-[15px] leading-relaxed text-gray-800 dark:text-gray-200">
+                    <MarkdownRenderer content={streamingContent} />
                     <span className="inline-block ml-1 w-2 h-4 align-middle bg-gray-400 dark:bg-gray-500 animate-pulse" />
                   </div>
                 </div>
               ) : null}
             </>
           )}
+
+          {errorMessage && !isStreaming ? (
+            <div className="rounded-xl border border-red-200 dark:border-red-400/20 bg-red-50 dark:bg-red-500/10 px-4 py-3 flex items-center gap-2">
+              <AlertCircle size={16} className="text-red-500 dark:text-red-400 flex-shrink-0" />
+              <span className="text-sm text-red-700 dark:text-red-300">{errorMessage}</span>
+            </div>
+          ) : null}
 
           {pendingToolCalls.length > 0 ? (
             <ToolApprovalSection
@@ -91,6 +170,8 @@ export default function Chat() {
               onReject={(toolCallId) => void rejectToolCall(toolCallId)}
             />
           ) : null}
+
+          <div ref={messagesEndRef} />
         </div>
       </div>
     </ThreadLayout>
@@ -106,6 +187,10 @@ function EmptyState({ label }: { label: string }) {
 }
 
 function MessageBubble({ message }: { message: SessionMessage }) {
+  const [copied, setCopied] = useState(false);
+  const sendPrompt = useWorkspaceStore((state) => state.sendPrompt);
+  const setComposerInput = useWorkspaceStore((state) => state.setComposerInput);
+
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -116,19 +201,40 @@ function MessageBubble({ message }: { message: SessionMessage }) {
     );
   }
 
+  function handleCopy() {
+    void navigator.clipboard.writeText(message.content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  function handleUndo() {
+    setComposerInput("撤销上一条回复中的所有文件改动，恢复到改动之前的状态");
+    void sendPrompt();
+  }
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">
-        {message.content}
-      </div>
+      <MarkdownRenderer
+        content={message.content}
+        className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed"
+      />
       {message.role === "assistant" ? (
         <div className="flex items-center gap-2 mt-1">
-          <button className="px-3 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] hover:bg-gray-200 dark:hover:bg-[#333333] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1 transition-colors">
+          <button
+            onClick={handleUndo}
+            className="px-3 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] hover:bg-gray-200 dark:hover:bg-[#333333] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1 transition-colors"
+          >
             <Undo size={14} /> 撤销
           </button>
-          <button className="px-3 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] hover:bg-gray-200 dark:hover:bg-[#333333] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 transition-colors">
-            <Copy size={14} className="inline mr-1" />
-            复制
+          <button
+            onClick={handleCopy}
+            className="px-3 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] hover:bg-gray-200 dark:hover:bg-[#333333] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 transition-colors"
+          >
+            {copied ? (
+              <><Check size={14} className="inline mr-1" />已复制</>
+            ) : (
+              <><Copy size={14} className="inline mr-1" />复制</>
+            )}
           </button>
         </div>
       ) : null}

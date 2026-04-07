@@ -61,6 +61,7 @@ type RunnerRequestOrchestrator = Pick<
   | "listToolCalls"
   | "switchModel"
   | "saveProviderConfig"
+  | "deleteProviderConfig"
   | "listExtensions"
   | "listModels"
 >;
@@ -264,6 +265,8 @@ async function executeCommand(
         model: String(params.model),
         apiKey: String(params.apiKey),
       });
+    case "provider.config.delete":
+      return orchestrator.deleteProviderConfig(String(params.id));
     case "permission.rule.list":
       return listPermissionRules(String(params.sessionId));
     case "permission.rule.add":
