@@ -187,14 +187,8 @@ export interface ModelClientRunInput {
   enabledTools?: ToolName[];
   /** Pre-built tools injected by the agent layer */
   tools?: OmiTool[];
-  /** Callback to check if a tool requires user approval */
-  requiresApprovalFn?: (toolName: string) => boolean;
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   toolExecutionMode?: "sequential" | "parallel";
-  preflightToolCheck?: (
-    toolName: string,
-    input: Record<string, unknown>,
-  ) => ToolPreflightDecision | Promise<ToolPreflightDecision>;
 }
 
 export interface ToolPreflightDecision {
@@ -213,6 +207,7 @@ export interface ModelClientRunResult {
   toolCalls: ModelToolCall[];
   usage: ModelUsage;
   error: string | null;
+  assistantMessage: unknown; // Raw pi-ai AssistantMessage, opaque to types layer
 }
 
 /**
@@ -234,16 +229,6 @@ export interface ModelClient {
    * Cancel an in-progress run.
    */
   cancel(runId: string): void;
-
-  /**
-   * Approve a pending tool call.
-   */
-  approveTool(toolCallId: string): void;
-
-  /**
-   * Reject a pending tool call.
-   */
-  rejectTool(toolCallId: string): void;
 }
 
 /**
@@ -251,26 +236,6 @@ export interface ModelClient {
  */
 export interface ModelClientCallbacks {
   onTextDelta?: (delta: string) => void | Promise<void>;
-  onToolCallStart?: (toolCallId: string, toolName: string, input: Record<string, unknown>) => void | Promise<void>;
-  onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void | Promise<void>;
-  onToolCallEnd?: (
-    toolCallId: string,
-    toolName: string,
-    result: Record<string, unknown>,
-    isError: boolean
-  ) => void | Promise<void>;
-  onToolResult?: (
-    toolCallId: string,
-    toolName: string,
-    output: Record<string, unknown>,
-    isError: boolean
-  ) => void | Promise<void>;
-  onUpdate?: (
-    toolCallId: string,
-    toolName: string,
-    delta: string,
-    partialResult: unknown
-  ) => void | Promise<void>;
   onUsage?: (usage: ModelUsage) => void | Promise<void>;
   onError?: (error: string, errorClass: ModelErrorClass, recoverable: boolean) => void | Promise<void>;
   onRequestStart?: (runId: string, sessionId: string) => void | Promise<void>;

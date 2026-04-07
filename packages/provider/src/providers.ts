@@ -1,17 +1,14 @@
-import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
+import type { Message } from "@mariozechner/pi-ai";
 
 import type { OmiTool, ThinkingLevel, ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
 import { PiAiModelClient } from "./model-client/pi-ai-client";
-import type { ModelClientCallbacks, ToolPreflightDecision } from "./model-client/types";
-import type { ToolName } from "./model-client/types";
+import type { ModelClientCallbacks, ModelStopReason, ModelToolCall, ModelUsage, ToolName } from "./model-client/types";
 
 export interface ProviderAdapter {
   run(input: ProviderRunInput): Promise<ProviderRunResult>;
   cancel(runId: string): void;
-  approveTool(toolCallId: string): void;
-  rejectTool(toolCallId: string): void;
 }
 
 export interface ProviderRunInput {
@@ -25,30 +22,20 @@ export interface ProviderRunInput {
   enabledTools?: ToolName[];
   /** Pre-built tools injected by the agent layer */
   tools?: OmiTool[];
-  /** Callback to check if a tool requires user approval */
-  requiresApprovalFn?: (toolName: string) => boolean;
   thinkingLevel?: ThinkingLevel;
   toolExecutionMode?: "sequential" | "parallel";
-  preflightToolCheck?: (
-    toolName: string,
-    input: Record<string, unknown>,
-  ) => ToolPreflightDecision | Promise<ToolPreflightDecision>;
   convertToLlm?: (messages: Message[]) => Message[];
   onTextDelta?: (delta: string) => void;
-  onToolRequested?: (event: ProviderToolRequestedEvent) => Promise<string>;
-  onToolDecision?: (toolCallId: string, decision: "approved" | "rejected") => void;
-  onToolStarted?: (toolCallId: string, toolName: string) => void;
-  onToolUpdate?: (toolCallId: string, delta: string) => void;
-  onToolFinished?: (
-    toolCallId: string,
-    toolName: string,
-    output: Record<string, unknown>,
-    isError: boolean,
-  ) => void;
+  signal?: AbortSignal;
 }
 
 export interface ProviderRunResult {
   assistantText: string;
+  assistantMessage: unknown; // Raw provider message for history append
+  stopReason: ModelStopReason;
+  toolCalls: ModelToolCall[];
+  usage: ModelUsage;
+  error: string | null;
 }
 
 export interface ProviderToolRequestedEvent {
@@ -88,9 +75,8 @@ export function buildAgentInitialState(input: ProviderRunInput) {
 /**
  * PiAiProvider - unified provider implementation backed by PiAiModelClient.
  *
- * All calls route through pi-ai via PiAiModelClient (which implements its own agentic loop).
- * The query layer sees no protocol branching - all protocol differences are
- * encapsulated in the pi-ai abstraction layer.
+ * Single-turn caller: streams one LLM response and returns it with any tool calls.
+ * Tool execution is handled by the agent layer (QueryEngine).
  */
 export class PiAiProvider implements ProviderAdapter {
   private readonly modelClient: PiAiModelClient;
@@ -100,83 +86,43 @@ export class PiAiProvider implements ProviderAdapter {
   }
 
   async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-    const pendingRequested = new Set<string>();
     const callbacks: ModelClientCallbacks = {
       onTextDelta: input.onTextDelta,
-      onUpdate: (toolCallId, toolName, delta) => {
-        input.onToolUpdate?.(toolCallId, delta);
-      },
-      onToolCallStart: async (toolCallId, toolName, toolInput) => {
-        if (pendingRequested.has(toolCallId)) {
-          pendingRequested.delete(toolCallId);
-          input.onToolStarted?.(toolCallId, toolName);
-          return;
-        }
-        pendingRequested.add(toolCallId);
-        await input.onToolRequested?.({
-          runId: input.runId,
-          sessionId: input.sessionId,
-          toolCallId,
-          toolName,
-          input: toolInput,
-          requiresApproval: input.requiresApprovalFn?.(toolName) ?? false,
-        });
-      },
-      onToolDecision: input.onToolDecision,
-      onToolCallEnd: (toolCallId, toolName, result, isError) => {
-        input.onToolFinished?.(toolCallId, toolName, result, isError);
-      },
-      onUsage: () => {
-        // ProviderRunInput doesn't have onUsage - ignore
-      },
-      onError: () => {
-        // Errors are surfaced via run result
-      },
-      onRequestStart: () => {
-        // Ignored
-      },
+      onUsage: () => {},
+      onError: () => {},
+      onRequestStart: () => {},
     };
 
-    try {
-      const result = await this.modelClient.run(
-        {
-          runId: input.runId,
-          sessionId: input.sessionId,
-          prompt: input.prompt,
-          historyMessages: input.historyMessages,
-          systemPrompt: input.systemPrompt,
-          providerConfig: input.providerConfig,
-          enabledTools: input.enabledTools,
-          tools: input.tools,
-          requiresApprovalFn: input.requiresApprovalFn,
-          thinkingLevel: input.thinkingLevel,
-          toolExecutionMode: input.toolExecutionMode,
-          preflightToolCheck: input.preflightToolCheck,
-        },
-        callbacks,
-      );
-      return { assistantText: result.assistantText };
-    } finally {
-      // no-op
-    }
+    const result = await this.modelClient.run(
+      {
+        runId: input.runId,
+        sessionId: input.sessionId,
+        prompt: input.prompt,
+        historyMessages: input.historyMessages,
+        systemPrompt: input.systemPrompt,
+        providerConfig: input.providerConfig,
+        enabledTools: input.enabledTools,
+        tools: input.tools,
+        thinkingLevel: input.thinkingLevel,
+        toolExecutionMode: input.toolExecutionMode,
+      },
+      callbacks,
+    );
+
+    return {
+      assistantText: result.assistantText,
+      assistantMessage: result.assistantMessage,
+      stopReason: result.stopReason,
+      toolCalls: result.toolCalls,
+      usage: result.usage,
+      error: result.error,
+    };
   }
 
   cancel(runId: string): void {
     this.modelClient.cancel(runId);
   }
-
-  approveTool(toolCallId: string): void {
-    this.modelClient.approveTool(toolCallId);
-  }
-
-  rejectTool(toolCallId: string): void {
-    this.modelClient.rejectTool(toolCallId);
-  }
 }
 
-function assistantMessageToText(message: AssistantMessage): string {
-  return message.content
-    .filter((content): content is { type: "text"; text: string } => content.type === "text")
-    .map((content) => content.text)
-    .join("");
-}
+export { canonicalizeForHash, buildStableToolCallId } from "./model-client/pi-ai-client";
+export type { ModelToolCall, ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./model-client/types";
