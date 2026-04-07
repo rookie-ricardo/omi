@@ -166,9 +166,6 @@ importers:
 
   packages/agent:
     dependencies:
-      '@mariozechner/pi-agent-core':
-        specifier: ^0.58.4
-        version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@mariozechner/pi-ai':
         specifier: ^0.58.4
         version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
@@ -295,9 +292,6 @@ importers:
 
   packages/provider:
     dependencies:
-      '@mariozechner/pi-agent-core':
-        specifier: ^0.58.4
-        version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@mariozechner/pi-ai':
         specifier: ^0.58.4
         version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
@@ -395,9 +389,6 @@ importers:
 
   packages/tools:
     dependencies:
-      '@mariozechner/pi-agent-core':
-        specifier: ^0.58.4
-        version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@mariozechner/pi-ai':
         specifier: ^0.58.4
         version: 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
@@ -1154,10 +1145,6 @@ packages:
   '@malept/flatpak-bundler@0.4.0':
     resolution: {integrity: sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q==}
     engines: {node: '>= 10.0.0'}
-
-  '@mariozechner/pi-agent-core@0.58.4':
-    resolution: {integrity: sha512-I2tVUcFzxGAS7dRpmZHKqetIAAz4Q/loupgUBQ9RxOMldUsBoQf5Pj9WWu7cGrGEFztPQ27QKPKbU1jSd2scjw==}
-    engines: {node: '>=20.0.0'}
 
   '@mariozechner/pi-ai@0.58.4':
     resolution: {integrity: sha512-yQT8H3nTHHw925DDLatQ/F5xx0ThK9wF+JTUHlzfXvrfclKDBp1+e8bvxdGK3AbbWuvWNlwZ3qbWgsZQ8/YZtQ==}
@@ -5552,18 +5539,6 @@ snapshots:
       tmp-promise: 3.0.3
     transitivePeerDependencies:
       - supports-color
-
-  '@mariozechner/pi-agent-core@0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
-    dependencies:
-      '@mariozechner/pi-ai': 0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - aws-crt
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
 
   '@mariozechner/pi-ai@0.58.4(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
