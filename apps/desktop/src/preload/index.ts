@@ -18,4 +18,9 @@ contextBridge.exposeInMainWorld("omi", {
   showOpenDialog(options: OpenDialogOptions) {
     return ipcRenderer.invoke("dialog:showOpenDialog", options);
   },
+  onMenuNavigate(callback: (view: string) => void) {
+    const handler = (_event: IpcRendererEvent, view: string) => callback(view);
+    ipcRenderer.on("menu:navigate", handler);
+    return () => ipcRenderer.removeListener("menu:navigate", handler);
+  },
 });

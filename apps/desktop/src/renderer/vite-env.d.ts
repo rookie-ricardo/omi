@@ -18,6 +18,7 @@ declare global {
       ): Promise<TResult>;
       subscribe(listener: (event: RunnerEventEnvelope) => void): () => void;
       showOpenDialog(options: OpenDialogOptions): Promise<OpenDialogReturnValue>;
+      onMenuNavigate(callback: (view: string) => void): () => void;
     };
   }
 }

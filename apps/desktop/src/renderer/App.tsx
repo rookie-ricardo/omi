@@ -8,7 +8,7 @@ import Sidebar from './components/Sidebar';
 import MainContent from './components/MainContent';
 import { useWorkspaceStore } from './store/workspace-store';
 
-export type ViewType = 'new-thread' | 'skills' | 'plugins' | 'automations' | 'settings' | 'config' | 'providers' | 'chat';
+export type ViewType = 'new-thread' | 'plugins' | 'automations' | 'settings' | 'config' | 'providers' | 'chat' | 'diagnostics';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewType>('new-thread');
@@ -18,6 +18,16 @@ export default function App() {
   useEffect(() => {
     void initializeWorkspace();
   }, [initializeWorkspace]);
+
+  useEffect(() => {
+    const gateway = window.omi;
+    if (!gateway?.onMenuNavigate) return;
+    return gateway.onMenuNavigate((view) => {
+      if (view === "diagnostics") {
+        setCurrentView("diagnostics");
+      }
+    });
+  }, []);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -55,8 +65,8 @@ export default function App() {
   }, []);
 
   return (
-    <div className={`${isDarkMode ? 'dark' : ''} h-screen w-screen overflow-hidden bg-[#f4f4f4] dark:bg-[#1a1a1a] font-sans transition-colors`}>
-      <div className="flex h-full w-full overflow-hidden bg-[#f4f4f4] dark:bg-[#252525] text-gray-900 dark:text-gray-100">
+    <div className={`${isDarkMode ? 'dark' : ''} h-screen w-screen overflow-hidden bg-transparent font-sans transition-colors`}>
+      <div className="flex h-full w-full overflow-hidden rounded-xl border border-gray-200 dark:border-white/10 shadow-sm bg-[#f4f4f4] dark:bg-[#252525] text-gray-900 dark:text-gray-100">
         <Sidebar currentView={currentView} setCurrentView={setCurrentView} isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
         <MainContent currentView={currentView} setCurrentView={setCurrentView} />
       </div>

@@ -7,6 +7,10 @@ body,
 #root {
   width: 100%;
   height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: transparent;
 }
 
 html {
@@ -14,10 +18,15 @@ html {
 }
 
 body {
-  margin: 0;
-  overflow: hidden;
-  background: #f4f4f4;
   line-height: 1.55;
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
 }
 
 @layer utilities {

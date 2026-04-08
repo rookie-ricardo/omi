@@ -2,7 +2,7 @@ import { type ChildProcess, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 
-import { BrowserWindow, app, ipcMain, dialog } from "electron";
+import { BrowserWindow, Menu, app, ipcMain, dialog } from "electron";
 
 import { type commandMap } from "@omi/protocol";
 
@@ -41,13 +41,16 @@ function getWorkspaceRoot() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 940,
-    minWidth: 1100,
-    minHeight: 760,
-    backgroundColor: "#f4f4f4",
-    titleBarStyle: process.platform === "darwin" ? "hidden" : undefined,
-    trafficLightPosition: process.platform === "darwin" ? { x: 18, y: 18 } : undefined,
+    width: 1160,
+    height: 800,
+    minWidth: 840,
+    minHeight: 640,
+    backgroundColor: "#00000000",
+    transparent: true,
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 18, y: 18 },
+    hasShadow: false,
+    ...(process.platform !== "darwin" ? { titleBarOverlay: true } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       contextIsolation: true,
@@ -179,6 +182,7 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  buildApplicationMenu();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -196,3 +200,36 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   runner?.kill();
 });
+
+function buildApplicationMenu() {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    { label: app.name, submenu: [
+      { role: "about" },
+      { type: "separator" },
+      { role: "hide" },
+      { role: "hideOthers" },
+      { role: "unhide" },
+      { type: "separator" },
+      { role: "quit" },
+    ]},
+    { label: "View", submenu: [
+      { label: "诊断", accelerator: "Cmd+Shift+L", click: () => navigateRenderer("diagnostics") },
+      { type: "separator" },
+      { role: "toggleDevTools" },
+      { type: "separator" },
+      { role: "resetZoom" },
+      { role: "zoomIn" },
+      { role: "zoomOut" },
+    ]},
+    { label: "Window", submenu: [
+      { role: "minimize" },
+      { role: "close" },
+    ]},
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function navigateRenderer(view: string) {
+  mainWindow?.webContents.send("menu:navigate", view);
+}
