@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { useDiagnosticsStore, type DiagnosticLogLevel } from "./diagnostics-store";
+
 import type {
   GitDiffPreview,
   GitRepoState,
@@ -392,6 +394,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         await get().refreshSession(selectedSessionId);
       }
       set({ initialized: true, initializing: false, bridgeAvailable: true });
+      console.log("[bridge] 实时连接已启用");
     } catch (error) {
       set({
         initializing: false,
@@ -1004,6 +1007,21 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   async handleRunnerEvent(event) {
+    // Route log entries to diagnostics store
+    if (event.type === "log.entry") {
+      const level = String(event.payload.level ?? "info") as DiagnosticLogLevel;
+      const { enableDebug } = useDiagnosticsStore.getState();
+      if (level === "debug" && !enableDebug) return;
+      useDiagnosticsStore.getState().addLog({
+        timestamp: String(event.payload.timestamp ?? ""),
+        level,
+        component: String(event.payload.component ?? ""),
+        message: String(event.payload.message ?? ""),
+        context: (event.payload.context as Record<string, unknown>) ?? {},
+      });
+      return;
+    }
+
     const sessionId =
       typeof event.payload.sessionId === "string" ? event.payload.sessionId : null;
     const runId = typeof event.payload.runId === "string" ? event.payload.runId : "";

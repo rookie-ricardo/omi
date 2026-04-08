@@ -1,13 +1,56 @@
 import { resolve } from "node:path";
 
-import { AppOrchestrator } from "@omi/agent";
+import { AppOrchestrator, type LogEntry, type LogLevel, getLogger, setGlobalLoggerConfig } from "@omi/agent";
 import { createAppDatabase } from "@omi/store";
 import { createId } from "@omi/core";
 import { type RpcRequest, rpcRequestSchema } from "@omi/protocol";
-import { getLogger } from "@omi/agent";
 
 import { normalizeResult } from "./protocol";
 import { collectRunEventDeliveries, handleRunnerRequest } from "./request-handler";
+
+// ---------------------------------------------------------------------------
+// Logger → IPC bridge
+// Install a global handler that forwards log entries to the desktop renderer
+// through the existing emitEvent IPC pipeline. Must run before any getLogger().
+// ---------------------------------------------------------------------------
+
+let runnerEmitEvent: ((event: { type: string; payload: Record<string, unknown> }) => void) | null = null;
+let forwardDebugLogs = false;
+
+const LEVEL_PRIORITY: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+setGlobalLoggerConfig({
+	handler(entry: LogEntry) {
+		// 1. Preserve console output
+		const prefix = `[${entry.timestamp}] [${entry.level.toUpperCase()}] [${entry.component}]`;
+		const contextStr = entry.context ? ` ${JSON.stringify(entry.context)}` : "";
+		switch (entry.level) {
+			case "debug": console.debug(prefix, entry.message, contextStr); break;
+			case "info":  console.info(prefix, entry.message, contextStr);  break;
+			case "warn":  console.warn(prefix, entry.message, contextStr);  break;
+			case "error": console.error(prefix, entry.message, contextStr); break;
+		}
+
+		// 2. Forward to IPC (skip debug unless explicitly enabled)
+		if (!runnerEmitEvent) return;
+		if (LEVEL_PRIORITY[entry.level] < (forwardDebugLogs ? 0 : 1)) return;
+
+		runnerEmitEvent({
+			type: "log.entry",
+			payload: {
+				timestamp: entry.timestamp,
+				level: entry.level,
+				component: entry.component,
+				message: entry.message,
+				context: entry.context ?? {},
+			},
+		});
+	},
+});
+
+export function setForwardDebugLogs(enable: boolean) {
+	forwardDebugLogs = enable;
+}
 
 const logger = getLogger("runner:main");
 
@@ -76,3 +119,6 @@ function emitEvent(event: { type: string; payload: Record<string, unknown> }) {
     event,
   });
 }
+
+// Wire the logger handler to the emit function
+runnerEmitEvent = emitEvent;
