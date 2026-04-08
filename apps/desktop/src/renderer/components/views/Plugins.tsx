@@ -1,11 +1,13 @@
 import React from 'react';
 import { Search, ChevronDown, Plus } from 'lucide-react';
-import ThreadLayout from '../ThreadLayout';
 
 export default function Plugins() {
   return (
-    <ThreadLayout title="Plugins">
-      <div className="p-10">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100">
+      <div className="h-14 flex items-center px-6 border-b border-gray-100 dark:border-white/10 flex-shrink-0">
+        <div className="font-medium text-base">Plugins</div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
         <div className="max-w-4xl mx-auto">
           <h1 className="text-3xl font-semibold text-center mb-8">Make Codex work your way</h1>
           
@@ -53,7 +55,7 @@ export default function Plugins() {
           </div>
         </div>
       </div>
-    </ThreadLayout>
+    </div>
   );
 }
 

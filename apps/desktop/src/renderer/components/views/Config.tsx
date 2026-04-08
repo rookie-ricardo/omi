@@ -1,9 +1,8 @@
 import { ChevronDown, ArrowUpRight, Check } from 'lucide-react';
-import ThreadLayout from '../ThreadLayout';
 
 export default function Config() {
   return (
-    <ThreadLayout title="配置">
+    <div className="flex-1 overflow-y-auto h-full">
       <div className="p-10">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold mb-2">配置</h1>
@@ -105,6 +104,6 @@ export default function Config() {
           </div>
         </div>
       </div>
-    </ThreadLayout>
+    </div>
   );
 }

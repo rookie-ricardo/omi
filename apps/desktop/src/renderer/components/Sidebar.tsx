@@ -2,7 +2,6 @@ import React, { useMemo, useState } from "react";
 import {
   Archive,
   ArrowLeft,
-  ArrowRight,
   Box,
   Clock,
   Cog,
@@ -98,15 +97,16 @@ export default function Sidebar({
 
   if (isSettings) {
     return (
-      <div className="w-[260px] flex-shrink-0 bg-[#f4f4f4] dark:bg-[#252525] flex flex-col h-full border-r border-gray-200/60 dark:border-white/10 transition-colors">
-        <div className="h-14 flex items-center px-4 gap-4 justify-between">
-          <WindowControls />
+      <div className="w-[260px] flex-shrink-0 bg-[#f4f4f4] dark:bg-[#252525] flex flex-col h-full transition-colors">
+        <div className="h-14 flex items-center px-4 gap-2 justify-end" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
+          <div style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
           <button
             onClick={() => setIsDarkMode(!isDarkMode)}
             className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
           >
             {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
           </button>
+          </div>
         </div>
 
         <div className="px-3 py-2">
@@ -151,31 +151,20 @@ export default function Sidebar({
   }
 
   return (
-    <div className="w-[260px] flex-shrink-0 bg-[#f4f4f4] dark:bg-[#252525] flex flex-col h-full border-r border-gray-200/60 dark:border-white/10 transition-colors">
-      <div className="h-14 flex items-center px-4 justify-between">
-        <div className="flex items-center gap-4">
-          <WindowControls />
-          <div className="flex items-center gap-3 text-gray-400 dark:text-gray-500 ml-2">
-            <PanelLeft
-              size={16}
-              className="cursor-pointer hover:text-gray-600 dark:hover:text-gray-300"
-            />
-            <ArrowLeft
-              size={16}
-              className="cursor-pointer hover:text-gray-600 dark:hover:text-gray-300"
-            />
-            <ArrowRight
-              size={16}
-              className="cursor-pointer hover:text-gray-600 dark:hover:text-gray-300"
-            />
-          </div>
-        </div>
+    <div className="w-[260px] flex-shrink-0 bg-[#f4f4f4] dark:bg-[#252525] flex flex-col h-full transition-colors">
+      <div className="h-14 flex items-center px-4 justify-end gap-2" style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
+        <div className="flex items-center gap-2" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+        <PanelLeft
+          size={16}
+          className="cursor-pointer text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+        />
         <button
           onClick={() => setIsDarkMode(!isDarkMode)}
           className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
         >
           {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
         </button>
+        </div>
       </div>
 
       <div className="px-3 py-2 flex flex-col gap-0.5">
@@ -190,12 +179,6 @@ export default function Sidebar({
         />
         <NavItem
           icon={<Box size={16} />}
-          label="技能"
-          active={currentView === "skills"}
-          onClick={() => setCurrentView("skills")}
-        />
-        <NavItem
-          icon={<LayoutGrid size={16} />}
           label="Plugins"
           active={currentView === "plugins"}
           onClick={() => setCurrentView("plugins")}
@@ -279,10 +262,6 @@ export default function Sidebar({
         </div>
       </div>
 
-      <div className="px-3 pt-1 pb-1 text-xs text-gray-500 dark:text-gray-400">
-        {bridgeAvailable ? "实时连接已启用" : "Desktop bridge 未连接"}
-      </div>
-
       <div className="p-3 transition-colors">
         <NavItem
           icon={<Cog size={16} />}
@@ -291,16 +270,6 @@ export default function Sidebar({
           onClick={() => setCurrentView("settings")}
         />
       </div>
-    </div>
-  );
-}
-
-function WindowControls() {
-  return (
-    <div className="flex gap-2">
-      <div className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e]" />
-      <div className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123]" />
-      <div className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29]" />
     </div>
   );
 }

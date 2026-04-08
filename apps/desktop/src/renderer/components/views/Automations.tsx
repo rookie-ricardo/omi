@@ -1,10 +1,12 @@
 import { Plus } from 'lucide-react';
-import ThreadLayout from '../ThreadLayout';
 
 export default function Automations() {
   return (
-    <ThreadLayout title="自动化">
-      <div className="p-12 relative flex-1">
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-[#1e1e1e] text-gray-900 dark:text-gray-100">
+      <div className="h-14 flex items-center px-6 border-b border-gray-100 dark:border-white/10 flex-shrink-0">
+        <div className="font-medium text-base">自动化</div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-12 relative custom-scrollbar">
         <div className="absolute top-6 right-6">
           <button className="flex items-center gap-1 bg-black dark:bg-white text-white dark:text-black px-3 py-1.5 rounded-md text-sm font-medium hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors">
             <Plus size={16} /> 新
@@ -48,7 +50,7 @@ export default function Automations() {
           </div>
         </div>
       </div>
-    </ThreadLayout>
+    </div>
   );
 }
 

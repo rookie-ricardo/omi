@@ -164,7 +164,7 @@ export default function ThreadLayout({
           <div className="flex items-center gap-3 text-base">
             <div className="relative" ref={editorRef}>
               <button
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-[#2a2a2a] cursor-pointer border border-gray-200 dark:border-white/10 shadow-sm bg-white dark:bg-[#252525] transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-[#2a2a2a] cursor-pointer border border-gray-200 dark:border-white/10 shadow-sm bg-white dark:bg-[#252525] transition-colors"
                 title="选择编辑器"
                 onClick={() => {
                   setUiPanelOpen("editorMenuOpen", !uiPanels.editorMenuOpen);
@@ -252,8 +252,8 @@ export default function ThreadLayout({
           {children}
         </div>
 
-        <div className="absolute bottom-12 left-0 right-0 px-8 flex justify-center flex-shrink-0 z-40">
-          <div className="w-full max-w-4xl relative">
+        <div className="absolute bottom-1 left-3 right-3 flex justify-center flex-shrink-0 z-40">
+          <div className="w-3/4 relative">
             {uiPanels.slashMenuOpen ? (
               <div className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-white/10 shadow-lg overflow-hidden flex flex-col max-h-[400px] z-50">
                 <ul className="overflow-y-auto p-2 flex flex-col gap-0.5 custom-scrollbar">
@@ -297,7 +297,7 @@ export default function ThreadLayout({
                 </div>
               ) : null}
 
-              <div className="px-6 py-3.5">
+              <div className="px-6 pt-3.5 pb-1.5">
                 <textarea
                   ref={textareaRef}
                   value={composerInput}
@@ -318,7 +318,7 @@ export default function ThreadLayout({
                 />
               </div>
 
-              <div className="px-4 py-2.5 flex items-center justify-between border-t border-transparent">
+              <div className="px-4 py-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => void openComposerFileDialog()}
@@ -451,27 +451,27 @@ export default function ThreadLayout({
                 )}
               </div>
             </div>
-          </div>
-        </div>
 
-        <div className="absolute bottom-0 left-0 right-0 h-10 flex justify-center px-8 text-sm text-gray-500 dark:text-gray-400 bg-white/80 dark:bg-[#1e1e1e]/80 backdrop-blur-sm z-30">
-          <div className="w-full max-w-4xl flex items-center justify-between border-t border-gray-100 dark:border-white/5">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
-                <Monitor size={14} />
-                <span>本地</span>
-                <ChevronDown size={12} />
+            <div className="flex justify-center text-sm text-gray-500 dark:text-gray-400 py-1.5 mt-2">
+              <div className="w-full flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
+                    <Monitor size={14} />
+                    <span>本地</span>
+                    <ChevronDown size={12} />
+                  </div>
+                  <div className="flex items-center gap-1 text-orange-500 dark:text-orange-400 cursor-pointer hover:text-orange-600 dark:hover:text-orange-300 transition-colors font-medium">
+                    <AlertCircle size={14} />
+                    <span>完全访问权限</span>
+                    <ChevronDown size={12} />
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
+                  <GitBranch size={14} />
+                  <span>{branchLabel}</span>
+                  <ChevronDown size={12} />
+                </div>
               </div>
-              <div className="flex items-center gap-1 text-orange-500 dark:text-orange-400 cursor-pointer hover:text-orange-600 dark:hover:text-orange-300 transition-colors font-medium">
-                <AlertCircle size={14} />
-                <span>完全访问权限</span>
-                <ChevronDown size={12} />
-              </div>
-            </div>
-            <div className="flex items-center gap-1 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
-              <GitBranch size={14} />
-              <span>{branchLabel}</span>
-              <ChevronDown size={12} />
             </div>
           </div>
         </div>

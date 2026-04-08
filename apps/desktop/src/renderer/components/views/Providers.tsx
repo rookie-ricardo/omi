@@ -3,7 +3,6 @@ import { ChevronDown, Edit, Plus, Trash2, X } from "lucide-react";
 
 import type { ProviderConfig } from "@omi/core";
 
-import ThreadLayout from "../ThreadLayout";
 import { formatProviderConfigLabel, useWorkspaceStore } from "../../store/workspace-store";
 
 type ProtocolType = "anthropic-messages" | "openai-chat" | "openai-responses";
@@ -212,7 +211,7 @@ export default function Providers() {
   const availableModels = selectedProvider?.models ?? [];
 
   return (
-    <ThreadLayout title="模型提供商">
+    <div className="flex-1 overflow-y-auto h-full">
       <div className="p-10">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-2xl font-bold mb-2">模型提供商</h1>
@@ -381,7 +380,7 @@ export default function Providers() {
           </div>
         </div>
       </div>
-    </ThreadLayout>
+    </div>
   );
 }
 
