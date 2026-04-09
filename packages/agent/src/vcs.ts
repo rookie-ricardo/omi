@@ -20,19 +20,26 @@ export async function getGitRepoState(workspaceRoot: string) {
       hasRepository: false,
       root: null,
       branch: null,
+      branches: [],
       files: [],
     });
   }
 
-  const [branch, statusOutput] = await Promise.all([
+  const [branch, branchesOutput, statusOutput] = await Promise.all([
     runGit(["rev-parse", "--abbrev-ref", "HEAD"], root).catch(() => "HEAD"),
+    runGit(["branch", "--format=%(refname:short)"], root).catch(() => ""),
     runGit(["status", "--porcelain=v1", "--untracked-files=all"], root),
   ]);
+  const branches = branchesOutput
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
 
   return gitRepoStateSchema.parse({
     hasRepository: true,
     root,
     branch: branch.trim() || "HEAD",
+    branches,
     files: parseStatusLines(statusOutput),
   });
 }

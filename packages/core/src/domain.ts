@@ -95,7 +95,7 @@ export const toolCallSchema = z.object({
   toolName: z.string(),
   approvalState: z.enum(["pending", "approved", "rejected", "not_required"]),
   input: z.record(z.any()),
-  output: z.record(z.any()).nullable(),
+  output: z.unknown().nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -201,6 +201,7 @@ export const gitRepoStateSchema = z.object({
   hasRepository: z.boolean(),
   root: z.string().nullable().default(null),
   branch: z.string().nullable().default(null),
+  branches: z.array(z.string()).default([]),
   files: z.array(gitChangedFileSchema).default([]),
 });
 
