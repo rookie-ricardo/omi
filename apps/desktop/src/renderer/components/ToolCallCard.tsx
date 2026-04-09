@@ -66,6 +66,23 @@ function getEditStats(toolCall: ToolCall): string | null {
   return null;
 }
 
+function formatToolOutput(output: unknown): string {
+  if (typeof output === "string") {
+    return output;
+  }
+  if (typeof output === "number" || typeof output === "boolean") {
+    return String(output);
+  }
+  if (output === null || output === undefined) {
+    return "";
+  }
+  try {
+    return JSON.stringify(output, null, 2);
+  } catch {
+    return String(output);
+  }
+}
+
 export default function ToolCallCard({ toolCall, isActive }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(isActive ?? false);
 
@@ -162,11 +179,13 @@ function BashBody({
 }) {
   const command =
     typeof toolCall.input.command === "string" ? toolCall.input.command : "";
-  const output = toolCall.output
-    ? typeof toolCall.output.stdout === "string"
-      ? toolCall.output.stdout
-      : JSON.stringify(toolCall.output, null, 2)
-    : "";
+  const output =
+    toolCall.output &&
+    typeof toolCall.output === "object" &&
+    !Array.isArray(toolCall.output) &&
+    typeof (toolCall.output as Record<string, unknown>).stdout === "string"
+      ? String((toolCall.output as Record<string, unknown>).stdout)
+      : formatToolOutput(toolCall.output);
 
   return (
     <div className="bg-[#1e1e1e] text-gray-300 text-xs font-mono">
@@ -209,7 +228,7 @@ function GenericBody({
           {JSON.stringify(toolCall.input, null, 2)}
         </pre>
       </div>
-      {toolCall.output || toolCall.error ? (
+      {toolCall.output !== null || toolCall.error ? (
         <div className="px-3 py-2 bg-gray-50 dark:bg-[#1e1e1e]">
           <div className="text-gray-500 dark:text-gray-400 mb-1">
             {toolCall.error ? "错误" : "输出"}
@@ -221,7 +240,7 @@ function GenericBody({
                 : "text-gray-700 dark:text-gray-300"
             }`}
           >
-            {toolCall.error ?? JSON.stringify(toolCall.output, null, 2)}
+            {toolCall.error ?? formatToolOutput(toolCall.output)}
           </pre>
         </div>
       ) : isActive ? (

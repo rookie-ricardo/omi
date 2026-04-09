@@ -807,7 +807,7 @@ export const eventSchemas = {
     runId: z.string(),
     toolCallId: z.string(),
     toolName: z.string(),
-    output: z.record(z.unknown()),
+    output: z.unknown(),
   }),
   "run.blocked": z.object({ runId: z.string(), toolCallId: z.string(), reason: z.string() }),
   "run.review_required": z.object({
