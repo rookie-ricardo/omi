@@ -672,11 +672,12 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     input: Omit<ProviderConfig, "id" | "createdAt" | "updatedAt"> & { id?: string },
   ): ProviderConfig {
     const now = nowIso();
+    const { id: inputId, ...rest } = input;
     const config = providerConfigSchema.parse({
-      id: input.id ?? createId("provider"),
+      ...rest,
+      id: inputId ?? createId("provider"),
       createdAt: now,
       updatedAt: now,
-      ...input,
     });
     const existing = db
       .select()

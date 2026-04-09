@@ -274,6 +274,7 @@ export class AppOrchestrator {
   saveProviderConfig(input: {
     id?: string;
     type: string;
+    protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
     baseUrl: string;
     model: string;
     apiKey: string;
@@ -283,6 +284,7 @@ export class AppOrchestrator {
       id: input.id,
       name: defaults.name,
       type: input.type,
+      protocol: input.protocol,
       baseUrl: input.baseUrl,
       model: input.model,
       apiKey: input.apiKey,

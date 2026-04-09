@@ -479,6 +479,7 @@ export class Agent {
 		return this.database.upsertProviderConfig({
 			name: "default",
 			type: "anthropic",
+			protocol: "anthropic-messages",
 			baseUrl: this.options.baseURL ?? "https://api.anthropic.com",
 			model: this.options.model ?? "claude-sonnet-4-6",
 			apiKey: this.options.apiKey ?? "",

@@ -4,6 +4,8 @@ import {
   approvalDecisionSchema,
   compactionSummaryDocumentSchema,
   providerConfigSchema,
+  providerProtocolSchema,
+  runCheckpointPhaseSchema,
   runSchema,
   sessionSchema,
   sessionHistoryEntrySchema,
@@ -142,7 +144,7 @@ export const sessionModelSwitchParamsSchema = z.object({
 export const providerConfigSaveParamsSchema = z.object({
   id: z.string().optional(),
   type: z.string().min(1),
-  protocol: z.enum(["anthropic-messages", "openai-chat", "openai-responses"]).optional(),
+  protocol: providerProtocolSchema,
   baseUrl: z.string().default(""),
   model: z.string().min(1),
   apiKey: z.string().min(1),
@@ -632,7 +634,8 @@ export const runStateSchema = z.object({
   checkpoints: z.array(z.object({
     id: z.string(),
     createdAt: z.string(),
-    summary: z.string(),
+    phase: runCheckpointPhaseSchema,
+    payload: z.record(z.unknown()),
   })).default([]),
 });
 
