@@ -33,6 +33,52 @@ import {
 } from "../src/index";
 
 describe("agent session", () => {
+  it("persists user prompt when run fails before execution starts", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Pre-exec failure");
+    const runtime = new SessionManager().getOrCreate(session.id);
+    const events: RunnerEventEnvelope[] = [];
+    const provider = {
+      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
+        return {
+          assistantText: "unexpected",
+          assistantMessage: null,
+          stopReason: "end_turn" as const,
+          toolCalls: [],
+          usage: { inputTokens: 0, outputTokens: 0 },
+          error: null,
+        };
+      },
+      cancel() {},
+    };
+
+    const agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: (event) => events.push(event),
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+    });
+
+    const run = agentSession.startRun({
+      prompt: "hello pre-exec failure",
+      providerConfig: makeProviderConfig(),
+      taskId: null,
+    });
+
+    await waitFor(() => database.getRun(run.id)?.status === "failed");
+
+    const messages = database.listMessages(session.id);
+    expect(messages.map((message) => message.role)).toEqual(["user"]);
+    expect(messages[0]?.content).toBe("hello pre-exec failure");
+
+    const failedEvent = events.find((event) => event.type === "run.failed");
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.payload.runId).toBe(run.id);
+  });
+
   it("runs a prompt independent of orchestrator and persists lifecycle state", async () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Session");

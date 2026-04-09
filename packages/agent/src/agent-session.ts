@@ -94,6 +94,11 @@ interface ExecuteRunInput {
   checkpointDetails: unknown | null;
 }
 
+type FailedRunInput = Pick<
+  ExecuteRunInput,
+  "session" | "task" | "run" | "prompt" | "historyEntryId"
+>;
+
 export class AgentSession {
   private readonly provider: ProviderAdapter;
   private processingQueue = false;
@@ -421,7 +426,22 @@ export class AgentSession {
 
         const session = this.requireSession();
         const task = run.taskId ? this.options.database.getTask(run.taskId) : null;
-        const providerConfig = this.resolveQueuedProviderConfig(queuedRun.providerConfigId);
+        let providerConfig: ProviderConfig;
+        try {
+          providerConfig = this.resolveQueuedProviderConfig(queuedRun.providerConfigId);
+        } catch (error) {
+          await this.handleFailedRun(
+            {
+              session,
+              task,
+              run,
+              prompt: queuedRun.prompt,
+              historyEntryId: queuedRun.historyEntryId ?? null,
+            },
+            error,
+          );
+          continue;
+        }
         await this.executeRun({
           session,
           task,
@@ -525,7 +545,7 @@ export class AgentSession {
     }
   }
 
-  private async handleFailedRun(input: ExecuteRunInput, error: unknown): Promise<void> {
+  private async handleFailedRun(input: FailedRunInput, error: unknown): Promise<void> {
     const runId = input.run.id;
     const sessionId = input.session.id;
 
