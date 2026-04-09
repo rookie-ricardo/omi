@@ -8,8 +8,16 @@
 
 import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
+import type { TObject, TOptional, TString, TArray, Static } from "@sinclair/typebox";
 
-export const exitPlanSchema = Type.Object({
+type AllowedPromptSchema = TObject<{ tool: TString; prompt: TString }>;
+type ExitPlanSchema = TObject<{
+  plan: TString;
+  plan_file_path: TOptional<TString>;
+  allowed_prompts: TOptional<TArray<AllowedPromptSchema>>;
+}>;
+
+export const exitPlanSchema: ExitPlanSchema = Type.Object({
 	plan: Type.String({
 		description: "The plan to submit for user approval. Describe the changes to be made and the steps to implement.",
 	}),

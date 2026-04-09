@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { delimiter } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { getAgentDir, getBinDir } from "@omi/core";
@@ -56,8 +57,8 @@ export function getShellConfig(): { shell: string; args: string[] } {
   // Use dynamic import to avoid circular dependency
   let customShellPath: string | undefined;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const settingsModule = require("@omi/settings");
+    const esmRequire = createRequire(import.meta.url);
+    const settingsModule = esmRequire("@omi/settings");
     if (settingsModule.SettingsManager) {
       const settings = settingsModule.SettingsManager.inMemory();
       customShellPath = settings.getShellPath?.();

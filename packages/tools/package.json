@@ -20,6 +20,7 @@
   "dependencies": {
     "@mariozechner/pi-ai": "^0.58.4",
     "@omi/core": "workspace:*",
+    "@sinclair/typebox": "^0.34.33",
     "@silvia-odwyer/photon-node": "^0.3.4",
     "diff": "^8.0.3",
     "extract-zip": "^2.0.1",

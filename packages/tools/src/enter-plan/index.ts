@@ -7,8 +7,11 @@
 
 import type { OmiTool } from "@omi/core";
 import { Type } from "@mariozechner/pi-ai";
+import type { TObject, TOptional, TString, Static } from "@sinclair/typebox";
 
-export const enterPlanSchema = Type.Object({
+type EnterPlanSchema = TObject<{ reason: TOptional<TString> }>;
+
+export const enterPlanSchema: EnterPlanSchema = Type.Object({
 	reason: Type.Optional(
 		Type.String({
 			description: "Reason for entering plan mode (optional, shown to user)",
