@@ -103,6 +103,7 @@ export class PiAiModelClient implements ModelClient {
         },
         {
           signal: abortController.signal,
+          apiKey: providerConfig.apiKey,
           reasoning: (thinkingLevel && thinkingLevel !== "off") ? (thinkingLevel as any) : undefined,
         }
       );
