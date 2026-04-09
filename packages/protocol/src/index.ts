@@ -143,6 +143,7 @@ export const sessionModelSwitchParamsSchema = z.object({
 
 export const providerConfigSaveParamsSchema = z.object({
   id: z.string().optional(),
+  name: z.string().optional(),
   type: z.string().min(1),
   protocol: providerProtocolSchema,
   baseUrl: z.string().default(""),

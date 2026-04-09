@@ -10,6 +10,9 @@ interface NewThreadProps {
 
 export default function NewThread({ onRunStarted }: NewThreadProps) {
   const applyStarterPrompt = useWorkspaceStore((state) => state.applyStarterPrompt);
+  const activeFolderId = useWorkspaceStore((state) => state.activeFolderId);
+  const folders = useWorkspaceStore((state) => state.folders);
+  const activeFolder = folders.find((f) => f.id === activeFolderId);
 
   return (
     <ThreadLayout title="新线程" onSendSuccess={onRunStarted}>
@@ -48,7 +51,7 @@ export default function NewThread({ onRunStarted }: NewThreadProps) {
           </div>
           <h1 className="text-3xl font-semibold text-center mb-2">开始构建</h1>
           <div className="flex items-center justify-center gap-1 text-gray-500 dark:text-gray-400 text-xl cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <span>erduo-skills</span>
+            <span>{activeFolder?.name ?? "未选择文件夹"}</span>
             <ChevronDown size={20} />
           </div>
         </div>

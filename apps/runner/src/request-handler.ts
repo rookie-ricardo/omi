@@ -260,6 +260,7 @@ async function executeCommand(
     case "provider.config.save":
       return orchestrator.saveProviderConfig({
         id: params.id ? String(params.id) : undefined,
+        name: params.name ? String(params.name) : undefined,
         type: String(params.type),
         protocol: String(params.protocol) as "anthropic-messages" | "openai-chat" | "openai-responses",
         baseUrl: String(params.baseUrl ?? ""),

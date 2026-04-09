@@ -7,129 +7,26 @@ import { formatProviderConfigLabel, useWorkspaceStore } from "../../store/worksp
 
 type ProtocolType = "anthropic-messages" | "openai-chat" | "openai-responses";
 
-interface ProviderOption {
-  type: string;
-  label: string;
-  baseUrl: string;
-  defaultProtocol: ProtocolType;
-  models: string[];
-}
-
-const PROVIDERS: ProviderOption[] = [
-  {
-    type: "anthropic",
-    label: "Anthropic",
-    baseUrl: "https://api.anthropic.com",
-    defaultProtocol: "anthropic-messages",
-    models: [
-      "claude-opus-4-20250514",
-      "claude-sonnet-4-20250514",
-      "claude-sonnet-4-5-20250514",
-      "claude-haiku-4-5-20250301",
-    ],
-  },
-  {
-    type: "openai",
-    label: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    defaultProtocol: "openai-chat",
-    models: ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
-  },
-  {
-    type: "openrouter",
-    label: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
-    defaultProtocol: "openai-chat",
-    models: [
-      "anthropic/claude-sonnet-4",
-      "openai/gpt-4.1",
-      "google/gemini-2.5-pro",
-      "deepseek/deepseek-chat-v3-0324",
-    ],
-  },
-  {
-    type: "google",
-    label: "Google (Gemini)",
-    baseUrl: "https://generativelanguage.googleapis.com",
-    defaultProtocol: "openai-chat",
-    models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
-  },
-  {
-    type: "bedrock",
-    label: "Amazon Bedrock",
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    defaultProtocol: "anthropic-messages",
-    models: [
-      "anthropic.claude-sonnet-4-20250514-v1:0",
-      "anthropic.claude-haiku-4-5-20250301-v1:0",
-    ],
-  },
-  {
-    type: "azure",
-    label: "Azure OpenAI",
-    baseUrl: "https://{resource}.openai.azure.com",
-    defaultProtocol: "openai-chat",
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1"],
-  },
-  {
-    type: "mistral",
-    label: "Mistral AI",
-    baseUrl: "https://api.mistral.ai",
-    defaultProtocol: "openai-chat",
-    models: ["mistral-large-latest", "mistral-medium-latest", "codestral-latest"],
-  },
-  {
-    type: "xai",
-    label: "xAI (Grok)",
-    baseUrl: "https://api.x.ai",
-    defaultProtocol: "openai-chat",
-    models: ["grok-3", "grok-3-mini"],
-  },
-  {
-    type: "groq",
-    label: "Groq",
-    baseUrl: "https://api.groq.com/openai/v1",
-    defaultProtocol: "openai-chat",
-    models: ["llama-3.3-70b-versatile", "llama-4-maverick-17b-128e"],
-  },
-  {
-    type: "cerebras",
-    label: "Cerebras",
-    baseUrl: "https://api.cerebras.ai/v1",
-    defaultProtocol: "openai-chat",
-    models: ["llama-3.3-70b", "llama-4-scout-17b-16e"],
-  },
-  {
-    type: "deepseek",
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com",
-    defaultProtocol: "openai-chat",
-    models: ["deepseek-chat", "deepseek-reasoner"],
-  },
-  {
-    type: "openai-compatible",
-    label: "OpenAI Compatible",
-    baseUrl: "",
-    defaultProtocol: "openai-chat",
-    models: [],
-  },
-  {
-    type: "anthropic-compatible",
-    label: "Anthropic Compatible",
-    baseUrl: "",
-    defaultProtocol: "anthropic-messages",
-    models: [],
-  },
-];
-
 const PROTOCOLS: { value: ProtocolType; label: string }[] = [
-  { value: "anthropic-messages", label: "Anthropic Messages API" },
-  { value: "openai-chat", label: "OpenAI Chat Completions API" },
-  { value: "openai-responses", label: "OpenAI Responses API" },
+  { value: "openai-chat", label: "OpenAI Chat" },
+  { value: "openai-responses", label: "OpenAI Responses" },
+  { value: "anthropic-messages", label: "Anthropic Messages" },
 ];
+
+const PROVIDER_TYPES = [
+  { value: "friday", label: "Friday" },
+  { value: "custom", label: "自定义" },
+];
+
+const FRIDAY_BASE_URL_MAP: Record<ProtocolType, string> = {
+  "openai-chat": "https://oneai.17usoft.com/v1/chat/completions",
+  "openai-responses": "https://oneai.17usoft.com/v1/responses",
+  "anthropic-messages": "https://oneai.17usoft.com/anthropic",
+};
 
 interface FormState {
   id?: string;
+  name: string;
   type: string;
   protocol: ProtocolType;
   baseUrl: string;
@@ -138,12 +35,13 @@ interface FormState {
 }
 
 function emptyForm(): FormState {
-  const first = PROVIDERS[0];
+  const protocol = PROTOCOLS[0].value;
   return {
-    type: first.type,
-    protocol: first.defaultProtocol,
-    baseUrl: first.baseUrl,
-    model: first.models[0] ?? "",
+    type: "friday",
+    name: "",
+    protocol,
+    baseUrl: FRIDAY_BASE_URL_MAP[protocol],
+    model: "",
     apiKey: "",
   };
 }
@@ -167,6 +65,7 @@ export default function Providers() {
   function openEditForm(config: ProviderConfig) {
     setForm({
       id: config.id,
+      name: config.name,
       type: config.type,
       protocol: (config.protocol as ProtocolType) ?? "openai-chat",
       baseUrl: config.baseUrl,
@@ -176,15 +75,22 @@ export default function Providers() {
     setShowForm(true);
   }
 
-  function handleProviderChange(type: string) {
-    const provider = PROVIDERS.find((p) => p.type === type);
-    if (!provider) return;
+  function handleProviderTypeChange(type: string) {
+    setForm((prev) => {
+      const protocol = type === "friday" ? prev.protocol : prev.protocol;
+      return {
+        ...prev,
+        type,
+        baseUrl: type === "friday" ? FRIDAY_BASE_URL_MAP[protocol] : "",
+      };
+    });
+  }
+
+  function handleProtocolChange(protocol: ProtocolType) {
     setForm((prev) => ({
       ...prev,
-      type,
-      protocol: provider.defaultProtocol,
-      baseUrl: provider.baseUrl,
-      model: provider.models[0] ?? prev.model,
+      protocol,
+      baseUrl: prev.type === "friday" ? FRIDAY_BASE_URL_MAP[protocol] : prev.baseUrl,
     }));
   }
 
@@ -193,6 +99,7 @@ export default function Providers() {
     setSaving(true);
     await saveProviderConfig({
       id: form.id,
+      name: form.type === "custom" ? form.name : undefined,
       type: form.type,
       protocol: form.protocol,
       baseUrl: form.baseUrl,
@@ -207,8 +114,7 @@ export default function Providers() {
     await deleteProviderConfig(id);
   }
 
-  const selectedProvider = PROVIDERS.find((p) => p.type === form.type);
-  const availableModels = selectedProvider?.models ?? [];
+  const isFriday = form.type === "friday";
 
   return (
     <div className="flex-1 overflow-y-auto h-full">
@@ -220,7 +126,6 @@ export default function Providers() {
           </p>
 
           <div className="space-y-8">
-            {/* Add button */}
             <button
               onClick={openAddForm}
               className="flex items-center gap-2 px-4 py-2 bg-black dark:bg-white text-white dark:text-black rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
@@ -229,7 +134,6 @@ export default function Providers() {
               添加提供商
             </button>
 
-            {/* Form */}
             {showForm ? (
               <div className="bg-white dark:bg-[#252525] border border-gray-200 dark:border-white/10 rounded-xl overflow-hidden shadow-sm transition-colors">
                 <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-white/10">
@@ -245,44 +149,34 @@ export default function Providers() {
                 </div>
 
                 <div className="p-4 space-y-4">
-                  {/* Provider type */}
                   <FormField label="提供商">
                     <FormSelect
                       value={form.type}
-                      onChange={handleProviderChange}
-                      options={PROVIDERS.map((p) => ({ value: p.type, label: p.label }))}
+                      onChange={handleProviderTypeChange}
+                      options={PROVIDER_TYPES}
                     />
                   </FormField>
 
-                  {/* Model */}
-                  <FormField label="模型">
-                    {availableModels.length > 0 ? (
-                      <FormSelect
-                        value={form.model}
-                        onChange={(v) => setForm((prev) => ({ ...prev, model: v }))}
-                        options={availableModels.map((m) => ({ value: m, label: m }))}
-                      />
-                    ) : (
+                  {form.type === "custom" ? (
+                    <FormField label="名称">
                       <input
                         type="text"
-                        value={form.model}
-                        onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
-                        placeholder="输入模型 ID"
+                        value={form.name}
+                        onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                        placeholder="输入提供商名称"
                         className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
                       />
-                    )}
-                  </FormField>
+                    </FormField>
+                  ) : null}
 
-                  {/* Protocol */}
                   <FormField label="协议">
                     <FormSelect
                       value={form.protocol}
-                      onChange={(v) => setForm((prev) => ({ ...prev, protocol: v as ProtocolType }))}
-                      options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label }))}
+                      onChange={(v) => handleProtocolChange(v as ProtocolType)}
+                      options={PROTOCOLS}
                     />
                   </FormField>
 
-                  {/* Base URL */}
                   <FormField label="Base URL">
                     <input
                       type="text"
@@ -293,7 +187,16 @@ export default function Providers() {
                     />
                   </FormField>
 
-                  {/* API Key */}
+                  <FormField label="模型">
+                    <input
+                      type="text"
+                      value={form.model}
+                      onChange={(e) => setForm((prev) => ({ ...prev, model: e.target.value }))}
+                      placeholder="输入模型 ID，如 claude-sonnet-4-20250514"
+                      className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+                    />
+                  </FormField>
+
                   <FormField label="API Key">
                     <input
                       type="password"
@@ -304,7 +207,6 @@ export default function Providers() {
                     />
                   </FormField>
 
-                  {/* Save button */}
                   <div className="flex justify-end gap-2 pt-2">
                     <button
                       onClick={() => setShowForm(false)}
@@ -314,7 +216,7 @@ export default function Providers() {
                     </button>
                     <button
                       onClick={() => void handleSave()}
-                      disabled={saving || !form.model || (!form.id && !form.apiKey)}
+                      disabled={saving || !form.model || (form.type === "custom" && !form.name) || (!form.id && !form.apiKey)}
                       className="px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {saving ? "保存中..." : "保存"}
@@ -324,7 +226,6 @@ export default function Providers() {
               </div>
             ) : null}
 
-            {/* Provider list */}
             {providerConfigs.length > 0 ? (
               <div>
                 <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
@@ -345,9 +246,7 @@ export default function Providers() {
                           {formatProviderConfigLabel(config)}
                         </div>
                         <div className="text-xs text-gray-500 dark:text-gray-400">
-                          {config.type}
-                          {config.protocol ? ` · ${config.protocol}` : ""}
-                          {config.baseUrl ? ` · ${config.baseUrl}` : ""}
+                          {config.protocol}{config.baseUrl ? ` · ${config.baseUrl}` : ""}
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">

@@ -6,6 +6,12 @@ export interface ProviderDefaults {
 
 export function getProviderDefaults(providerType: string): ProviderDefaults {
   switch (providerType) {
+    case "friday":
+      return {
+        name: "Friday",
+        baseUrl: "https://oneai.17usoft.com/v1/chat/completions",
+        model: "claude-sonnet-4-20250514",
+      };
     case "anthropic":
       return {
         name: "Anthropic",

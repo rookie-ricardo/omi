@@ -111,6 +111,7 @@ interface WorkspaceStoreActions {
   switchModel: (providerConfigId: string) => Promise<void>;
   saveProviderConfig: (params: {
     id?: string;
+    name?: string;
     type: string;
     protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
     baseUrl?: string;
@@ -789,6 +790,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const protocol = assertProviderProtocol(params.protocol);
     await invokeRunner("provider.config.save", {
       id: params.id,
+      name: params.name,
       type: params.type,
       protocol,
       baseUrl: params.baseUrl ?? "",

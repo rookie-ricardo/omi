@@ -273,6 +273,7 @@ export class AppOrchestrator {
 
   saveProviderConfig(input: {
     id?: string;
+    name?: string;
     type: string;
     protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
     baseUrl: string;
@@ -282,7 +283,7 @@ export class AppOrchestrator {
     const defaults = getProviderDefaults(input.type);
     return this.database.upsertProviderConfig({
       id: input.id,
-      name: defaults.name,
+      name: input.name ?? defaults.name,
       type: input.type,
       protocol: input.protocol,
       baseUrl: input.baseUrl,
