@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, MoreHorizontal, Terminal, Undo } from "lucide-react";
+import { AlertCircle, Check, Copy, MoreHorizontal, Terminal, Undo, User } from "lucide-react";
 
 import type { GitChangedFile, GitDiffPreview, SessionMessage, ToolCall } from "@omi/core";
 
 import ThreadLayout from "../ThreadLayout";
 import MarkdownRenderer from "../MarkdownRenderer";
-import ToolCallCard from "../ToolCallCard";
+import ToolActivityGroup from "../chat/ToolActivityGroup";
 import {
   deriveThreadTitle,
   useWorkspaceStore,
@@ -60,31 +60,52 @@ export default function Chat() {
     : [];
   const activeToolIds = new Set(activeTools.map((t) => t.toolCallId));
 
-  const timelineItems = useMemo(() => {
-    const items: Array<
+  // 将工具调用按时间分组 - 连续的工具调用聚合在一起
+  const toolGroups = useMemo(() => {
+    const groups: Array<
       | { kind: "message"; message: SessionMessage }
-      | { kind: "toolCall"; toolCall: ToolCall }
+      | { kind: "toolGroup"; toolCalls: ToolCall[] }
     > = [];
+
     const messagesByTime = [...messages].sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     );
     const toolsByTime = [...toolCalls].sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
     );
+
     let mi = 0;
     let ti = 0;
+    let currentToolGroup: ToolCall[] = [];
+
     while (mi < messagesByTime.length || ti < toolsByTime.length) {
       const msg = messagesByTime[mi];
       const tool = toolsByTime[ti];
-      if (msg && (!tool || new Date(msg.createdAt).getTime() <= new Date(tool.createdAt).getTime())) {
-        items.push({ kind: "message", message: msg });
+
+      const msgTime = msg ? new Date(msg.createdAt).getTime() : Infinity;
+      const toolTime = tool ? new Date(tool.createdAt).getTime() : Infinity;
+
+      if (msgTime <= toolTime) {
+        // 先处理未完成的工具组
+        if (currentToolGroup.length > 0) {
+          groups.push({ kind: "toolGroup", toolCalls: currentToolGroup });
+          currentToolGroup = [];
+        }
+        groups.push({ kind: "message", message: msg });
         mi++;
-      } else if (tool) {
-        items.push({ kind: "toolCall", toolCall: tool });
+      } else {
+        // 工具调用 - 加入当前组
+        currentToolGroup.push(tool);
         ti++;
       }
     }
-    return items;
+
+    // 处理最后的工具组
+    if (currentToolGroup.length > 0) {
+      groups.push({ kind: "toolGroup", toolCalls: currentToolGroup });
+    }
+
+    return groups;
   }, [messages, toolCalls]);
 
   const title = selectedSession
@@ -101,7 +122,7 @@ export default function Chat() {
     if (isStreaming || streamingContent) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [streamingContent, isStreaming, timelineItems.length]);
+  }, [streamingContent, isStreaming, toolGroups.length]);
 
   const rightPanel = (
     <GitPanel
@@ -123,14 +144,18 @@ export default function Chat() {
             <EmptyState label="当前线程还没有消息，输入提示后会在这里实时显示。" />
           ) : (
             <>
-              {timelineItems.map((item) =>
+              {toolGroups.map((item, index) =>
                 item.kind === "message" ? (
-                  <MessageBubble key={item.message.id} message={item.message} />
+                  <MessageBlock
+                    key={item.message.id}
+                    message={item.message}
+                    isLast={index === toolGroups.length - 1}
+                  />
                 ) : (
-                  <ToolCallCard
-                    key={item.toolCall.id}
-                    toolCall={item.toolCall}
-                    isActive={activeToolIds.has(item.toolCall.id)}
+                  <ToolActivityGroup
+                    key={item.toolCalls[0]?.id || `empty-${index}`}
+                    toolCalls={item.toolCalls}
+                    activeToolIds={activeToolIds}
                   />
                 ),
               )}
@@ -138,16 +163,11 @@ export default function Chat() {
               {isStreaming && !streamingContent ? <ThinkingIndicator /> : null}
 
               {streamingContent ? (
-                <div className="flex justify-start">
-                  <div className="max-w-[88%] rounded-[24px] border border-gray-200/90 dark:border-white/10 bg-white/95 dark:bg-[#252525] px-5 py-3 text-[15px] leading-relaxed text-gray-800 dark:text-gray-200 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-                    <MarkdownRenderer content={streamingContent} />
-                    <span className="inline-block ml-1 w-2 h-4 align-middle bg-gray-400 dark:bg-gray-500 animate-pulse" />
-                  </div>
-                </div>
+                <StreamingBlock content={streamingContent} />
               ) : null}
 
               {errorMessage && !isStreaming ? (
-                <AssistantErrorBubble message={errorMessage} />
+                <AssistantErrorBlock message={errorMessage} />
               ) : null}
             </>
           )}
@@ -167,54 +187,11 @@ export default function Chat() {
   );
 }
 
-function ThinkingIndicator() {
-  return (
-    <div className="flex justify-start">
-      <div className="relative overflow-hidden rounded-[20px] border border-gray-200/90 dark:border-white/10 bg-white/95 dark:bg-[#252525] px-4 py-2.5 text-sm font-medium text-gray-500 dark:text-gray-300 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-        <span className="relative z-10">Thinking</span>
-        <span className="pointer-events-none absolute inset-0 thinking-shimmer" />
-      </div>
-    </div>
-  );
-}
-
-function AssistantErrorBubble({ message }: { message: string }) {
-  return (
-    <div className="flex justify-start">
-      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-400/20 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] text-[15px] leading-relaxed text-red-700 dark:text-red-300">
-        <div className="flex items-center gap-2">
-          <AlertCircle size={16} className="text-red-500 dark:text-red-400 flex-shrink-0" />
-          <span>运行失败</span>
-        </div>
-        <div className="mt-1 whitespace-pre-wrap break-words">{message}</div>
-      </div>
-    </div>
-  );
-}
-
-function EmptyState({ label }: { label: string }) {
-  return (
-    <div className="rounded-2xl border border-dashed border-gray-300 dark:border-white/10 px-5 py-4 text-sm text-gray-500 dark:text-gray-400">
-      {label}
-    </div>
-  );
-}
-
-function MessageBubble({ message }: { message: SessionMessage }) {
+function MessageBlock({ message, isLast }: { message: SessionMessage; isLast?: boolean }) {
   const [copied, setCopied] = useState(false);
   const sendPromptText = useWorkspaceStore((state) => state.sendPromptText);
   const gitState = useWorkspaceStore((state) => state.gitState);
   const canUndo = (gitState?.files.length ?? 0) > 0;
-
-  if (message.role === "user") {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-[26px] bg-gray-100 dark:bg-[#2a2a2a] px-5 py-2.5 text-[15px] text-gray-800 dark:text-gray-200 whitespace-pre-wrap shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
-          {message.content}
-        </div>
-      </div>
-    );
-  }
 
   function handleCopy() {
     void navigator.clipboard.writeText(message.content);
@@ -226,33 +203,115 @@ function MessageBubble({ message }: { message: SessionMessage }) {
     void sendPromptText("撤销上一条回复中的所有文件改动，恢复到改动之前的状态");
   }
 
+  if (message.role === "user") {
+    const timeStr = new Date(message.createdAt).toLocaleString("zh-CN", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    return (
+      <div className="group flex justify-end">
+        <div className="flex flex-col items-end gap-1">
+          <div className="max-w-[90%] rounded-2xl bg-gray-100 dark:bg-[#2a2a2a] px-4 py-2.5 text-[15px] text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">
+            {message.content}
+          </div>
+          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <span className="text-xs text-gray-400 dark:text-gray-500">{timeStr}</span>
+            <button
+              onClick={handleCopy}
+              className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              title={copied ? "已复制" : "复制"}
+            >
+              {copied ? <Check size={12} /> : <Copy size={12} />}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // AI 消息 - 纯文本流式展示，无任何装饰
   return (
-    <div className="group flex flex-col items-start gap-2">
-      <div className="max-w-[88%] rounded-[24px] border border-gray-200/90 dark:border-white/10 bg-white/95 dark:bg-[#252525] px-5 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+    <div className="group">
+      <div className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed">
         <MarkdownRenderer
           content={message.content}
-          className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed"
+          className="prose dark:prose-invert prose-sm max-w-none [&>*:first-child]:mt-0"
         />
       </div>
-      <div className="flex items-center gap-2 pl-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-        {canUndo ? (
-          <button
-            onClick={handleUndo}
-            className="px-2.5 py-1 text-xs bg-gray-100/85 dark:bg-[#2a2a2a]/85 hover:bg-gray-200 dark:hover:bg-[#333333] rounded-md text-gray-600 dark:text-gray-300 flex items-center gap-1 transition-colors"
-          >
-            <Undo size={12} /> 撤销
-          </button>
-        ) : null}
+      <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={handleCopy}
-          className="px-2.5 py-1 text-xs bg-gray-100/85 dark:bg-[#2a2a2a]/85 hover:bg-gray-200 dark:hover:bg-[#333333] rounded-md text-gray-600 dark:text-gray-300 transition-colors"
+          className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          title={copied ? "已复制" : "复制"}
         >
-          {copied ? (
-            <><Check size={12} className="inline mr-1" />已复制</>
-          ) : (
-            <><Copy size={12} className="inline mr-1" />复制</>
-          )}
+          {copied ? <Check size={12} /> : <Copy size={12} />}
         </button>
+        {canUndo && isLast && (
+          <button
+            onClick={handleUndo}
+            className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            title="撤销"
+          >
+            <Undo size={12} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StreamingBlock({ content }: { content: string }) {
+  return (
+    <div>
+      <div className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed">
+        <MarkdownRenderer
+          content={content}
+          className="prose dark:prose-invert prose-sm max-w-none [&>*:first-child]:mt-0"
+        />
+      </div>
+      <span className="inline-block ml-1 w-1.5 h-4 bg-gray-400 animate-pulse align-middle" />
+    </div>
+  );
+}
+
+function ThinkingIndicator() {
+  return (
+    <div className="text-sm text-gray-500 dark:text-gray-400">
+      <span className="inline-flex items-center gap-1">
+        <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
+        <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
+        <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
+      </span>
+    </div>
+  );
+}
+
+function AssistantErrorBlock({ message }: { message: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <AlertCircle size={14} className="text-white" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-medium text-red-600 dark:text-red-400">Error</span>
+        </div>
+        <div className="text-[15px] text-red-700 dark:text-red-300 leading-relaxed">
+          {message}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="text-center py-12">
+      <div className="text-sm text-gray-400 dark:text-gray-500">
+        {label}
       </div>
     </div>
   );
