@@ -19,20 +19,18 @@ import type {
   ToolListResult,
   ToolPendingListResult,
 } from "@omi/protocol";
+import type { DesktopUiState } from "../../shared/desktop-settings";
 
 import { getRunnerGateway, type RunnerEventEnvelope } from "../lib/runner-gateway";
 
-const FOLDER_STORAGE_KEY = "omi.desktop.folders.v1";
-const ASSIGNMENT_STORAGE_KEY = "omi.desktop.folder-assignments.v1";
-const OPEN_FOLDER_STORAGE_KEY = "omi.desktop.open-folders.v1";
-const REASONING_STORAGE_KEY = "omi.desktop.reasoning.v1";
-const RENAMED_SESSION_STORAGE_KEY = "omi.desktop.renamed-sessions.v1";
-
 const DEFAULT_REASONING_LEVEL: ReasoningLevel = "高";
+const PROVIDER_PROTOCOL_VALUES = ["anthropic-messages", "openai-chat", "openai-responses"] as const;
 
 let runnerUnsubscribe: (() => void) | null = null;
+let desktopUiPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
 export type ReasoningLevel = "低" | "中" | "高" | "超高";
+type ProviderProtocol = (typeof PROVIDER_PROTOCOL_VALUES)[number];
 
 export interface WorkspaceFolder {
   id: string;
@@ -114,7 +112,7 @@ interface WorkspaceStoreActions {
   saveProviderConfig: (params: {
     id?: string;
     type: string;
-    protocol?: string;
+    protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
     baseUrl?: string;
     model: string;
     apiKey: string;
@@ -196,28 +194,6 @@ function createInitialData(): WorkspaceStoreData {
   };
 }
 
-function parseStoredJson<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-  const rawValue = window.localStorage.getItem(key);
-  if (!rawValue) {
-    return fallback;
-  }
-  try {
-    return JSON.parse(rawValue) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function persistJson<T>(key: string, value: T): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.setItem(key, JSON.stringify(value));
-}
-
 function buildFolderName(path: string): string {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
   const segments = normalized.split("/").filter(Boolean);
@@ -232,6 +208,30 @@ function generateFolderId(path: string): string {
 function deriveSessionTitleFromPrompt(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
   return normalized.slice(0, 28) || "新线程";
+}
+
+function assertProviderProtocol(protocol: unknown): ProviderProtocol {
+  if (typeof protocol === "string" && PROVIDER_PROTOCOL_VALUES.includes(protocol as ProviderProtocol)) {
+    return protocol as ProviderProtocol;
+  }
+  throw new Error(
+    `provider.config.save requires protocol in ${PROVIDER_PROTOCOL_VALUES.join(" | ")}, received ${String(protocol)}`,
+  );
+}
+
+function pushDiagnosticsLog(input: {
+  level: DiagnosticLogLevel;
+  component: string;
+  message: string;
+  context?: Record<string, unknown>;
+}): void {
+  useDiagnosticsStore.getState().addLog({
+    timestamp: new Date().toISOString(),
+    level: input.level,
+    component: input.component,
+    message: input.message,
+    context: input.context ?? {},
+  });
 }
 
 function requireGateway() {
@@ -253,6 +253,60 @@ async function invokeRunner<TResult, TName extends RunnerCommandName>(
 function firstUserMessage(messages: SessionMessage[]): string | null {
   const userMessage = messages.find((message) => message.role === "user");
   return userMessage?.content ?? null;
+}
+
+function openFolderIdListToMap(openFolderIds: string[]): Record<string, boolean> {
+  return Object.fromEntries(openFolderIds.map((folderId) => [folderId, true]));
+}
+
+function openFolderMapToList(openFolderMap: Record<string, boolean>): string[] {
+  return Object.entries(openFolderMap)
+    .filter(([, isOpen]) => isOpen)
+    .map(([folderId]) => folderId);
+}
+
+function toDesktopUiState(state: WorkspaceStoreData): DesktopUiState {
+  return {
+    folders: state.folders
+      .filter((folder): folder is WorkspaceFolder & { path: string } => folder.kind === "real" && typeof folder.path === "string")
+      .map((folder) => ({
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+      })),
+    sessionFolderAssignments: state.folderAssignments,
+    openFolderIds: openFolderMapToList(state.openFolderIds),
+    activeFolderId: state.activeFolderId,
+    selectedSessionId: state.selectedSessionId,
+    reasoningBySession: state.reasoningBySession,
+    renamedSessionIds: state.renamedSessionIds,
+  };
+}
+
+function schedulePersistDesktopUiState(state: WorkspaceStoreData): void {
+  const gateway = getRunnerGateway();
+  if (!gateway) {
+    return;
+  }
+  const uiState = toDesktopUiState(state);
+  if (desktopUiPersistTimer) {
+    clearTimeout(desktopUiPersistTimer);
+  }
+  desktopUiPersistTimer = setTimeout(() => {
+    void gateway.patchDesktopSettings({ uiState }).catch(() => undefined);
+  }, 160);
+}
+
+async function persistDesktopUiStateNow(state: WorkspaceStoreData): Promise<void> {
+  const gateway = getRunnerGateway();
+  if (!gateway) {
+    return;
+  }
+  if (desktopUiPersistTimer) {
+    clearTimeout(desktopUiPersistTimer);
+    desktopUiPersistTimer = null;
+  }
+  await gateway.patchDesktopSettings({ uiState: toDesktopUiState(state) }).catch(() => undefined);
 }
 
 function ensureOpenFolderMap(
@@ -345,32 +399,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     set({ initializing: true, error: null });
 
-    const storedRealFolders = parseStoredJson<WorkspaceFolder[]>(FOLDER_STORAGE_KEY, []);
-    const storedAssignments = parseStoredJson<Record<string, string>>(ASSIGNMENT_STORAGE_KEY, {});
-    const storedOpenFolders = parseStoredJson<Record<string, boolean>>(OPEN_FOLDER_STORAGE_KEY, {});
-    const storedReasoning = parseStoredJson<Record<string, ReasoningLevel>>(REASONING_STORAGE_KEY, {});
-    const storedRenamedSessions = parseStoredJson<Record<string, boolean>>(
-      RENAMED_SESSION_STORAGE_KEY,
-      {},
-    );
-
-    const folders = [
-      ...defaultMockFolders(),
-      ...storedRealFolders.filter((folder) => folder.kind === "real"),
-    ];
-    const openFolderIds = ensureOpenFolderMap(folders, storedOpenFolders);
-    const activeFolderId = resolveFallbackFolderId(folders, folders[0]?.id ?? null);
-
-    set({
-      bridgeAvailable: getRunnerGateway() !== null,
-      folders,
-      folderAssignments: storedAssignments,
-      openFolderIds,
-      activeFolderId,
-      reasoningBySession: storedReasoning,
-      renamedSessionIds: storedRenamedSessions,
-    });
-
     const gateway = getRunnerGateway();
     if (!gateway) {
       set({
@@ -380,6 +408,48 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       });
       return;
     }
+
+    let persistedUiState: DesktopUiState = {
+      folders: [],
+      sessionFolderAssignments: {},
+      openFolderIds: [],
+      activeFolderId: null,
+      selectedSessionId: null,
+      reasoningBySession: {},
+      renamedSessionIds: {},
+    };
+    try {
+      const desktopSettings = await gateway.getDesktopSettings();
+      persistedUiState = desktopSettings.uiState;
+    } catch {
+      // ignore settings load failures and continue with in-memory defaults
+    }
+
+    const folders = [
+      ...defaultMockFolders(),
+      ...persistedUiState.folders.map((folder) => ({
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+        kind: "real" as const,
+      })),
+    ];
+    const openFolderIds = ensureOpenFolderMap(
+      folders,
+      openFolderIdListToMap(persistedUiState.openFolderIds),
+    );
+    const activeFolderId = resolveFallbackFolderId(folders, persistedUiState.activeFolderId);
+
+    set({
+      bridgeAvailable: true,
+      folders,
+      folderAssignments: persistedUiState.sessionFolderAssignments,
+      openFolderIds,
+      activeFolderId,
+      selectedSessionId: persistedUiState.selectedSessionId,
+      reasoningBySession: persistedUiState.reasoningBySession,
+      renamedSessionIds: persistedUiState.renamedSessionIds,
+    });
 
     if (!runnerUnsubscribe) {
       runnerUnsubscribe = gateway.subscribe((event) => {
@@ -394,12 +464,23 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         await get().refreshSession(selectedSessionId);
       }
       set({ initialized: true, initializing: false, bridgeAvailable: true });
-      console.log("[bridge] 实时连接已启用");
+      pushDiagnosticsLog({
+        level: "info",
+        component: "desktop:bridge",
+        message: "实时连接已启用",
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       set({
         initializing: false,
         bridgeAvailable: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
+      });
+      pushDiagnosticsLog({
+        level: "error",
+        component: "desktop:bridge",
+        message: "初始化失败",
+        context: { error: errorMessage },
       });
     }
   },
@@ -408,6 +489,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (runnerUnsubscribe) {
       runnerUnsubscribe();
       runnerUnsubscribe = null;
+    }
+    if (desktopUiPersistTimer) {
+      clearTimeout(desktopUiPersistTimer);
+      desktopUiPersistTimer = null;
     }
     const currentData = createInitialData();
     set(currentData);
@@ -439,6 +524,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         selectedSessionId: session.id,
         sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
       }));
+      schedulePersistDesktopUiState(get());
     }
 
     const files = get().selectedFiles;
@@ -486,6 +572,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         showDiffPanel: false,
       },
     });
+    schedulePersistDesktopUiState(get());
   },
 
   async selectSession(sessionId) {
@@ -500,6 +587,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       diffPreview: null,
       diffPath: null,
     });
+    schedulePersistDesktopUiState(get());
     await Promise.all([get().refreshSession(sessionId), get().loadGitStatus()]);
   },
 
@@ -578,8 +666,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           ? currentState.reasoningBySession[selectedSessionId]
           : currentState.reasoningLevel,
     });
-
-    persistJson(ASSIGNMENT_STORAGE_KEY, folderAssignments);
+    schedulePersistDesktopUiState(get());
 
     const unresolvedSessionIds = sessions
       .filter(
@@ -699,10 +786,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   async saveProviderConfig(params) {
+    const protocol = assertProviderProtocol(params.protocol);
     await invokeRunner("provider.config.save", {
       id: params.id,
       type: params.type,
-      protocol: params.protocol as "anthropic-messages" | "openai-chat" | "openai-responses" | undefined,
+      protocol,
       baseUrl: params.baseUrl ?? "",
       model: params.model,
       apiKey: params.apiKey,
@@ -721,12 +809,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       const nextReasoningBySession = sessionId
         ? { ...state.reasoningBySession, [sessionId]: level }
         : state.reasoningBySession;
-      persistJson(REASONING_STORAGE_KEY, nextReasoningBySession);
       return {
         reasoningLevel: level,
         reasoningBySession: nextReasoningBySession,
       };
     });
+    schedulePersistDesktopUiState(get());
   },
 
   setUiPanelOpen(panel, open) {
@@ -785,38 +873,42 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       return;
     }
 
+    const selectedPaths = [...new Set(result.filePaths)];
     set((state) => {
-      const existingPaths = new Set(
-        state.folders.filter((folder) => folder.kind === "real").map((folder) => folder.path),
+      const existingFolderIdsByPath = new Map(
+        state.folders
+          .filter((folder): folder is WorkspaceFolder & { path: string } => folder.kind === "real" && typeof folder.path === "string")
+          .map((folder) => [folder.path, folder.id]),
       );
-      const createdFolders = result.filePaths
-        .filter((path) => !existingPaths.has(path))
+      const existingSelectedFolderIds = selectedPaths
+        .map((path) => existingFolderIdsByPath.get(path))
+        .filter((folderId): folderId is string => typeof folderId === "string");
+      const createdFolders = selectedPaths
+        .filter((path) => !existingFolderIdsByPath.has(path))
         .map((path) => ({
           id: generateFolderId(path),
           name: buildFolderName(path),
           path,
           kind: "real" as const,
         }));
-      if (createdFolders.length === 0) {
+
+      if (createdFolders.length === 0 && existingSelectedFolderIds.length === 0) {
         return state;
       }
 
-      const nextFolders = [...state.folders, ...createdFolders];
+      const nextFolders = createdFolders.length > 0 ? [...state.folders, ...createdFolders] : state.folders;
       const nextOpenFolders = {
         ...state.openFolderIds,
+        ...Object.fromEntries(existingSelectedFolderIds.map((folderId) => [folderId, true])),
         ...Object.fromEntries(createdFolders.map((folder) => [folder.id, true])),
       };
-      persistJson(
-        FOLDER_STORAGE_KEY,
-        nextFolders.filter((folder) => folder.kind === "real"),
-      );
-      persistJson(OPEN_FOLDER_STORAGE_KEY, nextOpenFolders);
       return {
         folders: nextFolders,
         openFolderIds: nextOpenFolders,
-        activeFolderId: createdFolders[0]?.id ?? state.activeFolderId,
+        activeFolderId: createdFolders[0]?.id ?? existingSelectedFolderIds[0] ?? state.activeFolderId,
       };
     });
+    await persistDesktopUiStateNow(get());
   },
 
   toggleFolder(folderId) {
@@ -825,11 +917,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         ...state.openFolderIds,
         [folderId]: !state.openFolderIds[folderId],
       };
-      persistJson(OPEN_FOLDER_STORAGE_KEY, nextOpenFolders);
       return {
         openFolderIds: nextOpenFolders,
       };
     });
+    schedulePersistDesktopUiState(get());
   },
 
   removeFolder(folderId) {
@@ -849,12 +941,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           assignedFolderId === folderId ? fallbackFolderId : assignedFolderId;
       }
       const nextOpenFolders = ensureOpenFolderMap(nextFolders, state.openFolderIds);
-      persistJson(
-        FOLDER_STORAGE_KEY,
-        nextFolders.filter((folder) => folder.kind === "real"),
-      );
-      persistJson(OPEN_FOLDER_STORAGE_KEY, nextOpenFolders);
-      persistJson(ASSIGNMENT_STORAGE_KEY, nextAssignments);
       return {
         folders: nextFolders,
         openFolderIds: nextOpenFolders,
@@ -862,10 +948,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         folderAssignments: nextAssignments,
       };
     });
+    schedulePersistDesktopUiState(get());
   },
 
   setActiveFolder(folderId) {
     set({ activeFolderId: folderId });
+    schedulePersistDesktopUiState(get());
   },
 
   startRenameSession(sessionId) {
@@ -917,7 +1005,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         ...state.renamedSessionIds,
         [editingSessionId]: true,
       };
-      persistJson(RENAMED_SESSION_STORAGE_KEY, nextRenamedSessionIds);
       return {
         sessions: state.sessions.map((session) =>
           session.id === editingSessionId ? result.session : session,
@@ -936,6 +1023,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         editingSessionDraft: "",
       };
     });
+    schedulePersistDesktopUiState(get());
   },
 
   async executeSlashCommand(command) {
