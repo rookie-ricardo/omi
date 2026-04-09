@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ArrowLeft,
@@ -8,7 +8,9 @@ import {
   Cpu,
   Edit,
   Filter,
+  Copy,
   Folder,
+  FolderClosed,
   FolderOpen,
   FolderPlus,
   LayoutGrid,
@@ -25,6 +27,7 @@ import {
 import type { Session } from "@omi/core";
 
 import { type ViewType } from "../App";
+import { getRunnerGateway } from "../lib/runner-gateway";
 import {
   deriveThreadTitle,
   formatRelativeTime,
@@ -68,6 +71,16 @@ export default function Sidebar({
   const setEditingSessionDraft = useWorkspaceStore((state) => state.setEditingSessionDraft);
   const cancelRenameSession = useWorkspaceStore((state) => state.cancelRenameSession);
   const commitRenameSession = useWorkspaceStore((state) => state.commitRenameSession);
+  const openFolderInFinder = (folderPath: string | null) => {
+    if (!folderPath) {
+      return;
+    }
+    const gateway = getRunnerGateway();
+    if (!gateway) {
+      return;
+    }
+    void gateway.openInFinder(folderPath).catch(() => undefined);
+  };
 
   const groupedSessions = useMemo(() => {
     const sessionMap = new Map<string, Session[]>();
@@ -223,6 +236,7 @@ export default function Sidebar({
                 active={activeFolderId === folder.id}
                 onToggleOpen={() => toggleFolder(folder.id)}
                 onActivate={() => setActiveFolder(folder.id)}
+                onOpenInFinder={() => openFolderInFinder(folder.path)}
                 onRemove={() => removeFolder(folder.id)}
               >
                 {folderSessions.length === 0 ? (
@@ -248,6 +262,9 @@ export default function Sidebar({
                         onStartEdit={() => startRenameSession(session.id)}
                         onCancelEdit={cancelRenameSession}
                         onCommitEdit={() => void commitRenameSession()}
+                        onCopySessionId={() => {
+                          void navigator.clipboard.writeText(session.id);
+                        }}
                         onClick={() => {
                           void selectSession(session.id);
                           setCurrentView("chat");
@@ -306,18 +323,35 @@ function FolderGroup({
   active,
   onToggleOpen,
   onActivate,
+  onOpenInFinder,
   onRemove,
   children,
 }: {
-  folder: { id: string; name: string; kind: "mock" | "real" };
+  folder: { id: string; name: string; path: string | null; kind: "mock" | "real" };
   open: boolean;
   active: boolean;
   onToggleOpen: () => void;
   onActivate: () => void;
+  onOpenInFinder: () => void;
   onRemove: () => void;
   children: React.ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [menuOpen]);
 
   return (
     <div className="flex flex-col relative">
@@ -329,15 +363,24 @@ function FolderGroup({
           onActivate();
           onToggleOpen();
         }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onActivate();
+          setMenuOpen(true);
+        }}
       >
         {open ? (
           <FolderOpen size={14} className="text-gray-600 dark:text-gray-300" />
         ) : (
-          <Folder size={14} className="text-gray-600 dark:text-gray-300" />
+          <FolderClosed size={14} className="text-gray-600 dark:text-gray-300" />
         )}
         <span className="text-sm truncate flex-1">{folder.name}</span>
 
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div
+          className={`flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ${
+            menuOpen ? "opacity-100" : ""
+          }`}
+        >
           <div
             className="p-1 hover:bg-gray-300/50 dark:hover:bg-gray-600/50 rounded text-gray-500 dark:text-gray-400"
             onClick={(event) => {
@@ -351,31 +394,43 @@ function FolderGroup({
       </div>
 
       {menuOpen ? (
-        <div className="absolute left-9 top-8 z-50 w-[180px] bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-white/10 rounded-xl shadow-xl p-1.5 text-sm text-gray-700 dark:text-gray-200">
+        <div
+          ref={menuRef}
+          className="absolute left-9 top-8 z-50 w-[148px] bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-white/10 rounded-xl shadow-xl p-1.5 text-sm text-gray-700 dark:text-gray-200"
+          onClick={(event) => event.stopPropagation()}
+        >
           <button
             type="button"
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 text-left"
+            disabled={!folder.path}
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left ${
+              folder.path
+                ? "hover:bg-gray-100 dark:hover:bg-white/10"
+                : "opacity-45 cursor-not-allowed"
+            }`}
             onClick={() => {
               setMenuOpen(false);
-              onToggleOpen();
+              onOpenInFinder();
             }}
           >
             <FolderOpen size={14} className="text-gray-500 dark:text-gray-400" />
-            <span>{open ? "折叠目录" : "展开目录"}</span>
+            <span className="text-xs">Open In Finder</span>
           </button>
-          {folder.kind === "real" ? (
-            <button
-              type="button"
-              className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 text-left text-red-500 dark:text-red-400"
-              onClick={() => {
-                setMenuOpen(false);
-                onRemove();
-              }}
-            >
-              <X size={14} />
-              <span>移除目录</span>
-            </button>
-          ) : null}
+          <button
+            type="button"
+            disabled={folder.kind !== "real"}
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left ${
+              folder.kind === "real"
+                ? "hover:bg-gray-100 dark:hover:bg-white/10 text-red-500 dark:text-red-400"
+                : "opacity-45 cursor-not-allowed text-gray-500 dark:text-gray-400"
+            }`}
+            onClick={() => {
+              setMenuOpen(false);
+              onRemove();
+            }}
+          >
+            <X size={14} />
+            <span className="text-xs">移除</span>
+          </button>
         </div>
       ) : null}
 
@@ -394,6 +449,7 @@ function ThreadItem({
   onStartEdit,
   onCancelEdit,
   onCommitEdit,
+  onCopySessionId,
   onClick,
 }: {
   title: string;
@@ -405,14 +461,43 @@ function ThreadItem({
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onCommitEdit: () => void;
+  onCopySessionId: () => void;
   onClick?: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [menuOpen]);
+
   return (
     <div
       onClick={() => {
         if (!editing) {
+          if (menuOpen) {
+            setMenuOpen(false);
+            return;
+          }
           onClick?.();
         }
+      }}
+      onContextMenu={(event) => {
+        if (editing) {
+          return;
+        }
+        event.preventDefault();
+        setMenuOpen(true);
       }}
       className={`group relative flex items-center justify-between pl-8 pr-3 py-1.5 rounded-lg cursor-pointer text-sm transition-colors ${
         active
@@ -462,9 +547,60 @@ function ThreadItem({
             >
               <Pencil size={14} />
             </button>
-            <Archive size={14} />
+            <button
+              type="button"
+              className={`hover:text-gray-600 dark:hover:text-gray-300 ${menuOpen ? "text-gray-600 dark:text-gray-300" : ""}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                setMenuOpen((value) => !value);
+              }}
+            >
+              <Archive size={14} />
+            </button>
           </div>
         </>
+      ) : null}
+
+      {!editing && menuOpen ? (
+        <div
+          ref={menuRef}
+          className="absolute right-2 top-8 z-50 w-[190px] bg-white dark:bg-[#2a2a2a] border border-gray-200 dark:border-white/10 rounded-xl shadow-xl p-1.5 text-sm text-gray-700 dark:text-gray-200"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 text-left"
+            onClick={() => {
+              setMenuOpen(false);
+              onClick?.();
+            }}
+          >
+            <Pin size={14} className="-rotate-45 text-gray-500 dark:text-gray-400" />
+            <span>打开线程</span>
+          </button>
+          <button
+            type="button"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 text-left"
+            onClick={() => {
+              setMenuOpen(false);
+              onStartEdit();
+            }}
+          >
+            <Pencil size={14} className="text-gray-500 dark:text-gray-400" />
+            <span>重命名线程</span>
+          </button>
+          <button
+            type="button"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-white/10 text-left"
+            onClick={() => {
+              setMenuOpen(false);
+              onCopySessionId();
+            }}
+          >
+            <Copy size={14} className="text-gray-500 dark:text-gray-400" />
+            <span>复制 Session ID</span>
+          </button>
+        </div>
       ) : null}
     </div>
   );

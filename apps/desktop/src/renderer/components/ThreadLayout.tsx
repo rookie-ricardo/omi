@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   Copy,
+  ClipboardCheck,
   Cpu,
   GitBranch,
   GitCommit,
@@ -15,7 +16,6 @@ import {
   Paperclip,
   Plus,
   Square,
-  SquareTerminal,
   UserCircle,
   Box,
   Bug,
@@ -213,7 +213,7 @@ export default function ThreadLayout({
             <div className="w-px h-4 bg-gray-200 dark:bg-white/10 mx-1" />
 
             <div className="text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300 transition-colors p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-white/5">
-              <SquareTerminal size={18} strokeWidth={1.5} />
+              <ClipboardCheck size={18} strokeWidth={1.5} />
             </div>
 
             <div
