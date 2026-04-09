@@ -7,6 +7,7 @@ import { type RpcRequest, rpcRequestSchema } from "@omi/protocol";
 
 import { normalizeResult } from "./protocol";
 import { collectRunEventDeliveries, handleRunnerRequest } from "./request-handler";
+import { assertWorkspaceDistFreshness } from "./dist-guard";
 
 // ---------------------------------------------------------------------------
 // Logger → IPC bridge
@@ -55,6 +56,7 @@ export function setForwardDebugLogs(enable: boolean) {
 const logger = getLogger("runner:main");
 
 const workspaceRoot = resolve(readWorkspaceRootFromArgs() ?? process.cwd());
+assertWorkspaceDistFreshness(workspaceRoot);
 logger.info("Runner starting", { workspaceRoot });
 
 const database = createAppDatabase(resolve(workspaceRoot, "workspace-data", "app.db"));
