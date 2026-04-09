@@ -308,7 +308,8 @@ describe("protocol", () => {
           {
             id: "ckpt_1",
             createdAt: "2025-03-30T00:00:00.000Z",
-            summary: "checkpoint",
+            phase: "before_model_call",
+            payload: { checkpoint: "state" },
           },
         ],
       },

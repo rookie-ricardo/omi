@@ -136,6 +136,7 @@ describe("runner request handler", () => {
         id: input.id ?? "provider_1",
         name: "OpenAI",
         type: input.type,
+        protocol: input.protocol,
         baseUrl: input.baseUrl,
         apiKey: input.apiKey,
         model: input.model,
@@ -173,7 +174,8 @@ describe("runner request handler", () => {
           {
             id: "ckpt_1",
             createdAt: "2025-03-30T00:00:00.000Z",
-            summary: "checkpoint",
+            phase: "before_model_call",
+            payload: { checkpoint: "state" },
           },
         ]),
       },
@@ -334,7 +336,8 @@ describe("runner request handler", () => {
           {
             id: "ckpt_1",
             createdAt: "2025-03-30T00:00:00.000Z",
-            summary: "checkpoint",
+            phase: "before_model_call",
+            payload: { checkpoint: "state" },
           },
         ],
       },

@@ -56,6 +56,39 @@ describe("PiAiModelClient single-turn", () => {
     expect(onTextDelta).toHaveBeenCalledWith("Hello");
   });
 
+  it("passes provider apiKey into stream options", async () => {
+    const client = new PiAiModelClient();
+    const config = makeProviderConfig();
+
+    mockStream.mockReturnValue((async function* () {
+      yield {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          usage: { input: 1, output: 1 },
+        },
+      };
+    })());
+
+    await client.run(
+      {
+        runId: "run_api_key",
+        sessionId: "session_1",
+        prompt: "test",
+        historyMessages: [],
+        providerConfig: config,
+      },
+      {},
+    );
+
+    expect(mockStream).toHaveBeenCalled();
+    expect(mockStream.mock.calls[0]?.[2]).toMatchObject({
+      apiKey: "test-api-key",
+    });
+  });
+
   it("returns tool calls without executing them", async () => {
     const client = new PiAiModelClient();
     const config = makeProviderConfig();

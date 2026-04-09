@@ -788,6 +788,10 @@ describe("agent session", () => {
       taskId: null,
     });
     await waitFor(() => database.getRun(firstRun.id)?.status === "failed");
+    expect(database.getRun(firstRun.id)?.terminalReason).toBe("boom");
+    expect(
+      database.listMessages(session.id).some((message) => message.role === "user" && message.content === "retry me"),
+    ).toBe(true);
 
     const laterRun = agentSession.startRun({
       prompt: "new latest prompt",
@@ -973,6 +977,7 @@ describe("agent session", () => {
     });
     expect(events.some((event) => event.type === "run.blocked")).toBe(true);
     expect(database.getRun(run.id)?.status).toBe("canceled");
+    expect(database.getRun(run.id)?.terminalReason).toBe("canceled");
   });
 });
 

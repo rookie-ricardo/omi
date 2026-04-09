@@ -2,9 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { GitRepoState, ProviderConfig, Session, SessionMessage, Task, ToolCall } from "@omi/core";
 import type { ModelListResult } from "@omi/protocol";
+import type { DesktopSettings, DesktopSettingsPatch } from "../../src/shared/desktop-settings";
+import { mergeDesktopSettings } from "../../src/shared/desktop-settings";
 
 import type { RunnerGateway } from "../../src/renderer/lib/runner-gateway";
 import { setRunnerGatewayForTests } from "../../src/renderer/lib/runner-gateway";
+import { useDiagnosticsStore } from "../../src/renderer/store/diagnostics-store";
 import {
   deriveThreadTitle,
   useWorkspaceStore,
@@ -20,15 +23,22 @@ interface MockData {
   dialogPaths: string[];
 }
 
-function createGatewayMock(): { gateway: RunnerGateway; getCalls: () => Array<{ method: string; params: unknown }> } {
+function createGatewayMock(): {
+  gateway: RunnerGateway;
+  getCalls: () => Array<{ method: string; params: unknown }>;
+  getSettingsPatches: () => DesktopSettingsPatch[];
+  setDialogPaths: (paths: string[]) => void;
+} {
   const now = "2026-04-07T09:00:00.000Z";
   let sessionCounter = 3;
   const calls: Array<{ method: string; params: unknown }> = [];
+  const settingsPatches: DesktopSettingsPatch[] = [];
 
   const providerConfig: ProviderConfig = {
     id: "provider_1",
     name: "OpenAI",
     type: "openai",
+    protocol: "openai-chat",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "test-key",
     model: "gpt-5.4",
@@ -165,6 +175,23 @@ function createGatewayMock(): { gateway: RunnerGateway; getCalls: () => Array<{ 
     },
     dialogPaths: ["/Users/zhangyanqi/Documents/demo-folder"],
   };
+  let desktopSettings: DesktopSettings = {
+    version: 1,
+    uiState: {
+      folders: [],
+      sessionFolderAssignments: {},
+      openFolderIds: [],
+      activeFolderId: null,
+      selectedSessionId: null,
+      reasoningBySession: {},
+      renamedSessionIds: {},
+    },
+    windowState: {
+      width: 1160,
+      height: 800,
+      maximized: false,
+    },
+  };
 
   const gateway: RunnerGateway = {
     invoke: (async (method, params) => {
@@ -257,12 +284,25 @@ function createGatewayMock(): { gateway: RunnerGateway; getCalls: () => Array<{ 
       filePaths: data.dialogPaths,
       bookmarks: [],
     })) as RunnerGateway["showOpenDialog"],
+    getDesktopSettings: (async () => structuredClone(desktopSettings)) as RunnerGateway["getDesktopSettings"],
+    patchDesktopSettings: (async (patch) => {
+      settingsPatches.push(structuredClone(patch));
+      desktopSettings = mergeDesktopSettings(desktopSettings, patch);
+      return structuredClone(desktopSettings);
+    }) as RunnerGateway["patchDesktopSettings"],
+    openInFinder: (async () => undefined) as RunnerGateway["openInFinder"],
   };
 
   return {
     gateway,
     getCalls() {
       return calls;
+    },
+    getSettingsPatches() {
+      return settingsPatches;
+    },
+    setDialogPaths(paths: string[]) {
+      data.dialogPaths = [...paths];
     },
   };
 }
@@ -271,6 +311,7 @@ describe("workspace store", () => {
   beforeEach(() => {
     setRunnerGatewayForTests(null);
     useWorkspaceStore.getState().resetForTests();
+    useDiagnosticsStore.getState().clearLogs();
   });
 
   it("initializes mock folders and supports add/remove real folders with reassignment", async () => {
@@ -389,5 +430,100 @@ describe("workspace store", () => {
           (call.params as { toolCallId?: string }).toolCallId === "tool_1",
       ),
     ).toBe(true);
+  });
+
+  it("forwards protocol when saving a provider config", async () => {
+    const { gateway, getCalls } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().saveProviderConfig({
+      type: "openai",
+      protocol: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4.1-mini",
+      apiKey: "sk-test",
+    });
+
+    expect(getCalls()).toContainEqual({
+      method: "provider.config.save",
+      params: {
+        id: undefined,
+        type: "openai",
+        protocol: "openai-chat",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        apiKey: "sk-test",
+      },
+    });
+  });
+
+  it("fails fast when protocol is missing while saving a provider config", async () => {
+    const { gateway, getCalls } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await expect(
+      useWorkspaceStore.getState().saveProviderConfig({
+        type: "openai",
+        protocol: undefined as unknown as "anthropic-messages" | "openai-chat" | "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        apiKey: "sk-test",
+      }),
+    ).rejects.toThrow("provider.config.save requires protocol");
+
+    expect(getCalls().some((call) => call.method === "provider.config.save")).toBe(false);
+  });
+
+  it("writes bridge connection info log on initialize", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+
+    expect(
+      useDiagnosticsStore.getState().logs.some((entry) =>
+        entry.level === "info" &&
+        entry.component === "desktop:bridge" &&
+        entry.message === "实时连接已启用",
+      ),
+    ).toBe(true);
+  });
+
+  it("persists selectedSessionId in desktop settings uiState", async () => {
+    const { gateway, getSettingsPatches } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+    await useWorkspaceStore.getState().selectSession("session_2");
+    await new Promise((resolve) => setTimeout(resolve, 220));
+
+    expect(
+      getSettingsPatches().some(
+        (patch) => patch.uiState?.selectedSessionId === "session_2",
+      ),
+    ).toBe(true);
+  });
+
+  it("re-adding an existing folder does not duplicate and re-activates it", async () => {
+    const { gateway, setDialogPaths } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+
+    await useWorkspaceStore.getState().initialize();
+    await useWorkspaceStore.getState().addFolderFromDialog();
+    const created = useWorkspaceStore
+      .getState()
+      .folders.find((folder) => folder.kind === "real");
+    if (!created) {
+      throw new Error("expected a created folder");
+    }
+
+    useWorkspaceStore.getState().setActiveFolder("mock-erduo-skills");
+    setDialogPaths(["/Users/zhangyanqi/Documents/demo-folder"]);
+    await useWorkspaceStore.getState().addFolderFromDialog();
+
+    const state = useWorkspaceStore.getState();
+    expect(state.folders.filter((folder) => folder.kind === "real")).toHaveLength(1);
+    expect(state.activeFolderId).toBe(created.id);
+    expect(state.openFolderIds[created.id]).toBe(true);
   });
 });

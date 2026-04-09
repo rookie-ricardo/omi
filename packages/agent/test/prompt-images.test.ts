@@ -52,6 +52,7 @@ function createTestDatabase(): AppStore {
 		id: "test-provider-config",
 		name: "Test Provider",
 		type: "anthropic",
+		protocol: "anthropic-messages",
 		baseUrl: "https://api.anthropic.com",
 		apiKey: "test-key",
 		model: "claude-sonnet-4-20250514",

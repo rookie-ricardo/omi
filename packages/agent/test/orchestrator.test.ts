@@ -27,6 +27,7 @@ describe("orchestrator", () => {
 
     const config = orchestrator.saveProviderConfig({
       type: "openai",
+      protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-5.4",
       apiKey: "sk-test",
@@ -34,6 +35,7 @@ describe("orchestrator", () => {
 
     expect(config.type).toBe("openai");
     expect(config.name).toBe("OpenAI");
+    expect(config.protocol).toBe("openai-chat");
     expect(config.baseUrl).toBe("https://api.openai.com/v1");
     expect(config.apiKey).toBe("sk-test");
     expect(config.model).toBe("gpt-5.4");
@@ -125,6 +127,7 @@ describe("orchestrator", () => {
     database.upsertProviderConfig({
       name: "Anthropic",
       type: "anthropic",
+      protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
       model: "claude-sonnet-4-20250514",
@@ -308,6 +311,7 @@ describe("orchestrator", () => {
     database.upsertProviderConfig({
       name: "Anthropic",
       type: "anthropic",
+      protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
       model: "claude-sonnet-4-20250514",
@@ -396,6 +400,7 @@ describe("orchestrator", () => {
     database.upsertProviderConfig({
       name: "Model A",
       type: "openai",
+      protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       apiKey: "test-openai-key",
       model: "gpt-4.1-mini",
@@ -464,6 +469,7 @@ describe("orchestrator", () => {
     const primaryConfig = database.upsertProviderConfig({
       name: "Anthropic",
       type: "anthropic",
+      protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
       model: "claude-sonnet-4-20250514",
@@ -471,6 +477,7 @@ describe("orchestrator", () => {
     const switchedConfig = database.upsertProviderConfig({
       name: "OpenAI",
       type: "openai",
+      protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       apiKey: "test-openai-key",
       model: "gpt-4.1-mini",
