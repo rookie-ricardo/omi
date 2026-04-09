@@ -13,7 +13,7 @@ import type {
   SessionBranch,
   SessionModeState,
 } from "@omi/protocol";
-import type { SessionBranch as CoreSessionBranch } from "@omi/core";
+import type { RunCheckpoint, SessionBranch as CoreSessionBranch } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
 
 import { parseCommand } from "@omi/protocol";
@@ -69,7 +69,7 @@ type RunnerRequestOrchestrator = Pick<
 type RunnerPrivateHost = {
   database: {
     getRun(runId: string): { id: string; sessionId: string; status: string; createdAt: string; terminalReason?: string | null } | null;
-    listCheckpoints(runId: string): Array<{ id: string; createdAt: string; summary: string }>;
+    listCheckpoints(runId: string): RunCheckpoint[];
   };
   sessionManager: Pick<SessionManager, "createBranch" | "listBranches" | "switchBranch" | "getActiveBranchId">;
   workspaceRoot: string;
@@ -261,6 +261,7 @@ async function executeCommand(
       return orchestrator.saveProviderConfig({
         id: params.id ? String(params.id) : undefined,
         type: String(params.type),
+        protocol: String(params.protocol) as "anthropic-messages" | "openai-chat" | "openai-responses",
         baseUrl: String(params.baseUrl ?? ""),
         model: String(params.model),
         apiKey: String(params.apiKey),
@@ -478,7 +479,8 @@ function getRunState(
   const checkpoints = host.database.listCheckpoints(runId).map((checkpoint) => ({
     id: checkpoint.id,
     createdAt: checkpoint.createdAt,
-    summary: checkpoint.summary,
+    phase: checkpoint.phase,
+    payload: checkpoint.payload,
   }));
 
   return {
