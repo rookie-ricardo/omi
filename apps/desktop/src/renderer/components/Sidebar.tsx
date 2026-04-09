@@ -71,10 +71,7 @@ export default function Sidebar({
   const setEditingSessionDraft = useWorkspaceStore((state) => state.setEditingSessionDraft);
   const cancelRenameSession = useWorkspaceStore((state) => state.cancelRenameSession);
   const commitRenameSession = useWorkspaceStore((state) => state.commitRenameSession);
-  const openFolderInFinder = (folderPath: string | null) => {
-    if (!folderPath) {
-      return;
-    }
+  const openFolderInFinder = (folderPath: string) => {
     const gateway = getRunnerGateway();
     if (!gateway) {
       return;
@@ -88,8 +85,8 @@ export default function Sidebar({
       sessionMap.set(folder.id, []);
     }
     for (const session of sessions) {
-      const folderId = folderAssignments[session.id] ?? activeFolderId ?? folders[0]?.id;
-      if (!folderId) {
+      const folderId = folderAssignments[session.id];
+      if (!folderId || !sessionMap.has(folderId)) {
         continue;
       }
       const group = sessionMap.get(folderId) ?? [];
@@ -106,7 +103,7 @@ export default function Sidebar({
       );
     }
     return sessionMap;
-  }, [activeFolderId, folderAssignments, folders, sessions]);
+  }, [folderAssignments, folders, sessions]);
 
   if (isSettings) {
     return (
@@ -225,62 +222,68 @@ export default function Sidebar({
         </div>
 
         <div className="flex flex-col gap-1 px-2">
-          {folders.map((folder) => {
-            const folderSessions = groupedSessions.get(folder.id) ?? [];
-            const open = Boolean(openFolderIds[folder.id]);
-            return (
-              <FolderGroup
-                key={folder.id}
-                folder={folder}
-                open={open}
-                active={activeFolderId === folder.id}
-                onToggleOpen={() => toggleFolder(folder.id)}
-                onActivate={() => setActiveFolder(folder.id)}
-                onOpenInFinder={() => openFolderInFinder(folder.path)}
-                onNewThread={() => {
-                  setActiveFolder(folder.id);
-                  beginNewThread();
-                  setCurrentView("chat");
-                }}
-                onRemove={() => removeFolder(folder.id)}
-              >
-                {folderSessions.length === 0 ? (
-                  <div className="pl-8 py-1 text-sm text-gray-400 dark:text-gray-500">无线程</div>
-                ) : (
-                  folderSessions.map((session) => {
-                    const renamed = Boolean(renamedSessionIds[session.id]);
-                    const title = deriveThreadTitle(
-                      session.title,
-                      firstUserMessageBySession[session.id],
-                      renamed,
-                    );
-                    const isEditing = editingSessionId === session.id;
-                    return (
-                      <ThreadItem
-                        key={session.id}
-                        title={title}
-                        time={formatRelativeTime(session.updatedAt)}
-                        active={selectedSessionId === session.id && currentView === "chat"}
-                        editing={isEditing}
-                        editValue={editingSessionDraft}
-                        onEditValueChange={setEditingSessionDraft}
-                        onStartEdit={() => startRenameSession(session.id)}
-                        onCancelEdit={cancelRenameSession}
-                        onCommitEdit={() => void commitRenameSession()}
-                        onCopySessionId={() => {
-                          void navigator.clipboard.writeText(session.id);
-                        }}
-                        onClick={() => {
-                          void selectSession(session.id);
-                          setCurrentView("chat");
-                        }}
-                      />
-                    );
-                  })
-                )}
-              </FolderGroup>
-            );
-          })}
+          {folders.length === 0 ? (
+            <div className="px-2 py-2 text-sm text-gray-400 dark:text-gray-500">
+              暂无目录，点击右上角添加。
+            </div>
+          ) : (
+            folders.map((folder) => {
+              const folderSessions = groupedSessions.get(folder.id) ?? [];
+              const open = Boolean(openFolderIds[folder.id]);
+              return (
+                <FolderGroup
+                  key={folder.id}
+                  folder={folder}
+                  open={open}
+                  active={activeFolderId === folder.id}
+                  onToggleOpen={() => toggleFolder(folder.id)}
+                  onActivate={() => setActiveFolder(folder.id)}
+                  onOpenInFinder={() => openFolderInFinder(folder.path)}
+                  onNewThread={() => {
+                    setActiveFolder(folder.id);
+                    beginNewThread();
+                    setCurrentView("new-thread");
+                  }}
+                  onRemove={() => removeFolder(folder.id)}
+                >
+                  {folderSessions.length === 0 ? (
+                    <div className="pl-8 py-1 text-sm text-gray-400 dark:text-gray-500">无线程</div>
+                  ) : (
+                    folderSessions.map((session) => {
+                      const renamed = Boolean(renamedSessionIds[session.id]);
+                      const title = deriveThreadTitle(
+                        session.title,
+                        firstUserMessageBySession[session.id],
+                        renamed,
+                      );
+                      const isEditing = editingSessionId === session.id;
+                      return (
+                        <ThreadItem
+                          key={session.id}
+                          title={title}
+                          time={formatRelativeTime(session.updatedAt)}
+                          active={selectedSessionId === session.id && currentView === "chat"}
+                          editing={isEditing}
+                          editValue={editingSessionDraft}
+                          onEditValueChange={setEditingSessionDraft}
+                          onStartEdit={() => startRenameSession(session.id)}
+                          onCancelEdit={cancelRenameSession}
+                          onCommitEdit={() => void commitRenameSession()}
+                          onCopySessionId={() => {
+                            void navigator.clipboard.writeText(session.id);
+                          }}
+                          onClick={() => {
+                            void selectSession(session.id);
+                            setCurrentView("chat");
+                          }}
+                        />
+                      );
+                    })
+                  )}
+                </FolderGroup>
+              );
+            })
+          )}
         </div>
       </div>
 
@@ -333,7 +336,7 @@ function FolderGroup({
   onRemove,
   children,
 }: {
-  folder: { id: string; name: string; path: string | null; kind: "mock" | "real" };
+  folder: { id: string; name: string; path: string };
   open: boolean;
   active: boolean;
   onToggleOpen: () => void;
@@ -406,12 +409,7 @@ function FolderGroup({
         >
           <button
             type="button"
-            disabled={!folder.path}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left ${
-              folder.path
-                ? "hover:bg-gray-100 dark:hover:bg-white/10"
-                : "opacity-45 cursor-not-allowed"
-            }`}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left hover:bg-gray-100 dark:hover:bg-white/10"
             onClick={() => {
               setMenuOpen(false);
               onOpenInFinder();
@@ -422,12 +420,7 @@ function FolderGroup({
           </button>
           <button
             type="button"
-            disabled={folder.kind !== "real"}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left ${
-              folder.kind === "real"
-                ? "hover:bg-gray-100 dark:hover:bg-white/10 text-red-500 dark:text-red-400"
-                : "opacity-45 cursor-not-allowed text-gray-500 dark:text-gray-400"
-            }`}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left hover:bg-gray-100 dark:hover:bg-white/10 text-red-500 dark:text-red-400"
             onClick={() => {
               setMenuOpen(false);
               onRemove();

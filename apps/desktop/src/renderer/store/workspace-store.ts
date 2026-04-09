@@ -19,7 +19,7 @@ import type {
   ToolListResult,
   ToolPendingListResult,
 } from "@omi/protocol";
-import type { DesktopUiState } from "../../shared/desktop-settings";
+import type { DesktopPermissionMode, DesktopUiState } from "../../shared/desktop-settings";
 
 import { getRunnerGateway, type RunnerEventEnvelope } from "../lib/runner-gateway";
 
@@ -31,12 +31,17 @@ let desktopUiPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
 export type ReasoningLevel = "低" | "中" | "高" | "超高";
 type ProviderProtocol = (typeof PROVIDER_PROTOCOL_VALUES)[number];
+export type PermissionMode = DesktopPermissionMode;
+
+interface SendPromptTextOptions {
+  contextFiles?: string[];
+  clearComposer?: boolean;
+}
 
 export interface WorkspaceFolder {
   id: string;
   name: string;
-  path: string | null;
-  kind: "mock" | "real";
+  path: string;
 }
 
 export interface SessionDetailResponse {
@@ -77,6 +82,7 @@ interface WorkspaceStoreData {
   composerInput: string;
   selectedFiles: string[];
   reasoningBySession: Record<string, ReasoningLevel>;
+  permissionModeBySession: Record<string, PermissionMode>;
   reasoningLevel: ReasoningLevel;
   editingSessionId: string | null;
   editingSessionDraft: string;
@@ -95,6 +101,7 @@ interface WorkspaceStoreActions {
   resetForTests: () => void;
   setComposerInput: (value: string) => void;
   sendPrompt: () => Promise<string | null>;
+  sendPromptText: (prompt: string, options?: SendPromptTextOptions) => Promise<string | null>;
   applyStarterPrompt: (value: string) => void;
   beginNewThread: () => void;
   selectSession: (sessionId: string) => Promise<void>;
@@ -120,6 +127,7 @@ interface WorkspaceStoreActions {
   }) => Promise<void>;
   deleteProviderConfig: (id: string) => Promise<void>;
   setReasoningLevel: (level: ReasoningLevel) => void;
+  setPermissionMode: (mode: PermissionMode) => void;
   setUiPanelOpen: (
     panel: keyof WorkspaceStoreData["uiPanels"],
     open: boolean,
@@ -142,18 +150,8 @@ interface WorkspaceStoreActions {
 
 export type WorkspaceStore = WorkspaceStoreData & WorkspaceStoreActions;
 
-function defaultMockFolders(): WorkspaceFolder[] {
-  return [
-    { id: "mock-erduo-skills", name: "erduo-skills", path: null, kind: "mock" },
-    { id: "mock-erduo-site", name: "erduo-site", path: null, kind: "mock" },
-    { id: "mock-douyin-ai", name: "douyin-ai", path: null, kind: "mock" },
-    { id: "mock-zettelkasten", name: "Zettelkasten", path: null, kind: "mock" },
-    { id: "mock-myforge", name: "MyForge", path: null, kind: "mock" },
-  ];
-}
-
 function createInitialData(): WorkspaceStoreData {
-  const folders = defaultMockFolders();
+  const folders: WorkspaceFolder[] = [];
   return {
     initialized: false,
     initializing: false,
@@ -176,11 +174,12 @@ function createInitialData(): WorkspaceStoreData {
     modelCatalog: null,
     folders,
     folderAssignments: {},
-    openFolderIds: Object.fromEntries(folders.map((folder) => [folder.id, folder.id === folders[0]?.id])),
-    activeFolderId: folders[0]?.id ?? null,
+    openFolderIds: {},
+    activeFolderId: null,
     composerInput: "",
     selectedFiles: [],
     reasoningBySession: {},
+    permissionModeBySession: {},
     reasoningLevel: DEFAULT_REASONING_LEVEL,
     editingSessionId: null,
     editingSessionDraft: "",
@@ -268,18 +267,17 @@ function openFolderMapToList(openFolderMap: Record<string, boolean>): string[] {
 
 function toDesktopUiState(state: WorkspaceStoreData): DesktopUiState {
   return {
-    folders: state.folders
-      .filter((folder): folder is WorkspaceFolder & { path: string } => folder.kind === "real" && typeof folder.path === "string")
-      .map((folder) => ({
-        id: folder.id,
-        name: folder.name,
-        path: folder.path,
-      })),
+    folders: state.folders.map((folder) => ({
+      id: folder.id,
+      name: folder.name,
+      path: folder.path,
+    })),
     sessionFolderAssignments: state.folderAssignments,
     openFolderIds: openFolderMapToList(state.openFolderIds),
     activeFolderId: state.activeFolderId,
     selectedSessionId: state.selectedSessionId,
     reasoningBySession: state.reasoningBySession,
+    permissionModeBySession: state.permissionModeBySession,
     renamedSessionIds: state.renamedSessionIds,
   };
 }
@@ -335,7 +333,6 @@ function ensureSessionAssignments(
   sessions: Session[],
   folders: WorkspaceFolder[],
   assignments: Record<string, string>,
-  fallbackFolderId: string | null,
 ): Record<string, string> {
   const folderIds = new Set(folders.map((folder) => folder.id));
   const nextAssignments: Record<string, string> = {};
@@ -343,14 +340,23 @@ function ensureSessionAssignments(
     const assigned = assignments[session.id];
     if (assigned && folderIds.has(assigned)) {
       nextAssignments[session.id] = assigned;
-      continue;
-    }
-    const preferredFolder = fallbackFolderId ?? folders[0]?.id ?? null;
-    if (preferredFolder) {
-      nextAssignments[session.id] = preferredFolder;
     }
   }
   return nextAssignments;
+}
+
+function ensurePermissionModes(
+  sessions: Session[],
+  modes: Record<string, PermissionMode>,
+): Record<string, PermissionMode> {
+  const sessionIds = new Set(sessions.map((session) => session.id));
+  const nextModes: Record<string, PermissionMode> = {};
+  for (const [sessionId, mode] of Object.entries(modes)) {
+    if (sessionIds.has(sessionId)) {
+      nextModes[sessionId] = mode;
+    }
+  }
+  return nextModes;
 }
 
 export function deriveThreadTitle(
@@ -417,6 +423,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       activeFolderId: null,
       selectedSessionId: null,
       reasoningBySession: {},
+      permissionModeBySession: {},
       renamedSessionIds: {},
     };
     try {
@@ -426,15 +433,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       // ignore settings load failures and continue with in-memory defaults
     }
 
-    const folders = [
-      ...defaultMockFolders(),
-      ...persistedUiState.folders.map((folder) => ({
-        id: folder.id,
-        name: folder.name,
-        path: folder.path,
-        kind: "real" as const,
-      })),
-    ];
+    const folders = persistedUiState.folders.map((folder) => ({
+      id: folder.id,
+      name: folder.name,
+      path: folder.path,
+    }));
     const openFolderIds = ensureOpenFolderMap(
       folders,
       openFolderIdListToMap(persistedUiState.openFolderIds),
@@ -449,6 +452,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       activeFolderId,
       selectedSessionId: persistedUiState.selectedSessionId,
       reasoningBySession: persistedUiState.reasoningBySession,
+      permissionModeBySession: persistedUiState.permissionModeBySession,
       renamedSessionIds: persistedUiState.renamedSessionIds,
     });
 
@@ -514,6 +518,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if (!prompt) {
       return null;
     }
+    return get().sendPromptText(prompt, {
+      contextFiles: get().selectedFiles,
+      clearComposer: true,
+    });
+  },
+
+  async sendPromptText(rawPrompt, options) {
+    const prompt = rawPrompt.trim();
+    if (!prompt) {
+      return null;
+    }
 
     let sessionId = get().selectedSessionId;
     if (!sessionId) {
@@ -521,35 +536,57 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         title: deriveSessionTitleFromPrompt(prompt),
       });
       sessionId = session.id;
+      const activeFolderId = get().activeFolderId;
       set((state) => ({
         selectedSessionId: session.id,
         sessions: [session, ...state.sessions.filter((item) => item.id !== session.id)],
+        folderAssignments:
+          activeFolderId && state.folders.some((folder) => folder.id === activeFolderId)
+            ? {
+                ...state.folderAssignments,
+                [session.id]: activeFolderId,
+              }
+            : state.folderAssignments,
       }));
       schedulePersistDesktopUiState(get());
     }
 
-    const files = get().selectedFiles;
-    await invokeRunner("run.start", {
+    const contextFiles = options?.contextFiles ?? [];
+    const run = await invokeRunner<{ id?: string }, "run.start">("run.start", {
       sessionId,
       taskId: null,
       prompt,
-      ...(files.length > 0 ? { contextFiles: files } : {}),
+      ...(contextFiles.length > 0 ? { contextFiles } : {}),
+    });
+    const runId = typeof run?.id === "string" ? run.id : `local-${Date.now()}`;
+    const clearComposer = options?.clearComposer === true;
+
+    set((state) => {
+      const nextErrors = { ...state.errorBySession };
+      delete nextErrors[sessionId];
+      return {
+        ...(clearComposer
+          ? {
+              composerInput: "",
+              selectedFiles: [],
+              uiPanels: {
+                ...state.uiPanels,
+                slashMenuOpen: false,
+              },
+            }
+          : {}),
+        errorBySession: nextErrors,
+        streamingBySession: {
+          ...state.streamingBySession,
+          [sessionId]: {
+            runId,
+            content: "",
+          },
+        },
+      };
     });
 
-    set((state) => ({
-      composerInput: "",
-      selectedFiles: [],
-      uiPanels: {
-        ...state.uiPanels,
-        slashMenuOpen: false,
-      },
-    }));
-
-    await Promise.all([
-      get().loadSessions(),
-      get().refreshSession(sessionId),
-      get().loadGitStatus(),
-    ]);
+    await Promise.all([get().loadSessions(), get().refreshSession(sessionId), get().loadGitStatus()]);
     return sessionId;
   },
 
@@ -650,17 +687,22 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       sessions,
       currentState.folders,
       currentState.folderAssignments,
-      activeFolderId,
     );
+    const permissionModeBySession = ensurePermissionModes(
+      sessions,
+      currentState.permissionModeBySession,
+    );
+    const visibleSessionIds = new Set(Object.keys(folderAssignments));
     const selectedSessionId =
-      currentState.selectedSessionId && sessions.some((session) => session.id === currentState.selectedSessionId)
+      currentState.selectedSessionId && visibleSessionIds.has(currentState.selectedSessionId)
         ? currentState.selectedSessionId
-        : sessions[0]?.id ?? null;
+        : sessions.find((session) => visibleSessionIds.has(session.id))?.id ?? null;
 
     set({
       sessions,
       selectedSessionId,
       folderAssignments,
+      permissionModeBySession,
       activeFolderId,
       reasoningLevel:
         selectedSessionId && currentState.reasoningBySession[selectedSessionId]
@@ -819,6 +861,20 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     schedulePersistDesktopUiState(get());
   },
 
+  setPermissionMode(mode) {
+    const sessionId = get().selectedSessionId;
+    if (!sessionId) {
+      return;
+    }
+    set((state) => ({
+      permissionModeBySession: {
+        ...state.permissionModeBySession,
+        [sessionId]: mode,
+      },
+    }));
+    schedulePersistDesktopUiState(get());
+  },
+
   setUiPanelOpen(panel, open) {
     set((state) => ({
       uiPanels: {
@@ -878,9 +934,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const selectedPaths = [...new Set(result.filePaths)];
     set((state) => {
       const existingFolderIdsByPath = new Map(
-        state.folders
-          .filter((folder): folder is WorkspaceFolder & { path: string } => folder.kind === "real" && typeof folder.path === "string")
-          .map((folder) => [folder.path, folder.id]),
+        state.folders.map((folder) => [folder.path, folder.id]),
       );
       const existingSelectedFolderIds = selectedPaths
         .map((path) => existingFolderIdsByPath.get(path))
@@ -891,7 +945,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           id: generateFolderId(path),
           name: buildFolderName(path),
           path,
-          kind: "real" as const,
         }));
 
       if (createdFolders.length === 0 && existingSelectedFolderIds.length === 0) {
@@ -929,18 +982,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   removeFolder(folderId) {
     set((state) => {
       const folderToRemove = state.folders.find((folder) => folder.id === folderId);
-      if (!folderToRemove || folderToRemove.kind !== "real") {
+      if (!folderToRemove) {
         return state;
       }
       const nextFolders = state.folders.filter((folder) => folder.id !== folderId);
-      const fallbackFolderId =
-        resolveFallbackFolderId(nextFolders, state.activeFolderId) ??
-        state.folders[0]?.id ??
-        "mock-erduo-skills";
+      const fallbackFolderId = resolveFallbackFolderId(nextFolders, state.activeFolderId);
+      const nextFolderIdSet = new Set(nextFolders.map((folder) => folder.id));
       const nextAssignments: Record<string, string> = {};
       for (const [sessionId, assignedFolderId] of Object.entries(state.folderAssignments)) {
-        nextAssignments[sessionId] =
-          assignedFolderId === folderId ? fallbackFolderId : assignedFolderId;
+        if (assignedFolderId !== folderId && nextFolderIdSet.has(assignedFolderId)) {
+          nextAssignments[sessionId] = assignedFolderId;
+        }
       }
       const nextOpenFolders = ensureOpenFolderMap(nextFolders, state.openFolderIds);
       return {
@@ -1114,6 +1166,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     const sessionId =
       typeof event.payload.sessionId === "string" ? event.payload.sessionId : null;
+    const fallbackSessionId =
+      event.type === "run.tool_started" || event.type === "run.tool_finished"
+        ? get().selectedSessionId
+        : null;
+    const targetSessionId = sessionId ?? fallbackSessionId;
     const runId = typeof event.payload.runId === "string" ? event.payload.runId : "";
 
     if (event.type === "run.delta" && sessionId) {
@@ -1156,15 +1213,32 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       });
     }
 
-    if (event.type === "run.tool_started" && sessionId) {
+    if (event.type === "run.tool_requested" && sessionId) {
+      const mode = get().permissionModeBySession[sessionId] ?? "default";
+      const requiresApproval = event.payload.requiresApproval === true;
+      const toolCallId =
+        typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+      if (mode === "full-access" && requiresApproval && toolCallId) {
+        try {
+          await invokeRunner("tool.approve", {
+            toolCallId,
+            decision: "approved",
+          });
+        } catch {
+          // Ignore auto-approve failures and let manual approval UI handle it.
+        }
+      }
+    }
+
+    if (event.type === "run.tool_started" && targetSessionId) {
       const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
       const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
       if (toolCallId) {
         set((state) => ({
           activeToolsBySession: {
             ...state.activeToolsBySession,
-            [sessionId]: [
-              ...(state.activeToolsBySession[sessionId] ?? []),
+            [targetSessionId]: [
+              ...(state.activeToolsBySession[targetSessionId] ?? []),
               { toolCallId, toolName },
             ],
           },
@@ -1172,13 +1246,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       }
     }
 
-    if (event.type === "run.tool_finished" && sessionId) {
+    if (event.type === "run.tool_finished" && targetSessionId) {
       const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
       if (toolCallId) {
         set((state) => ({
           activeToolsBySession: {
             ...state.activeToolsBySession,
-            [sessionId]: (state.activeToolsBySession[sessionId] ?? []).filter(
+            [targetSessionId]: (state.activeToolsBySession[targetSessionId] ?? []).filter(
               (t) => t.toolCallId !== toolCallId,
             ),
           },

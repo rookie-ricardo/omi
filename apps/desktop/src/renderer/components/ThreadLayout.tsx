@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowUp,
@@ -20,9 +20,11 @@ import {
   Box,
   Bug,
   Gauge,
+  Shield,
+  ShieldAlert,
 } from "lucide-react";
 
-import { formatProviderConfigLabel, useWorkspaceStore } from "../store/workspace-store";
+import { useWorkspaceStore } from "../store/workspace-store";
 
 interface ThreadLayoutProps {
   title?: React.ReactNode;
@@ -50,12 +52,15 @@ export default function ThreadLayout({
   const uiPanels = useWorkspaceStore((state) => state.uiPanels);
   const setComposerInput = useWorkspaceStore((state) => state.setComposerInput);
   const sendPrompt = useWorkspaceStore((state) => state.sendPrompt);
+  const sendPromptText = useWorkspaceStore((state) => state.sendPromptText);
   const cancelRun = useWorkspaceStore((state) => state.cancelRun);
   const streamingBySession = useWorkspaceStore((state) => state.streamingBySession);
   const openComposerFileDialog = useWorkspaceStore((state) => state.openComposerFileDialog);
   const removeSelectedFile = useWorkspaceStore((state) => state.removeSelectedFile);
   const clearSelectedFiles = useWorkspaceStore((state) => state.clearSelectedFiles);
   const setReasoningLevel = useWorkspaceStore((state) => state.setReasoningLevel);
+  const permissionModeBySession = useWorkspaceStore((state) => state.permissionModeBySession);
+  const setPermissionMode = useWorkspaceStore((state) => state.setPermissionMode);
   const switchModel = useWorkspaceStore((state) => state.switchModel);
   const setUiPanelOpen = useWorkspaceStore((state) => state.setUiPanelOpen);
   const closeAllPanels = useWorkspaceStore((state) => state.closeAllPanels);
@@ -67,6 +72,10 @@ export default function ThreadLayout({
   const commitRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLDivElement>(null);
   const reasoningRef = useRef<HTMLDivElement>(null);
+  const branchRef = useRef<HTMLDivElement>(null);
+  const permissionRef = useRef<HTMLDivElement>(null);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
 
   const providerConfigs = modelCatalog?.providerConfigs ?? [];
   const currentRuntime = selectedSessionId
@@ -77,7 +86,7 @@ export default function ThreadLayout({
   const selectedProvider =
     providerConfigs.find((config) => config.id === selectedProviderId) ?? providerConfigs[0];
   const selectedModelLabel = selectedProvider
-    ? formatProviderConfigLabel(selectedProvider)
+    ? selectedProvider.model
     : "未配置模型";
 
   const pendingApprovalCount =
@@ -89,6 +98,12 @@ export default function ThreadLayout({
   const unstagedCount =
     gitState?.files.filter((file) => file.unstaged).length ?? 0;
   const branchLabel = gitState?.branch ?? "non-git";
+  const branchOptions = gitState?.branches ?? [];
+  const canSwitchBranch = Boolean(selectedSessionId && gitState?.hasRepository && branchOptions.length > 0);
+  const permissionMode = selectedSessionId
+    ? permissionModeBySession[selectedSessionId] ?? "default"
+    : "default";
+  const permissionLabel = permissionMode === "full-access" ? "完全访问权限" : "默认权限";
   const isStreaming = Boolean(
     selectedSessionId && streamingBySession[selectedSessionId],
   );
@@ -129,7 +144,15 @@ export default function ThreadLayout({
       if (reasoningRef.current?.contains(event.target as Node)) {
         return;
       }
+      if (branchRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      if (permissionRef.current?.contains(event.target as Node)) {
+        return;
+      }
       closeAllPanels();
+      setBranchMenuOpen(false);
+      setPermissionMenuOpen(false);
     }
     document.addEventListener("mousedown", onPointerDown);
     return () => {
@@ -141,6 +164,8 @@ export default function ThreadLayout({
     function onEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         closeAllPanels();
+        setBranchMenuOpen(false);
+        setPermissionMenuOpen(false);
       }
     }
     window.addEventListener("keydown", onEscape);
@@ -151,6 +176,18 @@ export default function ThreadLayout({
 
   async function handleSend() {
     const sessionId = await sendPrompt();
+    if (sessionId && onSendSuccess) {
+      onSendSuccess(sessionId);
+    }
+  }
+
+  async function handleBranchSwitch(branch: string) {
+    if (!branch || branch === branchLabel) {
+      setBranchMenuOpen(false);
+      return;
+    }
+    const sessionId = await sendPromptText(`切换分支 checkout ${branch}`);
+    setBranchMenuOpen(false);
     if (sessionId && onSendSuccess) {
       onSendSuccess(sessionId);
     }
@@ -346,7 +383,7 @@ export default function ThreadLayout({
                           选择模型
                         </div>
                         {providerConfigs.map((config) => {
-                          const label = formatProviderConfigLabel(config);
+                          const label = config.model;
                           const active = selectedProviderId === config.id;
                           return (
                             <button
@@ -358,14 +395,17 @@ export default function ThreadLayout({
                                 setUiPanelOpen("modelMenuOpen", false);
                               }}
                             >
-                              <span
-                                className={
-                                  active
-                                    ? "text-blue-500 dark:text-blue-400 font-medium"
-                                    : "text-gray-700 dark:text-gray-200"
-                                }
-                              >
-                                {label}
+                              <span className="flex items-center gap-2 min-w-0">
+                                <ProtocolIcon protocol={config.protocol} />
+                                <span
+                                  className={`truncate ${
+                                    active
+                                      ? "text-blue-500 dark:text-blue-400 font-medium"
+                                      : "text-gray-700 dark:text-gray-200"
+                                  }`}
+                                >
+                                  {label}
+                                </span>
                               </span>
                               {active ? (
                                 <Check size={14} className="text-blue-500 dark:text-blue-400" />
@@ -460,16 +500,114 @@ export default function ThreadLayout({
                     <span>本地</span>
                     <ChevronDown size={12} />
                   </div>
-                  <div className="flex items-center gap-1 text-orange-500 dark:text-orange-400 cursor-pointer hover:text-orange-600 dark:hover:text-orange-300 transition-colors font-medium">
-                    <AlertCircle size={14} />
-                    <span>完全访问权限</span>
-                    <ChevronDown size={12} />
+                  <div className="relative" ref={permissionRef}>
+                    <button
+                      type="button"
+                      className={`flex items-center gap-1 transition-colors font-medium ${
+                        permissionMode === "full-access"
+                          ? "text-orange-500 dark:text-orange-400 hover:text-orange-600 dark:hover:text-orange-300"
+                          : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+                      }`}
+                      onClick={() => {
+                        setPermissionMenuOpen((value) => !value);
+                        setBranchMenuOpen(false);
+                      }}
+                    >
+                      {permissionMode === "full-access" ? (
+                        <AlertCircle size={14} />
+                      ) : (
+                        <Shield size={14} />
+                      )}
+                      <span>{permissionLabel}</span>
+                      <ChevronDown size={12} />
+                    </button>
+                    {permissionMenuOpen ? (
+                      <div className="absolute bottom-full left-0 mb-2 w-44 bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg border border-gray-100 dark:border-white/10 py-1.5 z-50">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-white/5 flex items-center justify-between transition-colors"
+                          onClick={() => {
+                            setPermissionMode("default");
+                            setPermissionMenuOpen(false);
+                          }}
+                        >
+                          <span className="flex items-center gap-2 text-gray-700 dark:text-gray-200">
+                            <Shield size={14} className="text-gray-500 dark:text-gray-400" />
+                            默认权限
+                          </span>
+                          {permissionMode === "default" ? (
+                            <Check size={14} className="text-blue-500 dark:text-blue-400" />
+                          ) : null}
+                        </button>
+                        <button
+                          type="button"
+                          className="w-full px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-white/5 flex items-center justify-between transition-colors"
+                          onClick={() => {
+                            setPermissionMode("full-access");
+                            setPermissionMenuOpen(false);
+                          }}
+                        >
+                          <span className="flex items-center gap-2 text-gray-700 dark:text-gray-200">
+                            <ShieldAlert size={14} className="text-orange-500 dark:text-orange-400" />
+                            完全访问权限
+                          </span>
+                          {permissionMode === "full-access" ? (
+                            <Check size={14} className="text-blue-500 dark:text-blue-400" />
+                          ) : null}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200 transition-colors">
-                  <GitBranch size={14} />
-                  <span>{branchLabel}</span>
-                  <ChevronDown size={12} />
+                <div className="relative" ref={branchRef}>
+                  <button
+                    type="button"
+                    disabled={!canSwitchBranch}
+                    className={`flex items-center gap-1 transition-colors ${
+                      canSwitchBranch
+                        ? "cursor-pointer hover:text-gray-800 dark:hover:text-gray-200"
+                        : "cursor-default opacity-70"
+                    }`}
+                    onClick={() => {
+                      if (!canSwitchBranch) {
+                        return;
+                      }
+                      setBranchMenuOpen((value) => !value);
+                      setPermissionMenuOpen(false);
+                    }}
+                  >
+                    <GitBranch size={14} />
+                    <span>{branchLabel}</span>
+                    <ChevronDown size={12} />
+                  </button>
+                  {branchMenuOpen ? (
+                    <div className="absolute bottom-full right-0 mb-2 w-52 bg-white dark:bg-[#2a2a2a] rounded-xl shadow-lg border border-gray-100 dark:border-white/10 py-1.5 z-50 max-h-64 overflow-y-auto custom-scrollbar">
+                      {branchOptions.map((branch) => {
+                        const active = branch === branchLabel;
+                        return (
+                          <button
+                            type="button"
+                            key={branch}
+                            className="w-full px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-white/5 flex items-center justify-between transition-colors"
+                            onClick={() => void handleBranchSwitch(branch)}
+                          >
+                            <span
+                              className={
+                                active
+                                  ? "text-blue-500 dark:text-blue-400 font-medium"
+                                  : "text-gray-700 dark:text-gray-200"
+                              }
+                            >
+                              {branch}
+                            </span>
+                            {active ? (
+                              <Check size={14} className="text-blue-500 dark:text-blue-400" />
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -519,5 +657,30 @@ function HeaderMenuItem({ label }: { label: string }) {
     >
       <span>{label}</span>
     </button>
+  );
+}
+
+function ProtocolIcon({
+  protocol,
+}: {
+  protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
+}) {
+  if (protocol === "anthropic-messages") {
+    return (
+      <span
+        className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] bg-[#D6C5A4] text-[10px] font-semibold text-[#1D1D1D]"
+        aria-hidden
+      >
+        A
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex h-4 w-4 items-center justify-center rounded-[3px] bg-[#0F172A] text-[10px] font-semibold text-white"
+      aria-hidden
+    >
+      O
+    </span>
   );
 }

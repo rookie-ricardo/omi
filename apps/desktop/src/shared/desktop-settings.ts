@@ -1,4 +1,5 @@
 export type DesktopReasoningLevel = "低" | "中" | "高" | "超高";
+export type DesktopPermissionMode = "default" | "full-access";
 
 export interface DesktopUiFolder {
   id: string;
@@ -13,6 +14,7 @@ export interface DesktopUiState {
   activeFolderId: string | null;
   selectedSessionId: string | null;
   reasoningBySession: Record<string, DesktopReasoningLevel>;
+  permissionModeBySession: Record<string, DesktopPermissionMode>;
   renamedSessionIds: Record<string, boolean>;
 }
 
@@ -44,6 +46,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
     activeFolderId: null,
     selectedSessionId: null,
     reasoningBySession: {},
+    permissionModeBySession: {},
     renamedSessionIds: {},
   },
   windowState: {
@@ -73,6 +76,17 @@ function ensureRecordBoolean(input: unknown): Record<string, boolean> {
   const result: Record<string, boolean> = {};
   for (const [key, value] of Object.entries(input)) {
     if (typeof value === "boolean") {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function ensurePermissionModeRecord(input: unknown): Record<string, DesktopPermissionMode> {
+  const raw = ensureRecordString(input);
+  const result: Record<string, DesktopPermissionMode> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === "default" || value === "full-access") {
       result[key] = value;
     }
   }
@@ -126,6 +140,7 @@ export function normalizeDesktopSettings(raw: unknown): DesktopSettings {
       activeFolderId: typeof uiStateRaw.activeFolderId === "string" ? uiStateRaw.activeFolderId : null,
       selectedSessionId: typeof uiStateRaw.selectedSessionId === "string" ? uiStateRaw.selectedSessionId : null,
       reasoningBySession,
+      permissionModeBySession: ensurePermissionModeRecord(uiStateRaw.permissionModeBySession),
       renamedSessionIds: ensureRecordBoolean(uiStateRaw.renamedSessionIds),
     },
     windowState: {

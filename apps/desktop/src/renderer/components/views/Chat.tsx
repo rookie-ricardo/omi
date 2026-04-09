@@ -119,7 +119,7 @@ export default function Chat() {
         <div className="max-w-3xl mx-auto space-y-6">
           {!selectedSessionId ? (
             <EmptyState label="选择左侧线程，或在新线程页输入提示开始构建。" />
-          ) : messages.length === 0 && !streamingContent && !isStreaming ? (
+          ) : messages.length === 0 && !streamingContent && !isStreaming && !errorMessage ? (
             <EmptyState label="当前线程还没有消息，输入提示后会在这里实时显示。" />
           ) : (
             <>
@@ -135,33 +135,22 @@ export default function Chat() {
                 ),
               )}
 
-              {isStreaming && !streamingContent ? (
-                <div className="flex justify-start">
-                  <div className="flex items-center gap-1.5 px-4 py-3">
-                    <span className="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:0ms]" />
-                    <span className="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:150ms]" />
-                    <span className="w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 animate-bounce [animation-delay:300ms]" />
-                  </div>
-                </div>
-              ) : null}
+              {isStreaming && !streamingContent ? <ThinkingIndicator /> : null}
 
               {streamingContent ? (
                 <div className="flex justify-start">
-                  <div className="bg-white dark:bg-[#252525] border border-gray-200 dark:border-white/10 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] text-[15px] leading-relaxed text-gray-800 dark:text-gray-200">
+                  <div className="max-w-[88%] rounded-[24px] border border-gray-200/90 dark:border-white/10 bg-white/95 dark:bg-[#252525] px-5 py-3 text-[15px] leading-relaxed text-gray-800 dark:text-gray-200 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
                     <MarkdownRenderer content={streamingContent} />
                     <span className="inline-block ml-1 w-2 h-4 align-middle bg-gray-400 dark:bg-gray-500 animate-pulse" />
                   </div>
                 </div>
               ) : null}
+
+              {errorMessage && !isStreaming ? (
+                <AssistantErrorBubble message={errorMessage} />
+              ) : null}
             </>
           )}
-
-          {errorMessage && !isStreaming ? (
-            <div className="rounded-xl border border-red-200 dark:border-red-400/20 bg-red-50 dark:bg-red-500/10 px-4 py-3 flex items-center gap-2">
-              <AlertCircle size={16} className="text-red-500 dark:text-red-400 flex-shrink-0" />
-              <span className="text-sm text-red-700 dark:text-red-300">{errorMessage}</span>
-            </div>
-          ) : null}
 
           {pendingToolCalls.length > 0 ? (
             <ToolApprovalSection
@@ -178,6 +167,31 @@ export default function Chat() {
   );
 }
 
+function ThinkingIndicator() {
+  return (
+    <div className="flex justify-start">
+      <div className="relative overflow-hidden rounded-[20px] border border-gray-200/90 dark:border-white/10 bg-white/95 dark:bg-[#252525] px-4 py-2.5 text-sm font-medium text-gray-500 dark:text-gray-300 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        <span className="relative z-10">Thinking</span>
+        <span className="pointer-events-none absolute inset-0 thinking-shimmer" />
+      </div>
+    </div>
+  );
+}
+
+function AssistantErrorBubble({ message }: { message: string }) {
+  return (
+    <div className="flex justify-start">
+      <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-400/20 rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%] text-[15px] leading-relaxed text-red-700 dark:text-red-300">
+        <div className="flex items-center gap-2">
+          <AlertCircle size={16} className="text-red-500 dark:text-red-400 flex-shrink-0" />
+          <span>运行失败</span>
+        </div>
+        <div className="mt-1 whitespace-pre-wrap break-words">{message}</div>
+      </div>
+    </div>
+  );
+}
+
 function EmptyState({ label }: { label: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-gray-300 dark:border-white/10 px-5 py-4 text-sm text-gray-500 dark:text-gray-400">
@@ -188,13 +202,14 @@ function EmptyState({ label }: { label: string }) {
 
 function MessageBubble({ message }: { message: SessionMessage }) {
   const [copied, setCopied] = useState(false);
-  const sendPrompt = useWorkspaceStore((state) => state.sendPrompt);
-  const setComposerInput = useWorkspaceStore((state) => state.setComposerInput);
+  const sendPromptText = useWorkspaceStore((state) => state.sendPromptText);
+  const gitState = useWorkspaceStore((state) => state.gitState);
+  const canUndo = (gitState?.files.length ?? 0) > 0;
 
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="bg-gray-100 dark:bg-[#2a2a2a] rounded-2xl rounded-tr-sm px-4 py-3 max-w-[80%] text-[15px] text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
+        <div className="max-w-[80%] rounded-[26px] bg-gray-100 dark:bg-[#2a2a2a] px-5 py-2.5 text-[15px] text-gray-800 dark:text-gray-200 whitespace-pre-wrap shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
           {message.content}
         </div>
       </div>
@@ -208,36 +223,37 @@ function MessageBubble({ message }: { message: SessionMessage }) {
   }
 
   function handleUndo() {
-    setComposerInput("撤销上一条回复中的所有文件改动，恢复到改动之前的状态");
-    void sendPrompt();
+    void sendPromptText("撤销上一条回复中的所有文件改动，恢复到改动之前的状态");
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <MarkdownRenderer
-        content={message.content}
-        className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed"
-      />
-      {message.role === "assistant" ? (
-        <div className="flex items-center gap-2 mt-1">
+    <div className="group flex flex-col items-start gap-2">
+      <div className="max-w-[88%] rounded-[24px] border border-gray-200/90 dark:border-white/10 bg-white/95 dark:bg-[#252525] px-5 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        <MarkdownRenderer
+          content={message.content}
+          className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed"
+        />
+      </div>
+      <div className="flex items-center gap-2 pl-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        {canUndo ? (
           <button
             onClick={handleUndo}
-            className="px-3 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] hover:bg-gray-200 dark:hover:bg-[#333333] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1 transition-colors"
+            className="px-2.5 py-1 text-xs bg-gray-100/85 dark:bg-[#2a2a2a]/85 hover:bg-gray-200 dark:hover:bg-[#333333] rounded-md text-gray-600 dark:text-gray-300 flex items-center gap-1 transition-colors"
           >
-            <Undo size={14} /> 撤销
+            <Undo size={12} /> 撤销
           </button>
-          <button
-            onClick={handleCopy}
-            className="px-3 py-1.5 bg-gray-100 dark:bg-[#2a2a2a] hover:bg-gray-200 dark:hover:bg-[#333333] rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 transition-colors"
-          >
-            {copied ? (
-              <><Check size={14} className="inline mr-1" />已复制</>
-            ) : (
-              <><Copy size={14} className="inline mr-1" />复制</>
-            )}
-          </button>
-        </div>
-      ) : null}
+        ) : null}
+        <button
+          onClick={handleCopy}
+          className="px-2.5 py-1 text-xs bg-gray-100/85 dark:bg-[#2a2a2a]/85 hover:bg-gray-200 dark:hover:bg-[#333333] rounded-md text-gray-600 dark:text-gray-300 transition-colors"
+        >
+          {copied ? (
+            <><Check size={12} className="inline mr-1" />已复制</>
+          ) : (
+            <><Copy size={12} className="inline mr-1" />复制</>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

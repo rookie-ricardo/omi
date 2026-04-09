@@ -167,6 +167,7 @@ function createGatewayMock(): {
       hasRepository: true,
       root: "/Users/zhangyanqi/IdeaProjects/omi",
       branch: "main",
+      branches: ["main"],
       files: [],
     },
     modelCatalog: {
@@ -184,6 +185,7 @@ function createGatewayMock(): {
       activeFolderId: null,
       selectedSessionId: null,
       reasoningBySession: {},
+      permissionModeBySession: {},
       renamedSessionIds: {},
     },
     windowState: {
@@ -314,18 +316,19 @@ describe("workspace store", () => {
     useDiagnosticsStore.getState().clearLogs();
   });
 
-  it("initializes mock folders and supports add/remove real folders with reassignment", async () => {
+  it("starts without mock folders and supports add/remove folders with reassignment", async () => {
     const { gateway } = createGatewayMock();
     setRunnerGatewayForTests(gateway);
 
     await useWorkspaceStore.getState().initialize();
     const initialState = useWorkspaceStore.getState();
-    expect(initialState.folders.some((folder) => folder.kind === "mock")).toBe(true);
+    expect(initialState.folders).toHaveLength(0);
 
     await useWorkspaceStore.getState().addFolderFromDialog();
     const withRealFolder = useWorkspaceStore.getState();
-    const realFolder = withRealFolder.folders.find((folder) => folder.kind === "real");
+    const realFolder = withRealFolder.folders[0];
     expect(realFolder).toBeDefined();
+    expect(Object.keys(withRealFolder.folderAssignments)).toHaveLength(0);
 
     const sessionId = withRealFolder.sessions[0]?.id;
     if (!sessionId || !realFolder) {
@@ -421,6 +424,10 @@ describe("workspace store", () => {
     expect(sessionId).toBeTruthy();
     expect(getCalls().some((call) => call.method === "session.create")).toBe(true);
     expect(getCalls().some((call) => call.method === "run.start")).toBe(true);
+    if (!sessionId) {
+      throw new Error("expected sessionId");
+    }
+    expect(useWorkspaceStore.getState().streamingBySession[sessionId]).toBeDefined();
 
     await useWorkspaceStore.getState().approveToolCall("tool_1");
     expect(
@@ -510,19 +517,24 @@ describe("workspace store", () => {
 
     await useWorkspaceStore.getState().initialize();
     await useWorkspaceStore.getState().addFolderFromDialog();
-    const created = useWorkspaceStore
-      .getState()
-      .folders.find((folder) => folder.kind === "real");
+    const created = useWorkspaceStore.getState().folders[0];
     if (!created) {
       throw new Error("expected a created folder");
     }
 
-    useWorkspaceStore.getState().setActiveFolder("mock-erduo-skills");
-    setDialogPaths(["/Users/zhangyanqi/Documents/demo-folder"]);
+    setDialogPaths(["/Users/zhangyanqi/Documents/another-folder"]);
+    await useWorkspaceStore.getState().addFolderFromDialog();
+    const second = useWorkspaceStore.getState().folders.find((folder) => folder.id !== created.id);
+    if (!second) {
+      throw new Error("expected a second created folder");
+    }
+    useWorkspaceStore.getState().setActiveFolder(second.id);
+
+    setDialogPaths([created.path]);
     await useWorkspaceStore.getState().addFolderFromDialog();
 
     const state = useWorkspaceStore.getState();
-    expect(state.folders.filter((folder) => folder.kind === "real")).toHaveLength(1);
+    expect(state.folders).toHaveLength(2);
     expect(state.activeFolderId).toBe(created.id);
     expect(state.openFolderIds[created.id]).toBe(true);
   });

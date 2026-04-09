@@ -23,6 +23,15 @@ body {
   cursor: default;
 }
 
+@keyframes thinkingShimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
+  }
+}
+
 input,
 textarea,
 [contenteditable="true"] {
@@ -53,5 +62,24 @@ textarea,
 
   .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background-color: #525252;
+  }
+
+  .thinking-shimmer {
+    background: linear-gradient(
+      110deg,
+      transparent 25%,
+      rgba(148, 163, 184, 0.36) 50%,
+      transparent 75%
+    );
+    animation: thinkingShimmer 1.6s linear infinite;
+  }
+
+  .dark .thinking-shimmer {
+    background: linear-gradient(
+      110deg,
+      transparent 25%,
+      rgba(255, 255, 255, 0.22) 50%,
+      transparent 75%
+    );
   }
 }
