@@ -561,9 +561,39 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const runId = typeof run?.id === "string" ? run.id : `local-${Date.now()}`;
     const clearComposer = options?.clearComposer === true;
 
+    const optimisticMessage: SessionMessage = {
+      id: `optimistic-${Date.now()}`,
+      sessionId,
+      role: "user",
+      content: prompt,
+      createdAt: new Date().toISOString(),
+    };
+
     set((state) => {
       const nextErrors = { ...state.errorBySession };
       delete nextErrors[sessionId];
+      const existingDetail = state.sessionDetailsById[sessionId];
+      const nextDetails = {
+        ...state.sessionDetailsById,
+        [sessionId]: existingDetail
+          ? {
+              ...existingDetail,
+              messages: [...existingDetail.messages, optimisticMessage],
+            }
+          : {
+              session: state.sessions.find((s) => s.id === sessionId) ?? {
+                id: sessionId,
+                title: "",
+                status: "running" as const,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                latestUserMessage: prompt,
+                latestAssistantMessage: null,
+              },
+              messages: [optimisticMessage],
+              tasks: [],
+            },
+      };
       return {
         ...(clearComposer
           ? {
@@ -576,6 +606,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
             }
           : {}),
         errorBySession: nextErrors,
+        sessionDetailsById: nextDetails,
         streamingBySession: {
           ...state.streamingBySession,
           [sessionId]: {
@@ -586,7 +617,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       };
     });
 
-    await Promise.all([get().loadSessions(), get().refreshSession(sessionId), get().loadGitStatus()]);
+    await Promise.all([get().loadSessions(), get().loadGitStatus()]);
     return sessionId;
   },
 
@@ -644,31 +675,39 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     ]);
 
     const firstUserPrompt = firstUserMessage(detail.messages);
-    set((state) => ({
-      sessionDetailsById: {
-        ...state.sessionDetailsById,
-        [sessionId]: detail,
-      },
-      sessionRuntimeById: {
-        ...state.sessionRuntimeById,
-        [sessionId]: runtime.runtime,
-      },
-      pendingToolCallsBySession: {
-        ...state.pendingToolCallsBySession,
-        [sessionId]: pendingTools.pendingToolCalls,
-      },
-      toolCallsBySession: {
-        ...state.toolCallsBySession,
-        [sessionId]: allTools.toolCalls,
-      },
-      firstUserMessageBySession: {
-        ...state.firstUserMessageBySession,
-        [sessionId]: firstUserPrompt,
-      },
-      sessions: state.sessions.map((session) =>
-        session.id === detail.session.id ? detail.session : session,
-      ),
-    }));
+    const hasActiveRun = Boolean(runtime.runtime.activeRunId);
+    set((state) => {
+      const nextStreaming = { ...state.streamingBySession };
+      if (!hasActiveRun && nextStreaming[sessionId]) {
+        delete nextStreaming[sessionId];
+      }
+      return {
+        sessionDetailsById: {
+          ...state.sessionDetailsById,
+          [sessionId]: detail,
+        },
+        sessionRuntimeById: {
+          ...state.sessionRuntimeById,
+          [sessionId]: runtime.runtime,
+        },
+        pendingToolCallsBySession: {
+          ...state.pendingToolCallsBySession,
+          [sessionId]: pendingTools.pendingToolCalls,
+        },
+        toolCallsBySession: {
+          ...state.toolCallsBySession,
+          [sessionId]: allTools.toolCalls,
+        },
+        firstUserMessageBySession: {
+          ...state.firstUserMessageBySession,
+          [sessionId]: firstUserPrompt,
+        },
+        streamingBySession: nextStreaming,
+        sessions: state.sessions.map((session) =>
+          session.id === detail.session.id ? detail.session : session,
+        ),
+      };
+    });
   },
 
   async refreshSelectedSession() {
@@ -916,9 +955,22 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const sessionId = get().selectedSessionId;
     if (!sessionId) return;
     const runtime = get().sessionRuntimeById[sessionId];
-    const activeRunId = runtime?.activeRunId;
+    const streamingRunId = get().streamingBySession[sessionId]?.runId;
+    const activeRunId = runtime?.activeRunId ?? streamingRunId;
     if (!activeRunId) return;
-    await invokeRunner("run.cancel", { runId: activeRunId });
+
+    set((state) => {
+      const nextStreaming = { ...state.streamingBySession };
+      delete nextStreaming[sessionId];
+      return { streamingBySession: nextStreaming };
+    });
+
+    try {
+      await invokeRunner("run.cancel", { runId: activeRunId });
+    } catch {
+      // Cancel may fail if the run already completed; streaming state is already cleared.
+    }
+    await get().refreshSession(sessionId);
   },
 
   async addFolderFromDialog() {
