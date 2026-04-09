@@ -372,7 +372,7 @@ export class AgentSession {
 
     this.provider.cancel(runId);
     this.activeQueryEngine?.cancel();
-    this.options.database.updateRun(runId, { status: "canceled" });
+    this.options.database.updateRun(runId, { status: "canceled", terminalReason: "canceled" });
     this.options.runtime.cancelRun(runId);
 
     this.emitAndPersist(runId, run.sessionId, {
@@ -534,10 +534,24 @@ export class AgentSession {
 
     this.options.database.updateRun(runId, {
       status: canceled ? "canceled" : "failed",
+      terminalReason: canceled ? "canceled" : message,
     });
 
     this.options.database.updateSession(sessionId, {
       status: nextSessionStatus(input.session.status, canceled ? "run_canceled" : "run_failed"),
+    });
+
+    const branchId =
+      this.options.database.getActiveBranchId(sessionId) ??
+      this.options.database.listBranches(sessionId).at(-1)?.id ??
+      null;
+    this.options.database.addMessage({
+      sessionId,
+      role: "user",
+      content: input.prompt,
+      parentHistoryEntryId: input.historyEntryId,
+      branchId,
+      originRunId: runId,
     });
 
     this.options.runtime.failRun(runId);
@@ -766,6 +780,7 @@ export class AgentSession {
       id: currentConfig.id,
       name: currentConfig.name,
       type: currentConfig.type,
+      protocol: currentConfig.protocol,
       baseUrl: currentConfig.baseUrl,
       apiKey: currentConfig.apiKey,
       model: modelId,
