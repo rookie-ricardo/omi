@@ -1,13 +1,24 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
-import { BrowserWindow, Menu, app, ipcMain, dialog } from "electron";
+import { BrowserWindow, Menu, app, ipcMain, dialog, shell, type BrowserWindowConstructorOptions } from "electron";
 
 import { type commandMap } from "@omi/protocol";
+import {
+  type DesktopSettings,
+  type DesktopSettingsPatch,
+  DEFAULT_DESKTOP_SETTINGS,
+  mergeDesktopSettings,
+  normalizeDesktopSettings,
+} from "../shared/desktop-settings";
 
 let mainWindow: BrowserWindow | null = null;
 let runner: ChildProcess | null = null;
+let desktopSettingsCache: DesktopSettings | null = null;
+let windowStatePersistTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingRequests = new Map<
   string,
   { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -39,10 +50,116 @@ function getWorkspaceRoot() {
   return resolve(app.getAppPath(), "../..");
 }
 
+function getOmiDir(): string {
+  const envDir = process.env.OMI_DIR;
+  if (!envDir) {
+    return join(homedir(), ".omi");
+  }
+  if (envDir === "~") {
+    return homedir();
+  }
+  if (envDir.startsWith("~/")) {
+    return join(homedir(), envDir.slice(2));
+  }
+  return envDir;
+}
+
+function getDesktopSettingsPath() {
+  return join(getOmiDir(), "desktop", "settings.json");
+}
+
+function getLegacyDesktopSettingsPath() {
+  return join(app.getPath("userData"), "settings.json");
+}
+
+function ensureDesktopSettingsMigrated(): void {
+  const nextPath = getDesktopSettingsPath();
+  if (existsSync(nextPath)) {
+    return;
+  }
+
+  const legacyPath = getLegacyDesktopSettingsPath();
+  if (!existsSync(legacyPath)) {
+    return;
+  }
+
+  mkdirSync(dirname(nextPath), { recursive: true });
+  try {
+    renameSync(legacyPath, nextPath);
+  } catch {
+    const raw = readFileSync(legacyPath, "utf8");
+    writeFileSync(nextPath, raw, "utf8");
+  }
+}
+
+function readDesktopSettingsFromDisk(): DesktopSettings {
+  ensureDesktopSettingsMigrated();
+  try {
+    const raw = readFileSync(getDesktopSettingsPath(), "utf8");
+    return normalizeDesktopSettings(JSON.parse(raw));
+  } catch {
+    return structuredClone(DEFAULT_DESKTOP_SETTINGS);
+  }
+}
+
+function persistDesktopSettings(settings: DesktopSettings): void {
+  const path = getDesktopSettingsPath();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
+  desktopSettingsCache = settings;
+}
+
+function getDesktopSettings(): DesktopSettings {
+  if (!desktopSettingsCache) {
+    desktopSettingsCache = readDesktopSettingsFromDisk();
+  }
+  return structuredClone(desktopSettingsCache);
+}
+
+function patchDesktopSettings(patch: DesktopSettingsPatch): DesktopSettings {
+  const current = getDesktopSettings();
+  const next = mergeDesktopSettings(current, patch);
+  persistDesktopSettings(next);
+  return structuredClone(next);
+}
+
+function persistCurrentWindowState(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  try {
+    const bounds = mainWindow.getBounds();
+    patchDesktopSettings({
+      windowState: {
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
+        maximized: mainWindow.isMaximized(),
+      },
+    });
+  } catch (error) {
+    console.error("[desktop-settings] failed to persist window state", error);
+  }
+}
+
+function scheduleWindowStatePersist(): void {
+  if (windowStatePersistTimer) {
+    clearTimeout(windowStatePersistTimer);
+  }
+  windowStatePersistTimer = setTimeout(() => {
+    persistCurrentWindowState();
+  }, 200);
+}
+
 function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1160,
-    height: 800,
+  const settings = getDesktopSettings();
+  const windowState = settings.windowState;
+  const browserWindowOptions: BrowserWindowConstructorOptions = {
+    width: windowState.width,
+    height: windowState.height,
+    ...(typeof windowState.x === "number" ? { x: windowState.x } : {}),
+    ...(typeof windowState.y === "number" ? { y: windowState.y } : {}),
     minWidth: 840,
     minHeight: 640,
     backgroundColor: "#00000000",
@@ -57,6 +174,19 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
     },
+  };
+
+  mainWindow = new BrowserWindow(browserWindowOptions);
+  if (windowState.maximized) {
+    mainWindow.maximize();
+  }
+
+  mainWindow.on("resize", scheduleWindowStatePersist);
+  mainWindow.on("move", scheduleWindowStatePersist);
+  mainWindow.on("maximize", scheduleWindowStatePersist);
+  mainWindow.on("unmaximize", scheduleWindowStatePersist);
+  mainWindow.on("close", () => {
+    persistCurrentWindowState();
   });
 
   startRunner();
@@ -175,6 +305,19 @@ app.whenReady().then(() => {
     async (_event, method: keyof typeof commandMap, params: unknown) =>
       invokeRunner(method, (params ?? {}) as Record<string, unknown>),
   );
+  ipcMain.handle("desktop:settings.get", () => getDesktopSettings());
+  ipcMain.handle("desktop:settings.patch", (_event, patch: DesktopSettingsPatch) =>
+    patchDesktopSettings(patch ?? {}),
+  );
+  ipcMain.handle("desktop:openInFinder", async (_event, targetPath: string) => {
+    if (typeof targetPath !== "string" || !targetPath.trim()) {
+      return;
+    }
+    const errorMessage = await shell.openPath(targetPath);
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
+  });
 
   ipcMain.handle("dialog:showOpenDialog", async (_event, options) => {
     if (!mainWindow) return { canceled: true, filePaths: [] };
@@ -198,6 +341,11 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  if (windowStatePersistTimer) {
+    clearTimeout(windowStatePersistTimer);
+    windowStatePersistTimer = null;
+  }
+  persistCurrentWindowState();
   runner?.kill();
 });
 
@@ -211,6 +359,15 @@ function buildApplicationMenu() {
       { role: "unhide" },
       { type: "separator" },
       { role: "quit" },
+    ]},
+    { label: "Edit", submenu: [
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "selectAll" },
     ]},
     { label: "View", submenu: [
       { label: "诊断", accelerator: "Cmd+Shift+L", click: () => navigateRenderer("diagnostics") },

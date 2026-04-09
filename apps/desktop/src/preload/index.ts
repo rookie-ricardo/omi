@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRendererEvent, OpenDialogOptions } from "electron";
 
 import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/protocol";
+import type { DesktopSettings, DesktopSettingsPatch } from "../shared/desktop-settings";
 
 contextBridge.exposeInMainWorld("omi", {
   invoke<TResult = unknown, TName extends RunnerCommandName = RunnerCommandName>(
@@ -17,6 +18,15 @@ contextBridge.exposeInMainWorld("omi", {
   },
   showOpenDialog(options: OpenDialogOptions) {
     return ipcRenderer.invoke("dialog:showOpenDialog", options);
+  },
+  getDesktopSettings() {
+    return ipcRenderer.invoke("desktop:settings.get") as Promise<DesktopSettings>;
+  },
+  patchDesktopSettings(patch: DesktopSettingsPatch) {
+    return ipcRenderer.invoke("desktop:settings.patch", patch) as Promise<DesktopSettings>;
+  },
+  openInFinder(targetPath: string) {
+    return ipcRenderer.invoke("desktop:openInFinder", targetPath) as Promise<void>;
   },
   onMenuNavigate(callback: (view: string) => void) {
     const handler = (_event: IpcRendererEvent, view: string) => callback(view);
