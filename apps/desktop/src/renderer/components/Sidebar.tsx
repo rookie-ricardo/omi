@@ -19,7 +19,7 @@ import {
   PanelLeft,
   Pencil,
   Pin,
-  SquarePen,
+  Plus,
   Sun,
   X,
 } from "lucide-react";
@@ -237,6 +237,11 @@ export default function Sidebar({
                 onToggleOpen={() => toggleFolder(folder.id)}
                 onActivate={() => setActiveFolder(folder.id)}
                 onOpenInFinder={() => openFolderInFinder(folder.path)}
+                onNewThread={() => {
+                  setActiveFolder(folder.id);
+                  beginNewThread();
+                  setCurrentView("chat");
+                }}
                 onRemove={() => removeFolder(folder.id)}
               >
                 {folderSessions.length === 0 ? (
@@ -324,6 +329,7 @@ function FolderGroup({
   onToggleOpen,
   onActivate,
   onOpenInFinder,
+  onNewThread,
   onRemove,
   children,
 }: {
@@ -333,6 +339,7 @@ function FolderGroup({
   onToggleOpen: () => void;
   onActivate: () => void;
   onOpenInFinder: () => void;
+  onNewThread: () => void;
   onRemove: () => void;
   children: React.ReactNode;
 }) {
@@ -356,9 +363,7 @@ function FolderGroup({
   return (
     <div className="flex flex-col relative">
       <div
-        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer text-gray-700 dark:text-gray-300 group transition-colors ${
-          active ? "bg-gray-200/60 dark:bg-gray-700/60" : "hover:bg-gray-200/50 dark:hover:bg-gray-700/50"
-        }`}
+        className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer text-gray-700 dark:text-gray-300 group transition-colors hover:bg-gray-200/50 dark:hover:bg-gray-700/50"
         onClick={() => {
           onActivate();
           onToggleOpen();
@@ -385,10 +390,10 @@ function FolderGroup({
             className="p-1 hover:bg-gray-300/50 dark:hover:bg-gray-600/50 rounded text-gray-500 dark:text-gray-400"
             onClick={(event) => {
               event.stopPropagation();
-              setMenuOpen((value) => !value);
+              onNewThread();
             }}
           >
-            <SquarePen size={14} />
+            <Plus size={14} />
           </div>
         </div>
       </div>
