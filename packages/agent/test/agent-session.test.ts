@@ -33,6 +33,60 @@ import {
 } from "../src/index";
 
 describe("agent session", () => {
+  it("persists user prompt before provider returns", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Persist prompt early");
+    const runtime = new SessionManager().getOrCreate(session.id);
+    const providerConfig = database.upsertProviderConfig(makeProviderConfig());
+    runtime.setSelectedProviderConfig(providerConfig.id);
+    let releaseProvider!: () => void;
+    const providerGate = new Promise<void>((resolve) => {
+      releaseProvider = resolve;
+    });
+    const provider = {
+      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
+        await providerGate;
+        return {
+          assistantText: "done",
+          assistantMessage: null,
+          stopReason: "end_turn" as const,
+          toolCalls: [],
+          usage: { inputTokens: 0, outputTokens: 0 },
+          error: null,
+        };
+      },
+      cancel() {},
+    };
+
+    const agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: () => {},
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+    });
+
+    const run = agentSession.startRun({
+      prompt: "persist me immediately",
+      providerConfig,
+      taskId: null,
+    });
+
+    await waitFor(() =>
+      database
+        .listMessages(session.id)
+        .some((message) => message.role === "user" && message.content === "persist me immediately"),
+    );
+
+    expect(database.getRun(run.id)?.status).toBe("running");
+    expect(database.getRun(run.id)?.status).not.toBe("completed");
+
+    releaseProvider();
+    await waitFor(() => database.getRun(run.id)?.status === "completed");
+  });
+
   it("persists user prompt when run fails before execution starts", async () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Pre-exec failure");

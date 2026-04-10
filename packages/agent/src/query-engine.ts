@@ -991,6 +991,19 @@ export class QueryEngine {
       latestUserMessage: input.prompt,
     });
 
+    const branchId =
+      this.deps.database.getActiveBranchId(input.session.id) ??
+      this.deps.database.listBranches(input.session.id).at(-1)?.id ??
+      null;
+    this.deps.database.addMessage({
+      sessionId: input.session.id,
+      role: "user",
+      content: input.prompt,
+      parentHistoryEntryId: input.historyEntryId,
+      branchId,
+      originRunId: input.run.id,
+    });
+
     this.deps.runtime.beginRun(input.run.id, input.prompt);
 
     this.emitEvent({
@@ -1126,15 +1139,6 @@ export class QueryEngine {
       this.deps.database.getActiveBranchId(sessionId) ??
       this.deps.database.listBranches(sessionId).at(-1)?.id ??
       null;
-
-    this.deps.database.addMessage({
-      sessionId,
-      role: "user",
-      content: input.prompt,
-      parentHistoryEntryId: input.historyEntryId,
-      branchId,
-      originRunId: runId,
-    });
 
     if (assistantText) {
       this.deps.database.addMessage({

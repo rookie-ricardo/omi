@@ -560,18 +560,11 @@ export class AgentSession {
     this.options.database.updateSession(sessionId, {
       status: nextSessionStatus(input.session.status, canceled ? "run_canceled" : "run_failed"),
     });
-
-    const branchId =
-      this.options.database.getActiveBranchId(sessionId) ??
-      this.options.database.listBranches(sessionId).at(-1)?.id ??
-      null;
-    this.options.database.addMessage({
+    this.ensureUserPromptPersisted({
       sessionId,
-      role: "user",
-      content: input.prompt,
-      parentHistoryEntryId: input.historyEntryId,
-      branchId,
-      originRunId: runId,
+      runId,
+      prompt: input.prompt,
+      historyEntryId: input.historyEntryId,
     });
 
     this.options.runtime.failRun(runId);
@@ -601,6 +594,51 @@ export class AgentSession {
         detail: message,
       });
     }
+  }
+
+  private ensureUserPromptPersisted(input: {
+    sessionId: string;
+    runId: string;
+    prompt: string;
+    historyEntryId: string | null;
+  }): void {
+    const historyEntries = this.options.database.listSessionHistoryEntries?.(input.sessionId) ?? [];
+    const runMessageIds = new Set(
+      historyEntries
+        .filter(
+          (entry) =>
+            entry.kind === "message" &&
+            entry.originRunId === input.runId &&
+            Boolean(entry.messageId),
+        )
+        .map((entry) => entry.messageId as string),
+    );
+
+    if (runMessageIds.size > 0) {
+      const messages = this.options.database.listMessages(input.sessionId);
+      const hasRunUserMessage = messages.some(
+        (message) =>
+          runMessageIds.has(message.id) &&
+          message.role === "user" &&
+          message.content === input.prompt,
+      );
+      if (hasRunUserMessage) {
+        return;
+      }
+    }
+
+    const branchId =
+      this.options.database.getActiveBranchId(input.sessionId) ??
+      this.options.database.listBranches(input.sessionId).at(-1)?.id ??
+      null;
+    this.options.database.addMessage({
+      sessionId: input.sessionId,
+      role: "user",
+      content: input.prompt,
+      parentHistoryEntryId: input.historyEntryId,
+      branchId,
+      originRunId: input.runId,
+    });
   }
 
   private emitAndPersist(runId: string, sessionId: string, envelope: RunnerEventEnvelope): void {
