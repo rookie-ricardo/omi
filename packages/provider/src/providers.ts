@@ -1,4 +1,8 @@
 import type { Message } from "@mariozechner/pi-ai";
+import type {
+  Options as ClaudeAgentSdkOptions,
+  SDKMessage as ClaudeAgentSdkMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 
 import type { OmiTool, ThinkingLevel, ProviderConfig } from "@omi/core";
 
@@ -36,6 +40,17 @@ export interface ProviderRunInput {
   toolExecutionMode?: "sequential" | "parallel";
   convertToLlm?: (messages: Message[]) => Message[];
   onTextDelta?: (delta: string) => void;
+  /**
+   * Claude Agent SDK specific options.
+   * This is only applied when provider runtime resolves to Claude Agent SDK.
+   */
+  claudeOptions?: ClaudeAgentSdkOptions;
+  /**
+   * Raw SDK message callback (Claude runtime only).
+   * Used to surface advanced runtime events (task progress, prompt suggestions,
+   * rate limit, auth status, hook events, etc.) to upper orchestration layers.
+   */
+  onSdkMessage?: (message: ClaudeAgentSdkMessage) => void | Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -71,6 +86,7 @@ export interface ProviderRunResult {
   stopReason: ModelStopReason;
   usage: ModelUsage;
   error: string | null;
+  structuredOutput?: unknown;
 }
 
 // Standard thinking levels

@@ -96,6 +96,11 @@ export interface Settings {
   autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
   showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
   markdown?: MarkdownSettings;
+  /**
+   * Additional Claude Agent SDK options merged into anthropic runtime calls.
+   * This is a pass-through object for advanced SDK features.
+   */
+  claudeAgentSdk?: Record<string, unknown>;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -592,6 +597,14 @@ export class SettingsManager {
 
   getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
     return this.settings.defaultThinkingLevel;
+  }
+
+  getClaudeAgentSdkOptions(): Record<string, unknown> | undefined {
+    const value = this.settings.claudeAgentSdk;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    return structuredClone(value);
   }
 
   setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {

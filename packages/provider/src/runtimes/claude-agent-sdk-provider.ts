@@ -1,4 +1,10 @@
-import { createSdkMcpServer, query, tool as createClaudeMcpTool } from "@anthropic-ai/claude-agent-sdk";
+import {
+  createSdkMcpServer,
+  query,
+  tool as createClaudeMcpTool,
+  type Options as ClaudeAgentSdkOptions,
+  type SDKMessage as ClaudeAgentSdkMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import type {
@@ -23,6 +29,10 @@ interface ClaudeAgentSdkDeps {
 const DEFAULT_DEPS: ClaudeAgentSdkDeps = {
   query,
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 function collectDeltaText(event: unknown): string {
   if (typeof event !== "object" || event === null) {
@@ -94,6 +104,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     let usage: ModelUsage = { inputTokens: 0, outputTokens: 0 };
     let stopReason: ModelStopReason = "end_turn";
     let error: string | null = null;
+    let structuredOutput: unknown = undefined;
     let toolCallCounter = 0;
     const emitToolLifecycle = async (
       event: Omit<Parameters<NonNullable<ProviderRunInput["onToolLifecycle"]>>[0], "runId" | "sessionId">,
@@ -218,28 +229,45 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       tools: mcpTools,
     });
 
+    const requestedOptions = (isRecord(input.claudeOptions) ? input.claudeOptions : {}) as ClaudeAgentSdkOptions;
+    const requestedEnv = requestedOptions.env ?? {};
+    const env = {
+      ...process.env,
+      ...requestedEnv,
+      ANTHROPIC_API_KEY: input.providerConfig.apiKey,
+      ANTHROPIC_BASE_URL:
+        input.providerConfig.baseUrl?.trim().length
+          ? input.providerConfig.baseUrl
+          : (requestedEnv.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL),
+    };
+    const options: ClaudeAgentSdkOptions = {
+      ...requestedOptions,
+      cwd: input.workspaceRoot,
+      model: input.providerConfig.model,
+      systemPrompt: input.systemPrompt ?? requestedOptions.systemPrompt,
+      maxTurns: requestedOptions.maxTurns ?? 20,
+      tools: requestedOptions.tools ?? [],
+      mcpServers: {
+        ...(requestedOptions.mcpServers ?? {}),
+        omi: mcpServer,
+      },
+      abortController,
+      env,
+    };
+
     const queryStream = this.deps.query({
       prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
-      options: {
-        cwd: input.workspaceRoot,
-        model: input.providerConfig.model,
-        systemPrompt: input.systemPrompt,
-        maxTurns: 20,
-        tools: [],
-        mcpServers: {
-          omi: mcpServer,
-        },
-        abortController,
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: input.providerConfig.apiKey,
-          ANTHROPIC_BASE_URL: input.providerConfig.baseUrl || process.env.ANTHROPIC_BASE_URL,
-        },
-      },
+      options,
     });
 
     try {
       for await (const message of queryStream) {
+        try {
+          await input.onSdkMessage?.(message as ClaudeAgentSdkMessage);
+        } catch {
+          // SDK message observers must be fail-open to avoid interrupting the run.
+        }
+
         if (message.type === "stream_event") {
           const delta = collectDeltaText(message.event);
           if (delta.length > 0) {
@@ -267,6 +295,11 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
               error = "SDK loop ended with unresolved tool_use stop reason.";
             }
           }
+
+          if (message.subtype === "success" && "structured_output" in message) {
+            structuredOutput = (message as Record<string, unknown>).structured_output;
+          }
+
           if (typeof (message as Record<string, unknown>).result === "string") {
             fallbackAssistantText += String((message as Record<string, unknown>).result);
           }
@@ -305,6 +338,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       stopReason,
       usage,
       error,
+      structuredOutput,
     };
   }
 

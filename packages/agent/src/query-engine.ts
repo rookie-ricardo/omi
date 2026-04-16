@@ -181,6 +181,8 @@ const DEFAULT_RETRY_SETTINGS: RetrySettings = {
   maxDelayMs: DEFAULT_RECOVERY_SETTINGS.maxDelayMs,
 };
 
+const HOOK_MESSAGE_SUBTYPES = new Set(["hook_started", "hook_progress", "hook_response"]);
+
 export function resolveToolExecutionMode(
   enabledTools: ToolName[] | undefined,
 ): ToolExecutionMode {
@@ -683,10 +685,28 @@ export class QueryEngine {
           payload: { runId: input.run.id, sessionId: input.session.id, delta },
         });
       },
+      claudeOptions: this.resolveClaudeOptions(providerConfig) as Parameters<ProviderAdapter["run"]>[0]["claudeOptions"],
+      onSdkMessage: async (message) => {
+        await this.handleProviderSdkMessage({
+          input,
+          message,
+        });
+      },
     });
 
     if (!result) {
       throw new Error(`Run ${input.run.id} did not produce a result.`);
+    }
+
+    if (typeof result.structuredOutput !== "undefined") {
+      this.emitEvent({
+        type: "run.structured_output",
+        payload: {
+          runId: input.run.id,
+          sessionId: input.session.id,
+          structuredOutput: result.structuredOutput,
+        },
+      });
     }
 
     // Check if run was canceled in DB during the call
@@ -695,6 +715,83 @@ export class QueryEngine {
     }
 
     return result;
+  }
+
+  private resolveClaudeOptions(providerConfig: ProviderConfig): Record<string, unknown> | undefined {
+    if (providerConfig.protocol !== "anthropic-messages") {
+      return undefined;
+    }
+    const options = this.deps.settingsManager?.getClaudeAgentSdkOptions?.();
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      return undefined;
+    }
+    return options;
+  }
+
+  private async handleProviderSdkMessage(params: {
+    input: QueryEngineRunInput;
+    message: unknown;
+  }): Promise<void> {
+    const { input, message } = params;
+    if (!isRecord(message) || typeof message.type !== "string") {
+      return;
+    }
+
+    const runId = input.run.id;
+    const sessionId = input.session.id;
+    const messageType = message.type;
+    const subtype = typeof message.subtype === "string" ? message.subtype : null;
+
+    if (messageType === "prompt_suggestion") {
+      this.emitEvent({
+        type: "run.prompt_suggestion",
+        payload: {
+          runId,
+          sessionId,
+          suggestion: typeof message.suggestion === "string" ? message.suggestion : "",
+          raw: message,
+        },
+      });
+      return;
+    }
+
+    if (messageType === "rate_limit_event") {
+      this.emitEvent({
+        type: "run.rate_limit",
+        payload: {
+          runId,
+          sessionId,
+          raw: message,
+        },
+      });
+      return;
+    }
+
+    if (messageType === "auth_status") {
+      this.emitEvent({
+        type: "run.auth_status",
+        payload: {
+          runId,
+          sessionId,
+          isAuthenticating: Boolean(message.isAuthenticating),
+          error: typeof message.error === "string" ? message.error : null,
+          raw: message,
+        },
+      });
+      return;
+    }
+
+    if (messageType === "system" && subtype && HOOK_MESSAGE_SUBTYPES.has(subtype)) {
+      this.emitEvent({
+        type: "run.hook",
+        payload: {
+          runId,
+          sessionId,
+          subtype,
+          raw: message,
+        },
+      });
+    }
   }
 
   // ==========================================================================
@@ -1845,6 +1942,10 @@ function formatContextFilePrompt(contextFiles?: string[]): string {
     ...normalizedPaths.map((entry) => `- ${entry}`),
     "Prioritize these paths when deciding what to read or edit.",
   ].join("\n");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 // ==========================================================================

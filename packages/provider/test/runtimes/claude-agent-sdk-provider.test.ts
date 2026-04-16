@@ -168,4 +168,71 @@ describe("ClaudeAgentSdkProvider", () => {
     expect(result.error).toContain("model failed");
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("passes through claude options and forwards sdk messages", async () => {
+    const closeSpy = vi.fn();
+    const onSdkMessage = vi.fn();
+    const querySpy = vi.fn(({ options }: any) => ({
+      close: closeSpy,
+      [Symbol.asyncIterator]: async function* () {
+        yield { type: "prompt_suggestion", suggestion: "continue with integration tests" };
+        yield {
+          type: "result",
+          subtype: "success",
+          stop_reason: "end_turn",
+          result: "done",
+          usage: {
+            input_tokens: 3,
+            output_tokens: 5,
+          },
+          structured_output: {
+            status: "ok",
+          },
+        };
+      },
+    }));
+
+    const provider = new ClaudeAgentSdkProvider({
+      query: querySpy as any,
+    });
+
+    const result = await provider.run({
+      runId: "run_3",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "emit suggestion",
+      historyMessages: [],
+      providerConfig: makeConfig(),
+      tools: [],
+      claudeOptions: {
+        includeHookEvents: true,
+        promptSuggestions: true,
+        maxTurns: 9,
+        env: {
+          CLAUDE_AGENT_SDK_CLIENT_APP: "omi-test/1.0.0",
+        },
+      } as any,
+      onSdkMessage,
+    });
+
+    expect(querySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          maxTurns: 9,
+          includeHookEvents: true,
+          promptSuggestions: true,
+          env: expect.objectContaining({
+            CLAUDE_AGENT_SDK_CLIENT_APP: "omi-test/1.0.0",
+            ANTHROPIC_API_KEY: "test-key",
+          }),
+          mcpServers: expect.objectContaining({
+            omi: expect.any(Object),
+          }),
+        }),
+      }),
+    );
+    expect(onSdkMessage).toHaveBeenCalledTimes(2);
+    expect(result.structuredOutput).toEqual({ status: "ok" });
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
 });
