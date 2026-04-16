@@ -6,7 +6,7 @@ import { createId } from "@omi/core";
 import { type RpcRequest, rpcRequestSchema } from "@omi/protocol";
 
 import { normalizeResult } from "./protocol";
-import { collectRunEventDeliveries, handleRunnerRequest } from "./request-handler";
+import { collectRunEventDeliveries, handleRunnerRequest, RunnerCommandError } from "./request-handler";
 import { assertWorkspaceDistFreshness } from "./dist-guard";
 
 // ---------------------------------------------------------------------------
@@ -87,6 +87,9 @@ process.on("message", async (message) => {
     });
   } catch (error) {
     logger.errorWithError("Runner message handler error", error);
+    const errorCode = error instanceof RunnerCommandError
+      ? error.code
+      : "RUNNER_ERROR";
     process.send?.({
       id:
         typeof message === "object" && message && "id" in message
@@ -94,7 +97,7 @@ process.on("message", async (message) => {
           : createId("rpc"),
       ok: false,
       error: {
-        code: "RUNNER_ERROR",
+        code: errorCode,
         message: error instanceof Error ? error.message : String(error),
       },
     });

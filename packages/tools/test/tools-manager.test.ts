@@ -104,6 +104,11 @@ describe("tools-manager", () => {
     });
 
     it("当工具已存在时返回路径（不下载）", async () => {
+      // 避免在缺少 fd 的环境里触发下载分支导致超时
+      if (getToolPath("fd") === null) {
+        process.env.OMI_OFFLINE = "1";
+      }
+
       // 使用 silent 模式避免控制台输出
       const result = await ensureTool("fd", true);
       // 如果系统已有 fd，应该返回路径或命令名

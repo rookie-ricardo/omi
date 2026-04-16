@@ -469,6 +469,175 @@ describe("orchestrator", () => {
     });
   });
 
+  it("keeps /plan prompt unchanged for anthropic runtime", () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Plan passthrough");
+    database.upsertProviderConfig({
+      name: "anthropic",
+      url: "",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "test-anthropic-key",
+      model: "claude-sonnet-4-20250514",
+    });
+
+    const startRun = vi.fn(() => ({
+      id: "run_plan_passthrough",
+      sessionId: session.id,
+      taskId: null,
+      status: "queued",
+      provider: "anthropic",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    } satisfies Run));
+    const fakeAgentSession = {
+      startRun,
+      cancelRun: vi.fn(),
+      approveTool: vi.fn(),
+      rejectTool: vi.fn(),
+      retryRun: vi.fn(),
+      resumeRun: vi.fn(),
+      setPermissionMode: vi.fn(),
+      setWorkspaceRoot: vi.fn(),
+    } as unknown as AgentSession;
+    const orchestrator = new AppOrchestrator(
+      database,
+      process.cwd(),
+      () => {},
+      undefined,
+      new SessionManager(),
+      undefined,
+      () => fakeAgentSession,
+    );
+
+    orchestrator.startRun({
+      sessionId: session.id,
+      taskId: null,
+      prompt: "/plan refactor runtime routing",
+    });
+
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "/plan refactor runtime routing",
+      }),
+    );
+  });
+
+  it("rewrites /plan prompt to plan-only mode for openai runtime", () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Plan downgrade");
+    database.upsertProviderConfig({
+      name: "openai",
+      url: "",
+      protocol: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-openai-key",
+      model: "gpt-4.1-mini",
+    });
+
+    const startRun = vi.fn(() => ({
+      id: "run_plan_downgrade",
+      sessionId: session.id,
+      taskId: null,
+      status: "queued",
+      provider: "openai",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    } satisfies Run));
+    const fakeAgentSession = {
+      startRun,
+      cancelRun: vi.fn(),
+      approveTool: vi.fn(),
+      rejectTool: vi.fn(),
+      retryRun: vi.fn(),
+      resumeRun: vi.fn(),
+      setPermissionMode: vi.fn(),
+      setWorkspaceRoot: vi.fn(),
+    } as unknown as AgentSession;
+    const orchestrator = new AppOrchestrator(
+      database,
+      process.cwd(),
+      () => {},
+      undefined,
+      new SessionManager(),
+      undefined,
+      () => fakeAgentSession,
+    );
+
+    orchestrator.startRun({
+      sessionId: session.id,
+      taskId: null,
+      prompt: "/plan refactor runtime routing",
+    });
+
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("Plan-only mode."),
+      }),
+    );
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("User request: refactor runtime routing"),
+      }),
+    );
+  });
+
+  it("uses a default planning target when /plan has no body on openai runtime", () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Plan default");
+    database.upsertProviderConfig({
+      name: "openai",
+      url: "",
+      protocol: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-openai-key",
+      model: "gpt-4.1-mini",
+    });
+
+    const startRun = vi.fn(() => ({
+      id: "run_plan_default",
+      sessionId: session.id,
+      taskId: null,
+      status: "queued",
+      provider: "openai",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    } satisfies Run));
+    const fakeAgentSession = {
+      startRun,
+      cancelRun: vi.fn(),
+      approveTool: vi.fn(),
+      rejectTool: vi.fn(),
+      retryRun: vi.fn(),
+      resumeRun: vi.fn(),
+      setPermissionMode: vi.fn(),
+      setWorkspaceRoot: vi.fn(),
+    } as unknown as AgentSession;
+    const orchestrator = new AppOrchestrator(
+      database,
+      process.cwd(),
+      () => {},
+      undefined,
+      new SessionManager(),
+      undefined,
+      () => fakeAgentSession,
+    );
+
+    orchestrator.startRun({
+      sessionId: session.id,
+      taskId: null,
+      prompt: "/plan",
+    });
+
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining(
+          "User request: Analyze the current task and provide an implementation plan.",
+        ),
+      }),
+    );
+  });
+
   it("switches the runtime provider config for future runs", () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Model switch");

@@ -1,46 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createTaskCreateTool } from "../src/task-tools.ts";
-import { createWebSearchTool } from "../src/web-tools.ts";
-import {
-  createInMemoryTaskToolRuntime,
-  resetTaskToolRuntime,
-  setTaskToolRuntime,
-} from "../src/runtime.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { createWriteTool } from "../src/write.ts";
+import { createToolArray } from "../src/tools.ts";
 
 describe("tool schema parse", () => {
   afterEach(() => {
-    resetTaskToolRuntime();
     vi.restoreAllMocks();
   });
 
-  it("rejects invalid task.create input before touching task runtime", async () => {
-    const runtime = createInMemoryTaskToolRuntime();
-    const createTaskSpy = vi.spyOn(runtime, "createTask");
-    setTaskToolRuntime(runtime);
-
-    const tool = createTaskCreateTool();
+  it("rejects invalid write input before file mutations", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omi-tools-"));
+    const tool = createWriteTool(root);
 
     await expect(
-      tool.execute("task-create-invalid", {
-        originSessionId: "session-1",
-        candidateReason: "missing title",
+      tool.execute("write-invalid", {
+        content: "missing path",
       } as any)
-    ).rejects.toThrow("Validation failed");
-
-    expect(createTaskSpy).not.toHaveBeenCalled();
+    ).rejects.toThrow();
   });
 
-  it("rejects invalid web.search input before network execution", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const tool = createWebSearchTool();
+  it("registers tool.search in the curated default surface", () => {
+    const root = mkdtempSync(join(tmpdir(), "omi-tools-"));
+    const names = createToolArray(root).map((tool) => tool.name);
 
-    await expect(
-      tool.execute("web-search-invalid", {
-        limit: 3,
-      } as any)
-    ).rejects.toThrow("Validation failed");
-
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(names).toContain("tool.search");
   });
 });

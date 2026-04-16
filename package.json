@@ -11,6 +11,7 @@
     "format": "biome check . --write",
     "ws15:gate": "tsx scripts/ws15-gate.ts",
     "ws15:matrix": "tsx scripts/ws15-gate.ts --matrix-only",
+    "docs:check-protocol": "tsx scripts/check-protocol-docs.ts",
     "lint": "biome check .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"

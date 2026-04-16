@@ -1219,28 +1219,28 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           uiPanels: { ...state.uiPanels, slashMenuOpen: false, reasoningMenuOpen: true },
         }));
         break;
-      case "compact": {
-        const sessionId = get().selectedSessionId;
-        if (sessionId) {
-          set((state) => ({
-            composerInput: "",
-            uiPanels: { ...state.uiPanels, slashMenuOpen: false },
-          }));
-          await invokeRunner("session.compact", { sessionId });
-          await get().refreshSession(sessionId);
-        }
-        break;
-      }
       case "计划模式":
       case "plan": {
+        set((state) => ({
+          composerInput: "",
+          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+        }));
+        await get().sendPromptText("/plan", { clearComposer: true });
+        break;
+      }
+      case "compact": {
         const sessionId = get().selectedSessionId;
+        set((state) => ({
+          composerInput: "",
+          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+        }));
         if (sessionId) {
           set((state) => ({
-            composerInput: "",
-            uiPanels: { ...state.uiPanels, slashMenuOpen: false },
+            errorBySession: {
+              ...state.errorBySession,
+              [sessionId]: "命令 /compact 已下线，请使用 /plan 或直接描述需求。",
+            },
           }));
-          await invokeRunner("session.mode.enter", { sessionId, mode: "plan" });
-          await get().refreshSession(sessionId);
         }
         break;
       }

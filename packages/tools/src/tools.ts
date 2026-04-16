@@ -6,8 +6,6 @@ import {
   getBuiltInToolDefinitions,
   isBuiltInTool as isBuiltInToolFromRegistry,
 } from "./builtins";
-import { createEnterWorktreeTool } from "./enter-worktree/index.js";
-import { createExitWorktreeTool } from "./exit-worktree/index.js";
 import { executeWithStructuredOutput } from "./registry";
 
 export type ApprovalPolicy = "always" | "safe";
@@ -48,10 +46,8 @@ export function listBuiltInToolNames(): ToolName[] {
  * Returns a Record mapping tool names to OmiTool instances.
  */
 export function createAllTools(cwd: string, sessionId?: string): Record<string, OmiTool> {
-  const tools = createBuiltInToolMap(cwd);
-  tools.enter_worktree = createEnterWorktreeTool(cwd, sessionId ?? "") as OmiTool;
-  tools.exit_worktree = createExitWorktreeTool(sessionId ?? "") as OmiTool;
-  return tools;
+  void sessionId;
+  return createBuiltInToolMap(cwd);
 }
 
 /**

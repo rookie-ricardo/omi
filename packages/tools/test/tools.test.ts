@@ -11,7 +11,6 @@ describe("tools", () => {
     expect(requiresApproval("write")).toBe(true);
     expect(requiresApproval("edit")).toBe(true);
     expect(requiresApproval("notebook_edit")).toBe(true);
-    expect(requiresApproval("plan.enter")).toBe(true);
     expect(requiresApproval("bash")).toBe(true);
     expect(requiresApproval("read")).toBe(false);
     expect(requiresApproval("grep")).toBe(false);
@@ -25,11 +24,7 @@ describe("tools", () => {
     expect(isBuiltInTool("ls")).toBe(true);
     expect(isBuiltInTool("grep")).toBe(true);
     expect(isBuiltInTool("glob")).toBe(true);
-    expect(isBuiltInTool("plan.enter")).toBe(true);
-    expect(isBuiltInTool("subagent.spawn")).toBe(true);
-    expect(isBuiltInTool("subagent.list")).toBe(true);
-    expect(isBuiltInTool("subagent.get")).toBe(true);
-    expect(isBuiltInTool("subagent.delegate")).toBe(true);
+    expect(isBuiltInTool("tool.search")).toBe(true);
     expect(isBuiltInTool("unknown_tool")).toBe(false);
   });
 
@@ -38,53 +33,14 @@ describe("tools", () => {
     const tools = createAllTools(root);
     expect(Object.keys(tools)).toEqual([
       "read",
+      "ls",
+      "grep",
+      "glob",
       "bash",
       "edit",
       "notebook_edit",
       "write",
-      "ls",
-      "grep",
-      "glob",
-      "plan.enter",
-      "plan.exit",
-      "mcp.resource.list",
-      "mcp.resource.read",
-      "mcp.prompt.list",
-      "mcp.prompt.eval",
-      "subagent.spawn",
-      "subagent.send",
-      "subagent.wait",
-      "subagent.close",
-      "subagent.list",
-      "subagent.get",
-      "subagent.delegate",
-      "task.create",
-      "task.update",
-      "task.get",
-      "task.list",
-      "task.stop",
-      "task.output",
-      "web.fetch",
-      "web.search",
       "tool.search",
-      "ask_user",
-      "todo.write",
-      "todo.read",
-      "config.read",
-      "config.write",
-      "discover_skills",
-      "bash_background",
-      "monitor",
-      "team.create",
-      "team.delete",
-      "web.browser",
-      "skill",
-      "cron.create",
-      "cron.delete",
-      "cron.list",
-      "remote_trigger",
-      "enter_worktree",
-      "exit_worktree",
     ]);
     for (const tool of Object.values(tools)) {
       expect(tool.name).toBeTruthy();

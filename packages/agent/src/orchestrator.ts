@@ -353,11 +353,12 @@ export class AppOrchestrator {
       throw new Error(`Session ${input.sessionId} not found`);
     }
 
+    const providerConfig = this.resolveProviderConfigForSession(session.id);
     const run = this.getConfiguredAgentSession(session.id).startRun({
       taskId: input.taskId,
-      prompt: input.prompt,
+      prompt: transformPlanPromptForRuntime(input.prompt, providerConfig.protocol),
       contextFiles: input.contextFiles,
-      providerConfig: this.resolveProviderConfigForSession(session.id),
+      providerConfig,
     });
 
     logger.info("Run started", {
@@ -384,13 +385,14 @@ export class AppOrchestrator {
       throw new Error(`Session ${input.sessionId} not found`);
     }
 
+    const providerConfig = this.resolveProviderConfigForSession(session.id);
     return this.getConfiguredAgentSession(session.id).continueFromHistoryEntry({
       taskId: input.taskId,
-      prompt: input.prompt,
+      prompt: transformPlanPromptForRuntime(input.prompt, providerConfig.protocol),
       historyEntryId: input.historyEntryId ?? null,
       checkpointSummary: input.checkpointSummary ?? null,
       checkpointDetails: input.checkpointDetails ?? null,
-      providerConfig: this.resolveProviderConfigForSession(session.id),
+      providerConfig,
     });
   }
 
@@ -611,6 +613,36 @@ export class AppOrchestrator {
   private listToolCallsBySession(sessionId: string): ToolCall[] {
     return this.database.listToolCallsBySession(sessionId);
   }
+}
+
+function transformPlanPromptForRuntime(
+  prompt: string,
+  protocol: ProviderConfig["protocol"],
+): string {
+  const trimmed = prompt.trim();
+  if (!trimmed.startsWith("/plan")) {
+    return prompt;
+  }
+
+  if (protocol === "anthropic-messages") {
+    return prompt;
+  }
+
+  const body = trimmed.slice("/plan".length).trim();
+  const target = body.length > 0 ? body : "Analyze the current task and provide an implementation plan.";
+
+  return [
+    "Plan-only mode.",
+    "Generate a concrete implementation plan and do not propose executing actions.",
+    "Do not write code, do not run commands, and do not claim work is completed.",
+    "Output sections exactly as:",
+    "1) Goal",
+    "2) Scope",
+    "3) Step-by-step Plan",
+    "4) Risks",
+    "",
+    `User request: ${target}`,
+  ].join("\\n");
 }
 
 function nextTaskStatus(
