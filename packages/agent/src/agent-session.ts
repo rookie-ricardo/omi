@@ -51,6 +51,7 @@ import {
 // Import QueryEngine for state machine-based execution
 import {
   QueryEngine,
+  type QueryEngineEvent,
   type QueryEngineRunInput,
   type QueryEngineResult,
   nextSessionStatus as queryNextSessionStatus,
@@ -66,6 +67,8 @@ export interface RunnerEventEnvelope {
   payload: Record<string, unknown>;
 }
 
+export type SessionPermissionMode = "default" | "full-access";
+
 export interface AgentSessionOptions {
   database: AppStore;
   sessionId: string;
@@ -78,6 +81,7 @@ export interface AgentSessionOptions {
   settingsManager?: SettingsManager;
   /** Permission evaluator for rule-based access control. */
   evaluator?: PermissionEvaluator;
+  permissionMode?: SessionPermissionMode;
   /** Optional per-run tool runtime context (MCP/SubAgent/Task). */
   toolRuntimeContext?: ToolRuntimeContext;
 }
@@ -87,6 +91,7 @@ interface ExecuteRunInput {
   task: Task | null;
   run: Run;
   prompt: string;
+  contextFiles: string[];
   images?: ImageContent[];
   providerConfig: ProviderConfig;
   historyEntryId: string | null;
@@ -99,20 +104,41 @@ type FailedRunInput = Pick<
   "session" | "task" | "run" | "prompt" | "historyEntryId"
 >;
 
+function normalizeRunnerPayload(event: QueryEngineEvent): Record<string, unknown> {
+  if ("payload" in event && typeof event.payload === "object" && event.payload !== null) {
+    return event.payload as Record<string, unknown>;
+  }
+  const { type: _type, ...rest } = event as unknown as Record<string, unknown>;
+  return rest;
+}
+
 export class AgentSession {
   private readonly provider: ProviderAdapter;
   private processingQueue = false;
-  private readonly evaluator: PermissionEvaluator;
+  private readonly evaluatorOverride: PermissionEvaluator | null;
   private readonly denialTracker = new MemoryDenialTracker();
   private activeQueryEngine: QueryEngine | null = null;
+  private permissionMode: SessionPermissionMode;
+  private workspaceRoot: string;
 
   constructor(private readonly options: AgentSessionOptions) {
     this.provider = options.provider ?? new PiAiProvider();
-    this.evaluator = options.evaluator ?? createPermissionEvaluator().withDenialTracker(this.denialTracker).build();
+    this.evaluatorOverride = options.evaluator ?? null;
+    this.permissionMode = options.permissionMode ?? "default";
+    this.workspaceRoot = options.workspaceRoot;
+  }
+
+  setPermissionMode(mode: SessionPermissionMode): void {
+    this.permissionMode = mode;
+  }
+
+  setWorkspaceRoot(workspaceRoot: string): void {
+    this.workspaceRoot = workspaceRoot;
   }
 
   startRun(input: {
     prompt: string;
+    contextFiles?: string[];
     providerConfig: ProviderConfig;
     taskId?: string | null;
   }): Run {
@@ -130,9 +156,13 @@ export class AgentSession {
       resumeFromCheckpoint: null,
       terminalReason: null,
     });
+    const contextFiles = Array.isArray(input.contextFiles)
+      ? [...new Set(input.contextFiles.map((entry) => entry.trim()).filter((entry) => entry.length > 0))]
+      : [];
     this.options.runtime.enqueueRun({
       runId: run.id,
       prompt: input.prompt,
+      ...(contextFiles.length > 0 ? { contextFiles } : {}),
       taskId: task?.id ?? null,
       providerConfigId: input.providerConfig.id,
       sourceRunId: null,
@@ -379,6 +409,10 @@ export class AgentSession {
     this.activeQueryEngine?.cancel();
     this.options.database.updateRun(runId, { status: "canceled", terminalReason: "canceled" });
     this.options.runtime.cancelRun(runId);
+    this.persistPartialAssistantMessageFromEvents({
+      sessionId: run.sessionId,
+      runId,
+    });
 
     this.emitAndPersist(runId, run.sessionId, {
       type: "run.canceled",
@@ -447,6 +481,7 @@ export class AgentSession {
           task,
           run,
           prompt: queuedRun.prompt,
+          contextFiles: queuedRun.contextFiles ?? [],
           providerConfig,
           historyEntryId: queuedRun.historyEntryId ?? null,
           checkpointSummary: queuedRun.checkpointSummary ?? null,
@@ -499,19 +534,22 @@ export class AgentSession {
     const queryEngine = new QueryEngine({
       database: this.options.database,
       sessionId: this.options.sessionId,
-      workspaceRoot: this.options.workspaceRoot,
+      workspaceRoot: this.workspaceRoot,
       emit: (event) =>
         this.emitAndPersist(input.run.id, input.session.id, {
           type: event.type,
-          payload: event as unknown as Record<string, unknown>,
+          payload: normalizeRunnerPayload(event),
         }),
       resources: this.options.resources,
       runtime: this.options.runtime,
       provider: this.provider,
       compactionSummarizer: this.options.compactionSummarizer,
       settingsManager: this.options.settingsManager,
-      evaluator: this.evaluator,
+      evaluator:
+        this.evaluatorOverride ??
+        createPermissionEvaluator().withDenialTracker(this.denialTracker).build(),
       denialTracker: this.denialTracker,
+      permissionMode: this.permissionMode,
     });
 
     this.activeQueryEngine = queryEngine;
@@ -523,6 +561,7 @@ export class AgentSession {
           task: input.task,
           run: input.run,
           prompt: input.prompt,
+          contextFiles: input.contextFiles,
           images: input.images,
           providerConfig: input.providerConfig,
           historyEntryId: input.historyEntryId,
@@ -566,6 +605,10 @@ export class AgentSession {
       prompt: input.prompt,
       historyEntryId: input.historyEntryId,
     });
+    this.persistPartialAssistantMessageFromEvents({
+      sessionId,
+      runId,
+    });
 
     this.options.runtime.failRun(runId);
 
@@ -602,29 +645,8 @@ export class AgentSession {
     prompt: string;
     historyEntryId: string | null;
   }): void {
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(input.sessionId) ?? [];
-    const runMessageIds = new Set(
-      historyEntries
-        .filter(
-          (entry) =>
-            entry.kind === "message" &&
-            entry.originRunId === input.runId &&
-            Boolean(entry.messageId),
-        )
-        .map((entry) => entry.messageId as string),
-    );
-
-    if (runMessageIds.size > 0) {
-      const messages = this.options.database.listMessages(input.sessionId);
-      const hasRunUserMessage = messages.some(
-        (message) =>
-          runMessageIds.has(message.id) &&
-          message.role === "user" &&
-          message.content === input.prompt,
-      );
-      if (hasRunUserMessage) {
-        return;
-      }
+    if (this.hasRunMessage(input.sessionId, input.runId, "user", input.prompt)) {
+      return;
     }
 
     const branchId =
@@ -639,6 +661,83 @@ export class AgentSession {
       branchId,
       originRunId: input.runId,
     });
+  }
+
+  private persistPartialAssistantMessageFromEvents(input: {
+    sessionId: string;
+    runId: string;
+  }): void {
+    if (this.hasRunMessage(input.sessionId, input.runId, "assistant")) {
+      return;
+    }
+
+    const partialAssistantText = this.collectRunDeltaText(input.runId);
+    if (!partialAssistantText.trim()) {
+      return;
+    }
+
+    const branchId =
+      this.options.database.getActiveBranchId(input.sessionId) ??
+      this.options.database.listBranches(input.sessionId).at(-1)?.id ??
+      null;
+    this.options.database.addMessage({
+      sessionId: input.sessionId,
+      role: "assistant",
+      content: partialAssistantText,
+      branchId,
+      originRunId: input.runId,
+    });
+    this.options.database.updateSession(input.sessionId, {
+      latestAssistantMessage: partialAssistantText,
+    });
+  }
+
+  private hasRunMessage(
+    sessionId: string,
+    runId: string,
+    role: "user" | "assistant" | "system" | "tool",
+    expectedContent?: string,
+  ): boolean {
+    const runMessageIds = this.listRunMessageIds(sessionId, runId);
+    if (runMessageIds.size === 0) {
+      return false;
+    }
+
+    const messages = this.options.database.listMessages(sessionId);
+    return messages.some((message) => {
+      if (!runMessageIds.has(message.id) || message.role !== role) {
+        return false;
+      }
+      if (typeof expectedContent === "string") {
+        return message.content === expectedContent;
+      }
+      return true;
+    });
+  }
+
+  private listRunMessageIds(sessionId: string, runId: string): Set<string> {
+    const historyEntries = this.options.database.listSessionHistoryEntries?.(sessionId) ?? [];
+    return new Set(
+      historyEntries
+        .filter(
+          (entry) =>
+            entry.kind === "message" &&
+            entry.originRunId === runId &&
+            Boolean(entry.messageId),
+        )
+        .map((entry) => entry.messageId as string),
+    );
+  }
+
+  private collectRunDeltaText(runId: string): string {
+    const orderedEvents = [...this.options.database.listEvents(runId)].sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
+    return orderedEvents
+      .filter((event) => event.type === "run.delta")
+      .map((event) => (typeof event.payload.delta === "string" ? event.payload.delta : ""))
+      .join("");
   }
 
   private emitAndPersist(runId: string, sessionId: string, envelope: RunnerEventEnvelope): void {

@@ -7,6 +7,7 @@ import type {
   GitRepoState,
   ProviderConfig,
   Session,
+  SessionHistoryEntry,
   SessionMessage,
   Task,
   ToolCall,
@@ -15,6 +16,7 @@ import type {
   ModelListResult,
   RunnerCommandName,
   RunnerCommandParamsByName,
+  SessionHistoryListResult,
   SessionRuntimeGetResult,
   ToolListResult,
   ToolPendingListResult,
@@ -63,6 +65,7 @@ interface WorkspaceStoreData {
   sessions: Session[];
   selectedSessionId: string | null;
   sessionDetailsById: Record<string, SessionDetailResponse>;
+  sessionHistoryById: Record<string, SessionHistoryEntry[]>;
   sessionRuntimeById: Record<string, SessionRuntimeGetResult["runtime"]>;
   pendingToolCallsBySession: Record<string, ToolCall[]>;
   toolCallsBySession: Record<string, ToolCall[]>;
@@ -83,6 +86,7 @@ interface WorkspaceStoreData {
   selectedFiles: string[];
   reasoningBySession: Record<string, ReasoningLevel>;
   permissionModeBySession: Record<string, PermissionMode>;
+  newThreadPermissionMode: PermissionMode;
   reasoningLevel: ReasoningLevel;
   editingSessionId: string | null;
   editingSessionDraft: string;
@@ -160,6 +164,7 @@ function createInitialData(): WorkspaceStoreData {
     sessions: [],
     selectedSessionId: null,
     sessionDetailsById: {},
+    sessionHistoryById: {},
     sessionRuntimeById: {},
     pendingToolCallsBySession: {},
     toolCallsBySession: {},
@@ -180,6 +185,7 @@ function createInitialData(): WorkspaceStoreData {
     selectedFiles: [],
     reasoningBySession: {},
     permissionModeBySession: {},
+    newThreadPermissionMode: "default",
     reasoningLevel: DEFAULT_REASONING_LEVEL,
     editingSessionId: null,
     editingSessionDraft: "",
@@ -359,6 +365,18 @@ function ensurePermissionModes(
   return nextModes;
 }
 
+function resolveSessionWorkspaceRoot(
+  state: Pick<WorkspaceStoreData, "folders" | "folderAssignments">,
+  sessionId: string,
+): string | null {
+  const assignedFolderId = state.folderAssignments[sessionId];
+  if (!assignedFolderId) {
+    return null;
+  }
+  const assignedFolder = state.folders.find((folder) => folder.id === assignedFolderId);
+  return assignedFolder?.path ?? null;
+}
+
 export function deriveThreadTitle(
   sessionTitle: string,
   firstUserPrompt: string | null | undefined,
@@ -453,6 +471,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       selectedSessionId: persistedUiState.selectedSessionId,
       reasoningBySession: persistedUiState.reasoningBySession,
       permissionModeBySession: persistedUiState.permissionModeBySession,
+      newThreadPermissionMode: "default",
       renamedSessionIds: persistedUiState.renamedSessionIds,
     });
 
@@ -531,6 +550,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }
 
     let sessionId = get().selectedSessionId;
+    const pendingPermissionMode = get().newThreadPermissionMode;
     if (!sessionId) {
       const session = await invokeRunner<Session, "session.create">("session.create", {
         title: deriveSessionTitleFromPrompt(prompt),
@@ -547,11 +567,25 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
                 [session.id]: activeFolderId,
               }
             : state.folderAssignments,
+        permissionModeBySession: {
+          ...state.permissionModeBySession,
+          [session.id]: pendingPermissionMode,
+        },
       }));
       schedulePersistDesktopUiState(get());
     }
 
     const contextFiles = options?.contextFiles ?? [];
+    const sessionWorkspaceRoot = resolveSessionWorkspaceRoot(get(), sessionId);
+    await invokeRunner("session.workspace.set", {
+      sessionId,
+      workspaceRoot: sessionWorkspaceRoot,
+    });
+    const sessionPermissionMode = get().permissionModeBySession[sessionId] ?? "default";
+    await invokeRunner("session.permission.set", {
+      sessionId,
+      mode: sessionPermissionMode,
+    });
     const run = await invokeRunner<{ id?: string }, "run.start">("run.start", {
       sessionId,
       taskId: null,
@@ -646,8 +680,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
   async selectSession(sessionId) {
     const preferredReasoning = get().reasoningBySession[sessionId] ?? DEFAULT_REASONING_LEVEL;
+    const assignedFolderId = get().folderAssignments[sessionId];
+    const nextActiveFolderId =
+      assignedFolderId && get().folders.some((folder) => folder.id === assignedFolderId)
+        ? assignedFolderId
+        : get().activeFolderId;
     set({
       selectedSessionId: sessionId,
+      activeFolderId: nextActiveFolderId,
       reasoningLevel: preferredReasoning,
       uiPanels: {
         ...get().uiPanels,
@@ -657,12 +697,19 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       diffPath: null,
     });
     schedulePersistDesktopUiState(get());
+    await invokeRunner("session.workspace.set", {
+      sessionId,
+      workspaceRoot: resolveSessionWorkspaceRoot(get(), sessionId),
+    });
     await Promise.all([get().refreshSession(sessionId), get().loadGitStatus()]);
   },
 
   async refreshSession(sessionId) {
-    const [detail, runtime, pendingTools, allTools] = await Promise.all([
+    const [detail, history, runtime, pendingTools, allTools] = await Promise.all([
       invokeRunner<SessionDetailResponse, "session.get">("session.get", { sessionId }),
+      invokeRunner<SessionHistoryListResult, "session.history.list">("session.history.list", {
+        sessionId,
+      }),
       invokeRunner<SessionRuntimeGetResult, "session.runtime.get">("session.runtime.get", {
         sessionId,
       }),
@@ -685,6 +732,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         sessionDetailsById: {
           ...state.sessionDetailsById,
           [sessionId]: detail,
+        },
+        sessionHistoryById: {
+          ...state.sessionHistoryById,
+          [sessionId]: history.historyEntries,
         },
         sessionRuntimeById: {
           ...state.sessionRuntimeById,
@@ -721,7 +772,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   async loadSessions() {
     const sessions = await invokeRunner<Session[], "session.list">("session.list", {});
     const currentState = get();
-    const activeFolderId = resolveFallbackFolderId(currentState.folders, currentState.activeFolderId);
+    const fallbackFolderId = resolveFallbackFolderId(currentState.folders, currentState.activeFolderId);
     const folderAssignments = ensureSessionAssignments(
       sessions,
       currentState.folders,
@@ -731,11 +782,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       sessions,
       currentState.permissionModeBySession,
     );
-    const visibleSessionIds = new Set(Object.keys(folderAssignments));
+    const sessionIds = new Set(sessions.map((session) => session.id));
     const selectedSessionId =
-      currentState.selectedSessionId && visibleSessionIds.has(currentState.selectedSessionId)
+      currentState.selectedSessionId && sessionIds.has(currentState.selectedSessionId)
         ? currentState.selectedSessionId
-        : sessions.find((session) => visibleSessionIds.has(session.id))?.id ?? null;
+        : currentState.selectedSessionId === null
+          ? null
+          : sessions[0]?.id ?? null;
+    const activeFolderId =
+      selectedSessionId && folderAssignments[selectedSessionId]
+        ? folderAssignments[selectedSessionId]
+        : fallbackFolderId;
 
     set({
       sessions,
@@ -902,15 +959,21 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
   setPermissionMode(mode) {
     const sessionId = get().selectedSessionId;
-    if (!sessionId) {
-      return;
-    }
     set((state) => ({
-      permissionModeBySession: {
-        ...state.permissionModeBySession,
-        [sessionId]: mode,
-      },
+      permissionModeBySession: sessionId
+        ? {
+            ...state.permissionModeBySession,
+            [sessionId]: mode,
+          }
+        : state.permissionModeBySession,
+      newThreadPermissionMode: mode,
     }));
+    if (sessionId) {
+      void invokeRunner("session.permission.set", {
+        sessionId,
+        mode,
+      }).catch(() => undefined);
+    }
     schedulePersistDesktopUiState(get());
   },
 
@@ -959,16 +1022,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const activeRunId = runtime?.activeRunId ?? streamingRunId;
     if (!activeRunId) return;
 
-    set((state) => {
-      const nextStreaming = { ...state.streamingBySession };
-      delete nextStreaming[sessionId];
-      return { streamingBySession: nextStreaming };
-    });
-
     try {
       await invokeRunner("run.cancel", { runId: activeRunId });
     } catch {
-      // Cancel may fail if the run already completed; streaming state is already cleared.
+      // Cancel may fail if the run already completed.
     }
     await get().refreshSession(sessionId);
   },
@@ -1058,7 +1115,22 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   setActiveFolder(folderId) {
-    set({ activeFolderId: folderId });
+    const sessionId = get().selectedSessionId;
+    set((state) => ({
+      activeFolderId: folderId,
+      folderAssignments: sessionId
+        ? {
+            ...state.folderAssignments,
+            [sessionId]: folderId,
+          }
+        : state.folderAssignments,
+    }));
+    if (sessionId) {
+      void invokeRunner("session.workspace.set", {
+        sessionId,
+        workspaceRoot: resolveSessionWorkspaceRoot(get(), sessionId),
+      }).catch(() => undefined);
+    }
     schedulePersistDesktopUiState(get());
   },
 
@@ -1265,23 +1337,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       });
     }
 
-    if (event.type === "run.tool_requested" && sessionId) {
-      const mode = get().permissionModeBySession[sessionId] ?? "default";
-      const requiresApproval = event.payload.requiresApproval === true;
-      const toolCallId =
-        typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
-      if (mode === "full-access" && requiresApproval && toolCallId) {
-        try {
-          await invokeRunner("tool.approve", {
-            toolCallId,
-            decision: "approved",
-          });
-        } catch {
-          // Ignore auto-approve failures and let manual approval UI handle it.
-        }
-      }
-    }
-
     if (event.type === "run.tool_started" && targetSessionId) {
       const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
       const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
@@ -1319,8 +1374,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       sessionId
     ) {
       set((state) => {
-        const nextStreaming = { ...state.streamingBySession };
-        delete nextStreaming[sessionId];
         const nextErrors = { ...state.errorBySession };
         if (event.type === "run.failed") {
           const errorMsg =
@@ -1330,7 +1383,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           nextErrors[sessionId] = errorMsg;
         }
         return {
-          streamingBySession: nextStreaming,
           errorBySession: nextErrors,
         };
       });

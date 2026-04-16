@@ -85,6 +85,12 @@ describe("resource loader", () => {
 
     const resolved = await loader.resolveSkillForPrompt("show me git diff");
     expect(resolved?.skill.name).toBe("Git Inspector");
+    expect(loader.buildSystemPrompt(null)).toContain(
+      `Current working directory: ${workspaceRoot.replace(/\\/g, "/")}`,
+    );
+    expect(loader.buildSystemPrompt(null, "/tmp/override-cwd")).toContain(
+      "Current working directory: /tmp/override-cwd",
+    );
     expect(loader.buildSystemPrompt(resolved)).toContain("Activated skill: Git Inspector");
     expect(loader.getExtensions().diagnostics).toEqual([]);
     expect(loader.getExtensions().items.map((extension) => extension.name)).toEqual([

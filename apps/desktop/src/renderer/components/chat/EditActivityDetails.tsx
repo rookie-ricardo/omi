@@ -1,5 +1,3 @@
-import { FileEdit } from "lucide-react";
-
 import type { ToolCall } from "@omi/core";
 
 import { extractDiffFromToolCall, getEditFilePath, parseDiffStats } from "./tool-utils";
@@ -12,6 +10,7 @@ interface FileEditInfo {
   filePath: string;
   additions: number;
   deletions: number;
+  order: number;
 }
 
 /**
@@ -21,10 +20,9 @@ interface FileEditInfo {
 export default function EditActivityDetails({
   toolCalls,
 }: EditActivityDetailsProps) {
-  // 提取每个编辑工具的文件路径和 diff 统计
   const fileEdits: FileEditInfo[] = [];
 
-  for (const tool of toolCalls) {
+  for (const [index, tool] of toolCalls.entries()) {
     const name = tool.toolName.toLowerCase();
     if (name.includes("edit") || name.includes("write")) {
       const filePath = getEditFilePath(tool);
@@ -33,16 +31,14 @@ export default function EditActivityDetails({
       const diff = extractDiffFromToolCall(tool);
       const stats = diff ? parseDiffStats(diff) : { additions: 0, deletions: 0 };
 
-      fileEdits.push({ filePath, ...stats });
+      fileEdits.push({ filePath, ...stats, order: index });
     }
   }
 
-  // 去重（同一文件可能被编辑多次）
   const uniqueEdits = new Map<string, FileEditInfo>();
   for (const edit of fileEdits) {
     const existing = uniqueEdits.get(edit.filePath);
     if (existing) {
-      // 累加统计
       existing.additions += edit.additions;
       existing.deletions += edit.deletions;
     } else {
@@ -50,37 +46,33 @@ export default function EditActivityDetails({
     }
   }
 
-  const edits = Array.from(uniqueEdits.values());
+  const edits = Array.from(uniqueEdits.values()).sort((a, b) => a.order - b.order);
 
   if (edits.length === 0) {
-    return (
-      <div className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
-        没有可显示的编辑信息
-      </div>
-    );
+    return null;
   }
 
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="space-y-1">
       {edits.map((edit) => (
         <div
           key={edit.filePath}
-          className="flex items-center gap-2 px-2 py-0.5 rounded-full bg-gray-100 dark:bg-white/5 text-xs text-gray-600 dark:text-gray-400"
+          className="text-[15px] leading-6 text-gray-500 dark:text-gray-400"
         >
-          <FileEdit size={10} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
-          <span className="font-mono truncate max-w-[180px]">{edit.filePath}</span>
-          <div className="flex items-center gap-1.5">
+          <span className="text-gray-500 dark:text-gray-400">已编辑 </span>
+          <span className="text-blue-500 dark:text-blue-400">{edit.filePath}</span>
+          <span className="ml-1 inline-flex items-center gap-1.5">
             {edit.additions > 0 ? (
-              <span className="text-green-600 dark:text-green-400 font-medium text-[10px]">
+              <span className="text-green-600 dark:text-green-400">
                 +{edit.additions}
               </span>
             ) : null}
             {edit.deletions > 0 ? (
-              <span className="text-red-600 dark:text-red-400 font-medium text-[10px]">
+              <span className="text-red-600 dark:text-red-400">
                 -{edit.deletions}
               </span>
             ) : null}
-          </div>
+          </span>
         </div>
       ))}
     </div>

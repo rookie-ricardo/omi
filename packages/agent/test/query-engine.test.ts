@@ -470,6 +470,58 @@ describe("QueryEngine", () => {
       });
     });
 
+    it("injects user-selected context file paths into provider prompt", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const mockRuntime = createMockRuntime(session.id);
+      const providerCalls: ProviderRunInput[] = [];
+
+      const provider = {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+          providerCalls.push(input);
+          return {
+            assistantText: "done",
+            assistantMessage: null,
+            stopReason: "end_turn" as const,
+            toolCalls: [],
+            usage: { inputTokens: 0, outputTokens: 0 },
+            error: null,
+          };
+        },
+        cancel() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: () => {},
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "review these files",
+        contextFiles: ["src/a.ts", "src/b.ts"],
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      const providerPrompt = providerCalls[0]?.prompt ?? "";
+      expect(providerPrompt).toContain("User-provided context paths for this run:");
+      expect(providerPrompt).toContain("- src/a.ts");
+      expect(providerPrompt).toContain("- src/b.ts");
+      expect(providerPrompt).toContain("review these files");
+    });
+
     // TODO: re-enable after migrating preflight check logic out of provider
     it.skip("uses explicit plan state as the single source of truth for preflight checks", async () => {
       const planState = createPlanStateManager();
@@ -753,6 +805,70 @@ describe("QueryEngine", () => {
           (message) =>
             message.role === "user" &&
             contentToText(message.content).includes("Continue from your last response"),
+        ),
+      ).toBe(true);
+    });
+
+    it("fails fast on repetitive identical tool-only loops", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+      let providerCalls = 0;
+
+      const provider = {
+        async run(): Promise<ProviderRunResult> {
+          providerCalls += 1;
+          return {
+            assistantText: "",
+            assistantMessage: null,
+            stopReason: "tool_use" as const,
+            toolCalls: [
+              {
+                id: `tool-call-${providerCalls}`,
+                name: "bash",
+                input: { command: "pwd" },
+              },
+            ],
+            usage: { inputTokens: 0, outputTokens: 0 },
+            error: null,
+          };
+        },
+        cancel() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+        permissionMode: "full-access",
+      };
+
+      const engine = new QueryEngine(deps);
+      const result = await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "run pwd",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(result.terminalReason).toBe("error");
+      expect(result.error).toContain("Detected repetitive tool loop");
+      expect(providerCalls).toBe(4);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "query_loop.terminal" &&
+            (event as { reason?: string }).reason === "error",
         ),
       ).toBe(true);
     });

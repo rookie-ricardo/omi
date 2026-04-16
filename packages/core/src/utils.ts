@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 export function ensureDir(path: string): string {
@@ -70,11 +71,11 @@ export function splitLines(value: string): string[] {
 export function getAgentDir(): string {
   const envDir = process.env.OMI_DIR;
   if (envDir) {
-    if (envDir === "~") return require("node:os").homedir();
-    if (envDir.startsWith("~/")) return require("node:os").homedir() + envDir.slice(1);
+    if (envDir === "~") return homedir();
+    if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
     return envDir;
   }
-  return join(require("node:os").homedir(), ".omi");
+  return join(homedir(), ".omi");
 }
 
 /**

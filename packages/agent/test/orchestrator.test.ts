@@ -59,6 +59,8 @@ describe("orchestrator", () => {
       cancelRun: vi.fn(),
       approveTool: vi.fn(),
       rejectTool: vi.fn(),
+      setPermissionMode: vi.fn(),
+      setWorkspaceRoot: vi.fn(),
       compactSession: vi.fn(async () => ({
         sessionId: "session_1",
         runtime: {
@@ -136,6 +138,7 @@ describe("orchestrator", () => {
       sessionId: session.id,
       taskId: null,
       prompt: "show me git diff",
+      contextFiles: ["src/main.ts", "README.md"],
     });
 
     expect(run.id).toBe("run_1");
@@ -144,6 +147,7 @@ describe("orchestrator", () => {
       expect.objectContaining({
         taskId: null,
         prompt: "show me git diff",
+        contextFiles: ["src/main.ts", "README.md"],
         providerConfig: expect.objectContaining({ type: "anthropic" }),
       }),
     );
@@ -358,6 +362,8 @@ describe("orchestrator", () => {
       rejectTool: vi.fn(),
       retryRun: vi.fn(),
       resumeRun: vi.fn(),
+      setPermissionMode: vi.fn(),
+      setWorkspaceRoot: vi.fn(),
       compactSession: vi.fn(),
     } as unknown as AgentSession;
 
@@ -499,6 +505,8 @@ describe("orchestrator", () => {
       rejectTool: vi.fn(),
       retryRun: vi.fn(),
       resumeRun: vi.fn(),
+      setPermissionMode: vi.fn(),
+      setWorkspaceRoot: vi.fn(),
     } as unknown as AgentSession;
 
     const orchestrator = new AppOrchestrator(

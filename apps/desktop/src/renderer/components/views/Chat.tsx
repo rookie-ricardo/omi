@@ -1,28 +1,43 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, MoreHorizontal, Terminal, Undo, User } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AlertCircle,
+  ArrowDown,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  MoreHorizontal,
+  Terminal,
+  Undo,
+} from "lucide-react";
 
-import type { GitChangedFile, GitDiffPreview, SessionMessage, ToolCall } from "@omi/core";
+import type {
+  GitChangedFile,
+  GitDiffPreview,
+  SessionHistoryEntry,
+  SessionMessage,
+  ToolCall,
+} from "@omi/core";
 
 import ThreadLayout from "../ThreadLayout";
 import MarkdownRenderer from "../MarkdownRenderer";
 import ToolActivityGroup from "../chat/ToolActivityGroup";
-import {
-  deriveThreadTitle,
-  useWorkspaceStore,
-} from "../../store/workspace-store";
+import { splitToolCallsByActivity } from "../chat/tool-utils";
+import { deriveThreadTitle, useWorkspaceStore } from "../../store/workspace-store";
+
+const HISTORY_VISIBLE_LIMIT = 3;
+const SCROLL_BUTTON_THRESHOLD = 140;
 
 export default function Chat() {
   const selectedSessionId = useWorkspaceStore((state) => state.selectedSessionId);
   const sessions = useWorkspaceStore((state) => state.sessions);
   const sessionDetailsById = useWorkspaceStore((state) => state.sessionDetailsById);
-  const firstUserMessageBySession = useWorkspaceStore(
-    (state) => state.firstUserMessageBySession,
-  );
+  const sessionHistoryById = useWorkspaceStore((state) => state.sessionHistoryById);
+  const sessionRuntimeById = useWorkspaceStore((state) => state.sessionRuntimeById);
+  const firstUserMessageBySession = useWorkspaceStore((state) => state.firstUserMessageBySession);
   const renamedSessionIds = useWorkspaceStore((state) => state.renamedSessionIds);
   const streamingBySession = useWorkspaceStore((state) => state.streamingBySession);
-  const pendingToolCallsBySession = useWorkspaceStore(
-    (state) => state.pendingToolCallsBySession,
-  );
+  const pendingToolCallsBySession = useWorkspaceStore((state) => state.pendingToolCallsBySession);
   const gitState = useWorkspaceStore((state) => state.gitState);
   const diffPath = useWorkspaceStore((state) => state.diffPath);
   const diffPreview = useWorkspaceStore((state) => state.diffPreview);
@@ -36,77 +51,162 @@ export default function Chat() {
   const selectedSession = selectedSessionId
     ? sessions.find((session) => session.id === selectedSessionId) ?? null
     : null;
-  const sessionDetail = selectedSessionId
-    ? sessionDetailsById[selectedSessionId]
-    : undefined;
+  const sessionDetail = selectedSessionId ? sessionDetailsById[selectedSessionId] : undefined;
   const messages = sessionDetail?.messages ?? [];
-  const pendingToolCalls = selectedSessionId
-    ? pendingToolCallsBySession[selectedSessionId] ?? []
-    : [];
-  const streamingContent = selectedSessionId
-    ? streamingBySession[selectedSessionId]?.content ?? ""
-    : "";
-  const isStreaming = Boolean(
-    selectedSessionId && streamingBySession[selectedSessionId],
+  const sessionHistory = selectedSessionId ? sessionHistoryById[selectedSessionId] ?? [] : [];
+  const runtime = selectedSessionId ? sessionRuntimeById[selectedSessionId] : undefined;
+  const pendingToolCalls = selectedSessionId ? pendingToolCallsBySession[selectedSessionId] ?? [] : [];
+  const streamingContent = selectedSessionId ? streamingBySession[selectedSessionId]?.content ?? "" : "";
+  const isStreaming = Boolean(selectedSessionId && streamingBySession[selectedSessionId]);
+  const errorMessage = selectedSessionId ? errorBySession[selectedSessionId] ?? null : null;
+  const toolCalls = selectedSessionId ? toolCallsBySession[selectedSessionId] ?? [] : [];
+  const activeTools = selectedSessionId ? activeToolsBySession[selectedSessionId] ?? [] : [];
+  const activeToolIds = new Set(activeTools.map((tool) => tool.toolCallId));
+  const activeRunId =
+    runtime?.activeRunId ?? (selectedSessionId ? streamingBySession[selectedSessionId]?.runId ?? null : null);
+
+  const orderedMessages = useMemo(
+    () => orderMessages(messages, sessionHistory),
+    [messages, sessionHistory],
   );
-  const errorMessage = selectedSessionId
-    ? errorBySession[selectedSessionId] ?? null
-    : null;
-  const toolCalls = selectedSessionId
-    ? toolCallsBySession[selectedSessionId] ?? []
-    : [];
-  const activeTools = selectedSessionId
-    ? activeToolsBySession[selectedSessionId] ?? []
-    : [];
-  const activeToolIds = new Set(activeTools.map((t) => t.toolCallId));
-
-  // 将工具调用按时间分组 - 连续的工具调用聚合在一起
-  const toolGroups = useMemo(() => {
-    const groups: Array<
-      | { kind: "message"; message: SessionMessage }
-      | { kind: "toolGroup"; toolCalls: ToolCall[] }
-    > = [];
-
-    const messagesByTime = [...messages].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
-    const toolsByTime = [...toolCalls].sort(
-      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-    );
-
-    let mi = 0;
-    let ti = 0;
-    let currentToolGroup: ToolCall[] = [];
-
-    while (mi < messagesByTime.length || ti < toolsByTime.length) {
-      const msg = messagesByTime[mi];
-      const tool = toolsByTime[ti];
-
-      const msgTime = msg ? new Date(msg.createdAt).getTime() : Infinity;
-      const toolTime = tool ? new Date(tool.createdAt).getTime() : Infinity;
-
-      if (msgTime <= toolTime) {
-        // 先处理未完成的工具组
-        if (currentToolGroup.length > 0) {
-          groups.push({ kind: "toolGroup", toolCalls: currentToolGroup });
-          currentToolGroup = [];
-        }
-        groups.push({ kind: "message", message: msg });
-        mi++;
-      } else {
-        // 工具调用 - 加入当前组
-        currentToolGroup.push(tool);
-        ti++;
+  const messageRunIdMap = useMemo(
+    () => buildMessageRunIdMap(sessionHistory),
+    [sessionHistory],
+  );
+  const toolCallsByRun = useMemo(
+    () => groupToolCallsByRun(toolCalls),
+    [toolCalls],
+  );
+  const latestAssistantMessageId = useMemo(() => {
+    for (let index = orderedMessages.length - 1; index >= 0; index -= 1) {
+      const message = orderedMessages[index];
+      if (message?.role === "assistant") {
+        return message.id;
       }
     }
+    return null;
+  }, [orderedMessages]);
 
-    // 处理最后的工具组
-    if (currentToolGroup.length > 0) {
-      groups.push({ kind: "toolGroup", toolCalls: currentToolGroup });
+  const [showAllHistory, setShowAllHistory] = useState(false);
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
+  const contentRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setShowAllHistory(false);
+    setExpandedRuns({});
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (isStreaming || streamingContent) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [streamingContent, isStreaming, orderedMessages.length, toolCalls.length]);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) {
+      return;
     }
 
-    return groups;
-  }, [messages, toolCalls]);
+    const container = content.parentElement;
+    if (!container) {
+      return;
+    }
+
+    scrollContainerRef.current = container;
+
+    const updateState = () => {
+      const distance =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      setShowScrollButton(distance > SCROLL_BUTTON_THRESHOLD);
+    };
+
+    updateState();
+    container.addEventListener("scroll", updateState);
+
+    return () => {
+      container.removeEventListener("scroll", updateState);
+    };
+  }, [selectedSessionId, orderedMessages.length, toolCalls.length, streamingContent]);
+
+  const hiddenMessageCount = Math.max(0, orderedMessages.length - HISTORY_VISIBLE_LIMIT);
+  const visibleMessages =
+    showAllHistory || hiddenMessageCount === 0
+      ? orderedMessages
+      : orderedMessages.slice(-HISTORY_VISIBLE_LIMIT);
+
+  const assistantRunIds = visibleMessages
+    .filter((message) => message.role === "assistant")
+    .map((message) => messageRunIdMap.get(message.id) ?? null)
+    .filter((runId): runId is string => Boolean(runId));
+  const latestVisibleRunId = assistantRunIds.at(-1) ?? activeRunId ?? null;
+
+  const timelineNodes: ReactNode[] = [];
+  const insertedRunIds = new Set<string>();
+
+  for (const message of visibleMessages) {
+    const runId = messageRunIdMap.get(message.id) ?? null;
+    if (message.role === "assistant" && runId && !insertedRunIds.has(runId)) {
+      const runToolCalls = toolCallsByRun.get(runId) ?? [];
+      if (runToolCalls.length > 0) {
+        const expanded = expandedRuns[runId] ?? runId === latestVisibleRunId;
+        timelineNodes.push(
+          <RunActivitySection
+            key={`run-${runId}`}
+            runId={runId}
+            toolCalls={runToolCalls}
+            activeToolIds={activeToolIds}
+            expanded={expanded}
+            isRunning={false}
+            assistantCreatedAt={message.createdAt}
+            onToggle={() =>
+              setExpandedRuns((state) => ({
+                ...state,
+                [runId]: !(state[runId] ?? runId === latestVisibleRunId),
+              }))
+            }
+          />,
+        );
+      }
+      insertedRunIds.add(runId);
+    }
+
+    timelineNodes.push(
+      <MessageBlock
+        key={message.id}
+        message={message}
+        isLatestAssistant={message.role === "assistant" && message.id === latestAssistantMessageId}
+      />,
+    );
+  }
+
+  if (activeRunId && !insertedRunIds.has(activeRunId)) {
+    const activeRunTools = toolCallsByRun.get(activeRunId) ?? [];
+    if (activeRunTools.length > 0) {
+      const expanded = expandedRuns[activeRunId] ?? true;
+      timelineNodes.push(
+        <RunActivitySection
+          key={`run-${activeRunId}`}
+          runId={activeRunId}
+          toolCalls={activeRunTools}
+          activeToolIds={activeToolIds}
+          expanded={expanded}
+          isRunning
+          assistantCreatedAt={null}
+          onToggle={() =>
+            setExpandedRuns((state) => ({
+              ...state,
+              [activeRunId]: !(state[activeRunId] ?? true),
+            }))
+          }
+        />,
+      );
+    }
+  }
 
   const title = selectedSession
     ? deriveThreadTitle(
@@ -115,14 +215,6 @@ export default function Chat() {
         Boolean(renamedSessionIds[selectedSession.id]),
       )
     : "聊天";
-
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (isStreaming || streamingContent) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [streamingContent, isStreaming, toolGroups.length]);
 
   const rightPanel = (
     <GitPanel
@@ -134,37 +226,53 @@ export default function Chat() {
     />
   );
 
+  function handleScrollToBottom() {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: "smooth",
+    });
+  }
+
   return (
-    <ThreadLayout title={<div className="font-medium text-base truncate max-w-[360px]">{title}</div>} rightPanel={rightPanel}>
-      <div className="p-6">
-        <div className="max-w-3xl mx-auto space-y-6">
+    <ThreadLayout
+      title={<div className="font-medium text-base truncate max-w-[360px]">{title}</div>}
+      rightPanel={rightPanel}
+    >
+      <div ref={contentRef} className="p-6">
+        <div className="max-w-3xl mx-auto space-y-5">
           {!selectedSessionId ? (
             <EmptyState label="选择左侧线程，或在新线程页输入提示开始构建。" />
           ) : messages.length === 0 && !streamingContent && !isStreaming && !errorMessage ? (
             <EmptyState label="当前线程还没有消息，输入提示后会在这里实时显示。" />
           ) : (
             <>
-              {toolGroups.map((item, index) =>
-                item.kind === "message" ? (
-                  <MessageBlock
-                    key={item.message.id}
-                    message={item.message}
-                    isLast={index === toolGroups.length - 1}
-                  />
-                ) : (
-                  <ToolActivityGroup
-                    key={item.toolCalls[0]?.id || `empty-${index}`}
-                    toolCalls={item.toolCalls}
-                    activeToolIds={activeToolIds}
-                  />
-                ),
-              )}
+              {hiddenMessageCount > 0 ? (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAllHistory((value) => !value)}
+                    className="inline-flex items-center gap-1 text-[15px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+                  >
+                    {showAllHistory ? (
+                      <ChevronDown size={14} className="text-gray-400 dark:text-gray-500" />
+                    ) : (
+                      <ChevronRight size={14} className="text-gray-400 dark:text-gray-500" />
+                    )}
+                    <span>上 {hiddenMessageCount} 条消息</span>
+                  </button>
+                  <div className="h-px bg-gray-200 dark:bg-white/10" />
+                </div>
+              ) : null}
+
+              {timelineNodes}
 
               {isStreaming && !streamingContent ? <ThinkingIndicator /> : null}
 
-              {streamingContent ? (
-                <StreamingBlock content={streamingContent} />
-              ) : null}
+              {streamingContent ? <StreamingBlock content={streamingContent} /> : null}
 
               {errorMessage && !isStreaming ? (
                 <AssistantErrorBlock message={errorMessage} />
@@ -181,22 +289,96 @@ export default function Chat() {
           ) : null}
 
           <div ref={messagesEndRef} />
+
+          {showScrollButton ? (
+            <div className="sticky bottom-28 flex justify-center pointer-events-none">
+              <button
+                type="button"
+                onClick={handleScrollToBottom}
+                className="pointer-events-auto w-9 h-9 rounded-full border border-gray-200 dark:border-white/10 bg-white/95 dark:bg-[#2a2a2a] text-gray-600 dark:text-gray-300 flex items-center justify-center shadow-sm hover:text-gray-900 dark:hover:text-white transition-colors"
+              >
+                <ArrowDown size={18} />
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </ThreadLayout>
   );
 }
 
-function MessageBlock({ message, isLast }: { message: SessionMessage; isLast?: boolean }) {
+function RunActivitySection({
+  runId,
+  toolCalls,
+  activeToolIds,
+  expanded,
+  isRunning,
+  assistantCreatedAt,
+  onToggle,
+}: {
+  runId: string;
+  toolCalls: ToolCall[];
+  activeToolIds: Set<string>;
+  expanded: boolean;
+  isRunning: boolean;
+  assistantCreatedAt: string | null;
+  onToggle: () => void;
+}) {
+  const groups = splitToolCallsByActivity(toolCalls).filter((group) => group.kind !== "other");
+  if (groups.length === 0) {
+    return null;
+  }
+
+  const durationText = formatRunDuration(toolCalls, assistantCreatedAt, isRunning);
+  const summaryText = `${isRunning ? "处理中" : "已处理"}${durationText ? ` ${durationText}` : ""}`;
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex items-center gap-1 text-[15px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+      >
+        {expanded ? (
+          <ChevronDown size={14} className="text-gray-400 dark:text-gray-500" />
+        ) : (
+          <ChevronRight size={14} className="text-gray-400 dark:text-gray-500" />
+        )}
+        <span>{summaryText}</span>
+      </button>
+      <div className="h-px bg-gray-200 dark:bg-white/10" />
+      {expanded ? (
+        <div className="space-y-3">
+          {groups.map((group, index) => (
+            <ToolActivityGroup
+              key={`${runId}-${group.kind}-${index}`}
+              toolCalls={group.toolCalls}
+              activeToolIds={activeToolIds}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MessageBlock({
+  message,
+  isLatestAssistant,
+}: {
+  message: SessionMessage;
+  isLatestAssistant: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const sendPromptText = useWorkspaceStore((state) => state.sendPromptText);
   const gitState = useWorkspaceStore((state) => state.gitState);
   const canUndo = (gitState?.files.length ?? 0) > 0;
+  const timeLabel = formatClock(message.createdAt);
 
   function handleCopy() {
     void navigator.clipboard.writeText(message.content);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => setCopied(false), 1800);
   }
 
   function handleUndo() {
@@ -204,24 +386,18 @@ function MessageBlock({ message, isLast }: { message: SessionMessage; isLast?: b
   }
 
   if (message.role === "user") {
-    const timeStr = new Date(message.createdAt).toLocaleString("zh-CN", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
     return (
-      <div className="group flex justify-end">
-        <div className="flex flex-col items-end gap-1">
-          <div className="max-w-[90%] rounded-2xl bg-gray-100 dark:bg-[#2a2a2a] px-4 py-2.5 text-[15px] text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">
+      <div className="flex justify-end">
+        <div className="group max-w-[92%]">
+          <div className="rounded-2xl bg-gray-100 dark:bg-[#2a2a2a] px-4 py-2.5 text-[15px] leading-relaxed text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
             {message.content}
           </div>
-          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-            <span className="text-xs text-gray-400 dark:text-gray-500">{timeStr}</span>
+          <div className="h-5 flex items-center justify-end gap-2 pr-1 text-xs text-gray-400 dark:text-gray-500 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+            <span>{timeLabel}</span>
             <button
+              type="button"
               onClick={handleCopy}
-              className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              className="inline-flex items-center hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
               title={copied ? "已复制" : "复制"}
             >
               {copied ? <Check size={12} /> : <Copy size={12} />}
@@ -232,32 +408,35 @@ function MessageBlock({ message, isLast }: { message: SessionMessage; isLast?: b
     );
   }
 
-  // AI 消息 - 纯文本流式展示，无任何装饰
   return (
-    <div className="group">
-      <div className="text-[15px] text-gray-800 dark:text-gray-200 leading-relaxed">
+    <div className="space-y-2">
+      <div className="text-[15px] leading-relaxed text-gray-800 dark:text-gray-200">
         <MarkdownRenderer
           content={message.content}
           className="prose dark:prose-invert prose-sm max-w-none [&>*:first-child]:mt-0"
         />
       </div>
-      <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">
         <button
+          type="button"
           onClick={handleCopy}
-          className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+          className="inline-flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
           title={copied ? "已复制" : "复制"}
         >
           {copied ? <Check size={12} /> : <Copy size={12} />}
         </button>
-        {canUndo && isLast && (
+        <span>{timeLabel}</span>
+        {canUndo && isLatestAssistant ? (
           <button
+            type="button"
             onClick={handleUndo}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            className="inline-flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
             title="撤销"
           >
             <Undo size={12} />
+            <span>撤销</span>
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -280,7 +459,8 @@ function StreamingBlock({ content }: { content: string }) {
 function ThinkingIndicator() {
   return (
     <div className="text-sm text-gray-500 dark:text-gray-400">
-      <span className="inline-flex items-center gap-1">
+      <span className="inline-flex items-center gap-1.5">
+        <span className="text-[13px]">Thinking</span>
         <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "0ms" }} />
         <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "150ms" }} />
         <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: "300ms" }} />
@@ -296,12 +476,8 @@ function AssistantErrorBlock({ message }: { message: string }) {
         <AlertCircle size={14} className="text-white" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-sm font-medium text-red-600 dark:text-red-400">Error</span>
-        </div>
-        <div className="text-[15px] text-red-700 dark:text-red-300 leading-relaxed">
-          {message}
-        </div>
+        <div className="text-sm font-medium text-red-600 dark:text-red-400 mb-1">Error</div>
+        <div className="text-[15px] text-red-700 dark:text-red-300 leading-relaxed">{message}</div>
       </div>
     </div>
   );
@@ -500,4 +676,111 @@ function statusColor(status: GitChangedFile["status"]): string {
     default:
       return "text-gray-500 dark:text-gray-400";
   }
+}
+
+function buildMessageRunIdMap(historyEntries: SessionHistoryEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const entry of historyEntries) {
+    if (entry.kind !== "message" || !entry.messageId || !entry.originRunId) {
+      continue;
+    }
+    map.set(entry.messageId, entry.originRunId);
+  }
+  return map;
+}
+
+function orderMessages(messages: SessionMessage[], historyEntries: SessionHistoryEntry[]): SessionMessage[] {
+  const sortedHistory = [...historyEntries].sort(compareCreatedAt);
+  const messageById = new Map(messages.map((message) => [message.id, message]));
+  const seenMessageIds = new Set<string>();
+  const ordered: SessionMessage[] = [];
+
+  for (const entry of sortedHistory) {
+    if (entry.kind !== "message" || !entry.messageId) {
+      continue;
+    }
+    const message = messageById.get(entry.messageId);
+    if (!message || seenMessageIds.has(message.id)) {
+      continue;
+    }
+    seenMessageIds.add(message.id);
+    ordered.push(message);
+  }
+
+  const remaining = messages
+    .filter((message) => !seenMessageIds.has(message.id))
+    .sort(compareCreatedAt);
+
+  return [...ordered, ...remaining];
+}
+
+function groupToolCallsByRun(toolCalls: ToolCall[]): Map<string, ToolCall[]> {
+  const map = new Map<string, ToolCall[]>();
+  const sorted = [...toolCalls].sort(compareCreatedAt);
+
+  for (const toolCall of sorted) {
+    const runId = toolCall.runId;
+    if (!map.has(runId)) {
+      map.set(runId, []);
+    }
+    map.get(runId)?.push(toolCall);
+  }
+
+  return map;
+}
+
+function compareCreatedAt<T extends { createdAt: string; id: string }>(left: T, right: T): number {
+  const timeDiff =
+    new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+  if (timeDiff !== 0) {
+    return timeDiff;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+function formatRunDuration(
+  toolCalls: ToolCall[],
+  assistantCreatedAt: string | null,
+  running: boolean,
+): string | null {
+  if (toolCalls.length === 0) {
+    return null;
+  }
+
+  const firstToolTime = new Date(toolCalls[0].createdAt).getTime();
+  const lastToolTime = new Date(toolCalls[toolCalls.length - 1].createdAt).getTime();
+  const endTime = assistantCreatedAt
+    ? new Date(assistantCreatedAt).getTime()
+    : running
+      ? Date.now()
+      : lastToolTime;
+
+  if (!Number.isFinite(firstToolTime) || !Number.isFinite(endTime) || endTime <= firstToolTime) {
+    return null;
+  }
+
+  return formatDuration(endTime - firstToolTime);
+}
+
+function formatDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainSeconds = seconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${remainSeconds}s`;
+  }
+  return `${remainSeconds}s`;
+}
+
+function formatClock(iso: string): string {
+  return new Date(iso).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }

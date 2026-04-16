@@ -60,6 +60,7 @@ export default function ThreadLayout({
   const clearSelectedFiles = useWorkspaceStore((state) => state.clearSelectedFiles);
   const setReasoningLevel = useWorkspaceStore((state) => state.setReasoningLevel);
   const permissionModeBySession = useWorkspaceStore((state) => state.permissionModeBySession);
+  const newThreadPermissionMode = useWorkspaceStore((state) => state.newThreadPermissionMode);
   const setPermissionMode = useWorkspaceStore((state) => state.setPermissionMode);
   const switchModel = useWorkspaceStore((state) => state.switchModel);
   const setUiPanelOpen = useWorkspaceStore((state) => state.setUiPanelOpen);
@@ -102,7 +103,7 @@ export default function ThreadLayout({
   const canSwitchBranch = Boolean(selectedSessionId && gitState?.hasRepository && branchOptions.length > 0);
   const permissionMode = selectedSessionId
     ? permissionModeBySession[selectedSessionId] ?? "default"
-    : "default";
+    : newThreadPermissionMode;
   const permissionLabel = permissionMode === "full-access" ? "完全访问权限" : "默认权限";
   const isStreaming = Boolean(
     selectedSessionId && streamingBySession[selectedSessionId],

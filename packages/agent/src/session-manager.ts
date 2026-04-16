@@ -97,6 +97,7 @@ export interface CompactionRuntimeState {
 export interface SessionRunQueueEntry {
   runId: string;
   prompt: string;
+  contextFiles?: string[];
   taskId: string | null;
   providerConfigId: string | null;
   sourceRunId: string | null;

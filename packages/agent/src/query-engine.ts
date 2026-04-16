@@ -76,6 +76,7 @@ export interface QueryEngineDeps {
   /** Permission evaluator for rule-based access control. */
   evaluator?: PermissionEvaluator;
   denialTracker?: DenialTracker;
+  permissionMode?: "default" | "full-access";
   /** Context pipeline configuration */
   contextPipelineConfig?: Partial<ContextPipelineConfig>;
   /** Cost tracker for token/USD budget enforcement. */
@@ -108,6 +109,7 @@ export interface QueryEngineRunInput {
   task: Task | null;
   run: Run;
   prompt: string;
+  contextFiles?: string[];
   images?: ImageContent[];
   providerConfig: ProviderConfig;
   historyEntryId: string | null;
@@ -166,6 +168,8 @@ const DEFAULT_RETRY_SETTINGS: RetrySettings = {
   maxDelayMs: DEFAULT_RECOVERY_SETTINGS.maxDelayMs,
 };
 
+const MAX_REPEATED_TOOL_BATCH_WITHOUT_TEXT = 4;
+
 export function resolveToolExecutionMode(
   enabledTools: ToolName[] | undefined,
 ): ToolExecutionMode {
@@ -196,6 +200,7 @@ export class QueryEngine {
   private readonly hookRegistry: import("@omi/extensions").HookRegistry | null;
   private abortController: AbortController | null = null;
   private readonly pendingApprovals = new Map<string, { runId: string; resolve: (decision: "approved" | "rejected") => void }>();
+  private readonly bufferedApprovalDecisions = new Map<string, "approved" | "rejected">();
 
   constructor(private readonly deps: QueryEngineDeps) {
     this.provider = deps.provider ?? new PiAiProvider();
@@ -237,20 +242,27 @@ export class QueryEngine {
       this.pendingApprovals.delete(id);
       pending.resolve("rejected");
     }
+    this.bufferedApprovalDecisions.clear();
   }
 
   approveTool(toolCallId: string): void {
     const pending = this.pendingApprovals.get(toolCallId);
-    if (!pending) return;
-    this.pendingApprovals.delete(toolCallId);
-    pending.resolve("approved");
+    if (pending) {
+      this.pendingApprovals.delete(toolCallId);
+      pending.resolve("approved");
+      return;
+    }
+    this.bufferedApprovalDecisions.set(toolCallId, "approved");
   }
 
   rejectTool(toolCallId: string): void {
     const pending = this.pendingApprovals.get(toolCallId);
-    if (!pending) return;
-    this.pendingApprovals.delete(toolCallId);
-    pending.resolve("rejected");
+    if (pending) {
+      this.pendingApprovals.delete(toolCallId);
+      pending.resolve("rejected");
+      return;
+    }
+    this.bufferedApprovalDecisions.set(toolCallId, "rejected");
   }
 
   // ==========================================================================
@@ -262,6 +274,7 @@ export class QueryEngine {
     this.currentRunId = input.run.id;
     this.canceled = false;
     this.suspended = false;
+    this.bufferedApprovalDecisions.clear();
     this.abortController = new AbortController();
 
     // Initialize recovery engine for this run
@@ -311,6 +324,8 @@ export class QueryEngine {
         ? this.filterVisibleTools(prepared.resolvedSkill.enabledToolNames as ToolName[], input.session.id)
         : this.filterVisibleTools(listBuiltInToolNames(), input.session.id);
       const tools = this.buildToolsForProvider(this.deps.workspaceRoot, resolvedToolNames);
+      let repeatedToolBatchSignature: string | null = null;
+      let repeatedToolBatchCount = 0;
 
       // ========== THE AGENTIC LOOP ==========
       while (true) {
@@ -535,6 +550,8 @@ export class QueryEngine {
         // If no tool calls -> finalize
         const hasToolCalls = result.stopReason === "tool_use" && result.toolCalls.length > 0;
         if (!hasToolCalls) {
+          repeatedToolBatchSignature = null;
+          repeatedToolBatchCount = 0;
           this.transition("post_tool_merge", "model_response_complete");
 
           // Checkpoint: before_terminal_commit
@@ -551,6 +568,14 @@ export class QueryEngine {
 
         // streaming_response -> executing_tools
         this.transition("executing_tools", "tool_calls_present");
+        const hasAssistantText = result.assistantText.trim().length > 0;
+        const toolBatchSignature = this.buildToolBatchSignature(result.toolCalls);
+        if (!hasAssistantText && repeatedToolBatchSignature === toolBatchSignature) {
+          repeatedToolBatchCount += 1;
+        } else {
+          repeatedToolBatchSignature = toolBatchSignature;
+          repeatedToolBatchCount = 1;
+        }
 
         // Execute tools
         const toolResults = await this.executeToolBatch({
@@ -575,6 +600,13 @@ export class QueryEngine {
 
         // Append tool results to LLM messages
         llmMessages.push(...toolResults);
+
+        if (!hasAssistantText && repeatedToolBatchCount >= MAX_REPEATED_TOOL_BATCH_WITHOUT_TEXT) {
+          return this.terminate(
+            "error",
+            `Detected repetitive tool loop after ${repeatedToolBatchCount} identical tool batches.`,
+          );
+        }
 
         // post_tool_merge -> preprocess_context (THE LOOP BACK!)
         this.transition("preprocess_context", "tool_results_merged");
@@ -750,12 +782,19 @@ export class QueryEngine {
 
         // 2. Permission check
         const planMode = this.isPlanMode();
-        const preflight = this.evaluator.preflightCheck({
-          toolName,
-          input: toolInput,
-          planMode,
-          sessionId,
-        });
+        const bypassApproval = this.deps.permissionMode === "full-access" && !planMode;
+        const preflight = bypassApproval
+          ? {
+              decision: "allow" as const,
+              reason: null,
+              matchedRule: null,
+            }
+          : this.evaluator.preflightCheck({
+              toolName,
+              input: toolInput,
+              planMode,
+              sessionId,
+            });
 
         // 3. Replay protection check
         if (preflight.decision !== "deny" && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
@@ -783,6 +822,7 @@ export class QueryEngine {
         // 4. Check approved prompts (plan mode)
         const matchedAllowedPrompt = this.matchApprovedPrompt(toolName, toolInput);
         const needsApproval = !matchedAllowedPrompt &&
+          !bypassApproval &&
           (preflight.decision === "ask" || (isBuiltInTool(toolName) ? requiresApproval(toolName) : false));
 
         if (matchedAllowedPrompt) {
@@ -828,9 +868,15 @@ export class QueryEngine {
           });
 
           // Wait for user decision
-          const decision = await new Promise<"approved" | "rejected">((resolve) => {
-            this.pendingApprovals.set(toolCallId, { runId, resolve });
-          });
+          const bufferedDecision = this.bufferedApprovalDecisions.get(toolCallId);
+          const decision = bufferedDecision
+            ? (() => {
+                this.bufferedApprovalDecisions.delete(toolCallId);
+                return bufferedDecision;
+              })()
+            : await new Promise<"approved" | "rejected">((resolve) => {
+                this.pendingApprovals.set(toolCallId, { runId, resolve });
+              });
           this.pendingApprovals.delete(toolCallId);
 
           // Record decision
@@ -923,6 +969,12 @@ export class QueryEngine {
     }
 
     return toolResults;
+  }
+
+  private buildToolBatchSignature(toolCalls: ModelToolCall[]): string {
+    return toolCalls
+      .map((toolCall) => `${toolCall.name}:${JSON.stringify(toolCall.input)}`)
+      .join("|");
   }
 
   private buildToolResultMessage(
@@ -1093,7 +1145,10 @@ export class QueryEngine {
     prepared: PreparedRunContext,
     extensionRunner: import("@omi/extensions").ExtensionRunner,
   ): Promise<{ systemPrompt: string; effectivePrompt: string }> {
-    const baseSystemPrompt = this.deps.resources.buildSystemPrompt(prepared.resolvedSkill);
+    const baseSystemPrompt = this.deps.resources.buildSystemPrompt(
+      prepared.resolvedSkill,
+      this.deps.workspaceRoot,
+    );
     await extensionRunner.beforeRun({
       prompt: input.prompt,
       sessionId: input.session.id,
@@ -1109,9 +1164,11 @@ export class QueryEngine {
     });
     const systemPrompt = extensionRunner.buildSystemPrompt(baseSystemPrompt);
     const runtimePrompt = renderRuntimeMessagesForPrompt(extensionRunner.getRuntimeMessages() as RuntimeMessage[]);
-    const effectivePrompt = runtimePrompt.trim().length > 0
-      ? `${runtimePrompt}\n\n${input.prompt}`
-      : input.prompt;
+    const contextPrompt = formatContextFilePrompt(input.contextFiles);
+    const promptSegments = [runtimePrompt, contextPrompt, input.prompt]
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
+    const effectivePrompt = promptSegments.join("\n\n");
 
     return { systemPrompt, effectivePrompt };
   }
@@ -1752,6 +1809,27 @@ export class QueryEngine {
       await new Promise((resolve) => setTimeout(resolve, Math.min(interval, remaining)));
     }
   }
+}
+
+function formatContextFilePrompt(contextFiles?: string[]): string {
+  if (!Array.isArray(contextFiles) || contextFiles.length === 0) {
+    return "";
+  }
+
+  const normalizedPaths = [...new Set(
+    contextFiles
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  )];
+  if (normalizedPaths.length === 0) {
+    return "";
+  }
+
+  return [
+    "User-provided context paths for this run:",
+    ...normalizedPaths.map((entry) => `- ${entry}`),
+    "Prioritize these paths when deciding what to read or edit.",
+  ].join("\n");
 }
 
 // ==========================================================================

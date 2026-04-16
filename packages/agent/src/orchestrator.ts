@@ -1,3 +1,5 @@
+import { existsSync, statSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import type {
   GitDiffPreview,
   GitRepoState,
@@ -106,6 +108,12 @@ export interface SessionCompactionResult {
   compactedAt: string;
 }
 
+type SessionPermissionMode = "default" | "full-access";
+type SessionWorkspaceSetResult = {
+  sessionId: string;
+  workspaceRoot: string;
+};
+
 export class AppOrchestrator {
   private readonly resources: ResourceLoader;
   private readonly sessionManager: SessionManager;
@@ -115,6 +123,8 @@ export class AppOrchestrator {
   private readonly mcpRegistry: McpRegistry;
   private readonly taskToolRuntime: TaskToolRuntime;
   private readonly toolRuntimeContext: ToolRuntimeContext;
+  private readonly sessionPermissionModes = new Map<string, SessionPermissionMode>();
+  private readonly sessionWorkspaceRoots = new Map<string, string>();
 
   constructor(
     private readonly database: AppStore,
@@ -331,7 +341,12 @@ export class AppOrchestrator {
     return getGitDiffPreview(this.workspaceRoot, path);
   }
 
-  startRun(input: { sessionId: string; taskId: string | null; prompt: string }): Run {
+  startRun(input: {
+    sessionId: string;
+    taskId: string | null;
+    prompt: string;
+    contextFiles?: string[];
+  }): Run {
     const startTime = Date.now();
     const session = this.database.getSession(input.sessionId);
     if (!session) {
@@ -339,9 +354,10 @@ export class AppOrchestrator {
       throw new Error(`Session ${input.sessionId} not found`);
     }
 
-    const run = this.getAgentSession(session.id).startRun({
+    const run = this.getConfiguredAgentSession(session.id).startRun({
       taskId: input.taskId,
       prompt: input.prompt,
+      contextFiles: input.contextFiles,
       providerConfig: this.resolveProviderConfigForSession(session.id),
     });
 
@@ -369,7 +385,7 @@ export class AppOrchestrator {
       throw new Error(`Session ${input.sessionId} not found`);
     }
 
-    return this.getAgentSession(session.id).continueFromHistoryEntry({
+    return this.getConfiguredAgentSession(session.id).continueFromHistoryEntry({
       taskId: input.taskId,
       prompt: input.prompt,
       historyEntryId: input.historyEntryId ?? null,
@@ -387,7 +403,7 @@ export class AppOrchestrator {
       throw new Error(`Run ${runId} not found`);
     }
 
-    const newRun = this.getAgentSession(run.sessionId).retryRun(runId);
+    const newRun = this.getConfiguredAgentSession(run.sessionId).retryRun(runId);
     logger.info("Run retried", {
       originalRunId: runId,
       newRunId: newRun.id,
@@ -406,7 +422,7 @@ export class AppOrchestrator {
       throw new Error(`Run ${runId} not found`);
     }
 
-    const resumedRun = this.getAgentSession(run.sessionId).resumeRun(runId);
+    const resumedRun = this.getConfiguredAgentSession(run.sessionId).resumeRun(runId);
     logger.info("Run resumed", {
       runId,
       sessionId: run.sessionId,
@@ -487,6 +503,42 @@ export class AppOrchestrator {
     return this.getAgentSession(toolCall.sessionId).rejectTool(toolCallId);
   }
 
+  setSessionPermissionMode(
+    sessionId: string,
+    mode: SessionPermissionMode,
+  ): { sessionId: string; mode: SessionPermissionMode } {
+    const session = this.database.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+    this.sessionPermissionModes.set(sessionId, mode);
+    this.getAgentSession(sessionId).setPermissionMode(mode);
+    return { sessionId, mode };
+  }
+
+  setSessionWorkspaceRoot(
+    sessionId: string,
+    workspaceRoot: string | null,
+  ): SessionWorkspaceSetResult {
+    const session = this.database.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const resolvedWorkspaceRoot = this.resolveWorkspaceRootInput(workspaceRoot);
+    if (workspaceRoot === null) {
+      this.sessionWorkspaceRoots.delete(sessionId);
+    } else {
+      this.sessionWorkspaceRoots.set(sessionId, resolvedWorkspaceRoot);
+    }
+    this.getAgentSession(sessionId).setWorkspaceRoot(resolvedWorkspaceRoot);
+
+    return {
+      sessionId,
+      workspaceRoot: resolvedWorkspaceRoot,
+    };
+  }
+
   private requireProviderConfig(): ProviderConfig {
     const config = this.database.getProviderConfig();
     if (!config) {
@@ -517,16 +569,44 @@ export class AppOrchestrator {
     const agentSession = this.createAgentSession({
       database: this.database,
       sessionId,
-      workspaceRoot: this.workspaceRoot,
       emit: this.emit,
       resources: this.resources,
       runtime: this.sessionManager.getOrCreate(sessionId),
       settingsManager: this.settingsManager,
       toolRuntimeContext: this.toolRuntimeContext,
+      workspaceRoot: this.getSessionWorkspaceRoot(sessionId),
+      permissionMode: this.sessionPermissionModes.get(sessionId) ?? "default",
     });
     this.agentSessions.set(sessionId, agentSession);
     logger.debug("AgentSession created", { sessionId, durationMs: Date.now() - startTime });
     return agentSession;
+  }
+
+  private getConfiguredAgentSession(sessionId: string): AgentSession {
+    const session = this.getAgentSession(sessionId);
+    session.setWorkspaceRoot(this.getSessionWorkspaceRoot(sessionId));
+    session.setPermissionMode(this.sessionPermissionModes.get(sessionId) ?? "default");
+    return session;
+  }
+
+  private getSessionWorkspaceRoot(sessionId: string): string {
+    return this.sessionWorkspaceRoots.get(sessionId) ?? this.workspaceRoot;
+  }
+
+  private resolveWorkspaceRootInput(workspaceRoot: string | null): string {
+    if (workspaceRoot === null) {
+      return this.workspaceRoot;
+    }
+
+    const resolvedWorkspaceRoot = resolvePath(workspaceRoot);
+    if (!existsSync(resolvedWorkspaceRoot)) {
+      throw new Error(`Workspace root does not exist: ${resolvedWorkspaceRoot}`);
+    }
+    if (!statSync(resolvedWorkspaceRoot).isDirectory()) {
+      throw new Error(`Workspace root must be a directory: ${resolvedWorkspaceRoot}`);
+    }
+
+    return resolvedWorkspaceRoot;
   }
 
   private listToolCallsBySession(sessionId: string): ToolCall[] {

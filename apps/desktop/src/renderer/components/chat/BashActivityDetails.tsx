@@ -1,8 +1,11 @@
-import { Check, X } from "lucide-react";
-
 import type { ToolCall } from "@omi/core";
 
-import { formatToolOutput } from "./tool-utils";
+import {
+  getBashCommand,
+  getBashOutputText,
+  parseBashExitCode,
+  parseToolError,
+} from "./tool-utils";
 
 interface BashActivityDetailsProps {
   toolCalls: ToolCall[];
@@ -14,75 +17,62 @@ export default function BashActivityDetails({
   isActive,
 }: BashActivityDetailsProps) {
   return (
-    <div className="space-y-1">
-      {toolCalls.map((tool) => (
-        <BashInlineBlock
-          key={tool.id}
-          toolCall={tool}
-          isActive={isActive}
-        />
+    <div className="space-y-3">
+      {toolCalls.map((toolCall) => (
+        <BashDetailCard key={toolCall.id} toolCall={toolCall} isActive={isActive} />
       ))}
     </div>
   );
 }
 
-interface BashInlineBlockProps {
+interface BashDetailCardProps {
   toolCall: ToolCall;
   isActive: boolean;
 }
 
-function BashInlineBlock({ toolCall, isActive }: BashInlineBlockProps) {
-  const command =
-    typeof toolCall.input.command === "string" ? toolCall.input.command : "";
+function BashDetailCard({ toolCall, isActive }: BashDetailCardProps) {
+  const command = getBashCommand(toolCall) || "bash";
+  const errorText = parseToolError(toolCall.error);
+  const outputText = getBashOutputText(toolCall);
+  const exitCode = parseBashExitCode(toolCall);
+  const running = isActive && !outputText && !errorText;
 
-  // 提取 stdout
-  let output = "";
-  if (
-    toolCall.output &&
-    typeof toolCall.output === "object" &&
-    !Array.isArray(toolCall.output)
-  ) {
-    const record = toolCall.output as Record<string, unknown>;
-    if (typeof record.stdout === "string") {
-      output = record.stdout;
-    } else if (typeof record.output === "string") {
-      output = record.output;
+  const statusText = (() => {
+    if (running) {
+      return "执行中";
     }
-  } else if (typeof toolCall.output === "string") {
-    output = toolCall.output;
-  }
+    if (exitCode !== null) {
+      return exitCode === 0 ? "成功" : `退出码 ${exitCode}`;
+    }
+    if (errorText) {
+      return "失败";
+    }
+    return "成功";
+  })();
 
-  const hasError = toolCall.error !== null;
-  const isCompleted = !isActive && toolCall.output !== null;
+  const statusClassName =
+    statusText === "成功"
+      ? "text-green-600 dark:text-green-400"
+      : statusText === "执行中"
+        ? "text-blue-500 dark:text-blue-400"
+        : "text-gray-500 dark:text-gray-400";
 
   return (
-    <div className="flex items-start gap-2 text-xs">
-      <div className="flex items-center gap-1.5 text-gray-500 dark:text-gray-400 flex-shrink-0 pt-0.5">
-        <span className="text-gray-400">$</span>
-        <span className="font-mono text-green-600 dark:text-green-400 truncate max-w-[300px]">
-          {command || "..."}
-        </span>
+    <div className="space-y-1.5">
+      <div className="text-[15px] leading-6 text-gray-500 dark:text-gray-400 truncate" title={command}>
+        Ran {command}
       </div>
-      <div className="flex items-center gap-1">
-        {isActive ? (
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-        ) : hasError ? (
-          <X size={10} className="text-red-500" />
-        ) : isCompleted ? (
-          <Check size={10} className="text-green-500" />
-        ) : null}
+      <div className="rounded-xl overflow-hidden border border-gray-200 dark:border-white/10 bg-[#efefef] dark:bg-[#2a2a2a]">
+        <div className="px-3 py-1.5 text-[15px] text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-white/10">
+          Shell
+        </div>
+        <pre className="m-0 p-3 text-[15px] leading-6 text-gray-700 dark:text-gray-300 whitespace-pre-wrap max-h-[280px] overflow-y-auto custom-scrollbar">
+          {`$ ${command}${outputText ? `\n\n${outputText}` : ""}`}
+        </pre>
+        <div className={`px-3 pb-2 text-xs text-right ${statusClassName}`}>
+          {statusText}
+        </div>
       </div>
-      {output && !hasError ? (
-        <span className="text-gray-500 dark:text-gray-400 truncate max-w-[200px]">
-          {output.split('\n')[0]}
-          {output.includes('\n') ? '...' : ''}
-        </span>
-      ) : null}
-      {hasError ? (
-        <span className="text-red-500 dark:text-red-400 truncate max-w-[200px]">
-          {toolCall.error}
-        </span>
-      ) : null}
     </div>
   );
 }

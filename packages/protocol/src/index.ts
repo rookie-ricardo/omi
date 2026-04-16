@@ -172,6 +172,23 @@ export const sessionHistoryContinueParamsSchema = z.object({
   checkpointDetails: z.record(z.unknown()).nullable().default(null),
 });
 
+export const sessionPermissionModeSchema = z.enum(["default", "full-access"]);
+
+export const sessionPermissionSetResultSchema = z.object({
+  sessionId: z.string(),
+  mode: sessionPermissionModeSchema,
+});
+
+export const sessionWorkspaceSetParamsSchema = z.object({
+  sessionId: z.string(),
+  workspaceRoot: z.string().nullable().default(null),
+});
+
+export const sessionWorkspaceSetResultSchema = z.object({
+  sessionId: z.string(),
+  workspaceRoot: z.string(),
+});
+
 export const sessionRuntimeCompactionStateSchema = z.object({
   status: z.enum(["idle", "requested", "running", "completed", "failed"]),
   reason: z.string().nullable(),
@@ -336,6 +353,11 @@ export const commandMap = {
   "tool.list": z.object({ sessionId: z.string() }),
   "session.history.list": sessionHistoryListParamsSchema,
   "session.history.continue": sessionHistoryContinueParamsSchema,
+  "session.workspace.set": sessionWorkspaceSetParamsSchema,
+  "session.permission.set": z.object({
+    sessionId: z.string(),
+    mode: sessionPermissionModeSchema,
+  }),
   "session.model.switch": sessionModelSwitchParamsSchema,
   "provider.config.save": providerConfigSaveParamsSchema,
   "provider.config.delete": providerConfigDeleteParamsSchema,
@@ -402,6 +424,8 @@ export const resultSchemas = {
   "session.compact": sessionCompactResultSchema,
   "session.history.list": sessionHistoryListResultSchema,
   "session.history.continue": runSchema,
+  "session.workspace.set": sessionWorkspaceSetResultSchema,
+  "session.permission.set": sessionPermissionSetResultSchema,
   "tool.pending.list": toolPendingListResultSchema,
   "tool.list": toolListResultSchema,
   "extension.list": extensionListResultSchema,
@@ -892,6 +916,7 @@ export type SessionModelSwitchParams = z.infer<typeof sessionModelSwitchParamsSc
 export type ProviderConfigSaveParams = z.infer<typeof providerConfigSaveParamsSchema>;
 export type SessionHistoryListParams = z.infer<typeof sessionHistoryListParamsSchema>;
 export type SessionHistoryContinueParams = z.infer<typeof sessionHistoryContinueParamsSchema>;
+export type SessionWorkspaceSetParams = z.infer<typeof sessionWorkspaceSetParamsSchema>;
 export type SessionRuntimeGetResult = z.infer<typeof sessionRuntimeGetResultSchema>;
 export type SessionModelSwitchResult = z.infer<typeof sessionModelSwitchResultSchema>;
 export type SessionTitleUpdateResult = z.infer<typeof sessionTitleUpdateResultSchema>;
@@ -914,6 +939,9 @@ export type SessionBranchSwitchResult = z.infer<typeof sessionBranchSwitchResult
 export type SessionModeState = z.infer<typeof sessionModeStateSchema>;
 export type SessionModeEnterResult = z.infer<typeof sessionModeEnterResultSchema>;
 export type SessionModeExitResult = z.infer<typeof sessionModeExitResultSchema>;
+export type SessionPermissionMode = z.infer<typeof sessionPermissionModeSchema>;
+export type SessionPermissionSetResult = z.infer<typeof sessionPermissionSetResultSchema>;
+export type SessionWorkspaceSetResult = z.infer<typeof sessionWorkspaceSetResultSchema>;
 
 // Permission rule types
 export type PermissionRule = z.infer<typeof permissionRuleSchema>;

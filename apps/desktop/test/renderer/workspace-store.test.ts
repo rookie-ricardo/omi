@@ -412,12 +412,64 @@ describe("workspace store", () => {
     expect(useWorkspaceStore.getState().streamingBySession[sessionId]).toBeUndefined();
   });
 
+  it("does not clear streaming content before run.cancel resolves", async () => {
+    const { gateway } = createGatewayMock();
+    const baseInvoke = gateway.invoke.bind(gateway);
+    let markCancelInvoked: (() => void) | null = null;
+    const cancelInvoked = new Promise<void>((resolve) => {
+      markCancelInvoked = resolve;
+    });
+    let releaseCancel: () => void = () => {};
+    const cancelGate = new Promise<void>((resolve) => {
+      releaseCancel = () => resolve();
+    });
+
+    gateway.invoke = (async (method, params) => {
+      if (method === "run.cancel") {
+        markCancelInvoked?.();
+        await cancelGate;
+        const runId = (params as { runId: string }).runId;
+        return { runId, canceled: true } as never;
+      }
+      return baseInvoke(method, params as never);
+    }) as RunnerGateway["invoke"];
+
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) {
+      throw new Error("missing session id in test");
+    }
+
+    useWorkspaceStore.setState((state) => ({
+      selectedSessionId: sessionId,
+      streamingBySession: {
+        ...state.streamingBySession,
+        [sessionId]: {
+          runId: "run_1",
+          content: "partial output",
+        },
+      },
+    }));
+
+    const cancelPromise = useWorkspaceStore.getState().cancelRun();
+    await cancelInvoked;
+    expect(useWorkspaceStore.getState().streamingBySession[sessionId]?.content).toBe(
+      "partial output",
+    );
+    releaseCancel();
+    await cancelPromise;
+  });
+
   it("creates a session on send when none selected and approves tool calls", async () => {
     const { gateway, getCalls } = createGatewayMock();
     setRunnerGatewayForTests(gateway);
 
     await useWorkspaceStore.getState().initialize();
     useWorkspaceStore.getState().beginNewThread();
+    useWorkspaceStore.setState({
+      selectedFiles: ["/Users/zhangyanqi/IdeaProjects/omi/README.md"],
+    });
     useWorkspaceStore.getState().setComposerInput("请创建一个全新的线程并执行任务");
 
     const sessionId = await useWorkspaceStore.getState().sendPrompt();
@@ -427,7 +479,17 @@ describe("workspace store", () => {
     if (!sessionId) {
       throw new Error("expected sessionId");
     }
+    expect(useWorkspaceStore.getState().selectedSessionId).toBe(sessionId);
     expect(useWorkspaceStore.getState().streamingBySession[sessionId]).toBeDefined();
+    expect(
+      getCalls().some(
+        (call) =>
+          call.method === "run.start" &&
+          (call.params as { contextFiles?: string[] }).contextFiles?.includes(
+            "/Users/zhangyanqi/IdeaProjects/omi/README.md",
+          ),
+      ),
+    ).toBe(true);
 
     await useWorkspaceStore.getState().approveToolCall("tool_1");
     expect(

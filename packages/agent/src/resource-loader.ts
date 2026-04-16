@@ -21,7 +21,7 @@ export interface ResourceLoader {
   listSkills(): Promise<SkillDescriptor[]>;
   searchSkills(query: string): Promise<SkillMatch[]>;
   resolveSkillForPrompt(prompt: string): Promise<ResolvedSkill | null>;
-  buildSystemPrompt(resolvedSkill: ResolvedSkill | null): string;
+  buildSystemPrompt(resolvedSkill: ResolvedSkill | null, cwd?: string): string;
   getPrompts(): ResourceCatalog<unknown>;
   getThemes(): ResourceCatalog<unknown>;
   getExtensions(): ResourceCatalog<ExtensionDefinition>;
@@ -66,10 +66,11 @@ export class DefaultResourceLoader implements ResourceLoader {
     return resolveSkillForPrompt(this.workspaceRoot, prompt);
   }
 
-  buildSystemPrompt(resolvedSkill: ResolvedSkill | null): string {
+  buildSystemPrompt(resolvedSkill: ResolvedSkill | null, cwd?: string): string {
     return buildSystemPrompt({
       projectContextFiles: this.projectContextFiles,
       resolvedSkill,
+      cwd: cwd ?? this.workspaceRoot,
     });
   }
 

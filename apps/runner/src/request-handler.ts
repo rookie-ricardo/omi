@@ -59,6 +59,8 @@ type RunnerRequestOrchestrator = Pick<
   | "rejectTool"
   | "listPendingToolCalls"
   | "listToolCalls"
+  | "setSessionWorkspaceRoot"
+  | "setSessionPermissionMode"
   | "switchModel"
   | "saveProviderConfig"
   | "deleteProviderConfig"
@@ -199,6 +201,16 @@ async function executeCommand(
         checkpointSummary: params.checkpointSummary ? String(params.checkpointSummary) : null,
         checkpointDetails: params.checkpointDetails ?? null,
       });
+    case "session.workspace.set":
+      return orchestrator.setSessionWorkspaceRoot(
+        String(params.sessionId),
+        typeof params.workspaceRoot === "string" ? params.workspaceRoot : null,
+      );
+    case "session.permission.set":
+      return orchestrator.setSessionPermissionMode(
+        String(params.sessionId),
+        String(params.mode) as "default" | "full-access",
+      );
     case "skill.list":
       return orchestrator.listSkills();
     case "skill.search":
@@ -226,6 +238,9 @@ async function executeCommand(
         sessionId: String(params.sessionId),
         taskId: params.taskId ? String(params.taskId) : null,
         prompt: String(params.prompt),
+        contextFiles: Array.isArray(params.contextFiles)
+          ? params.contextFiles.map((entry) => String(entry))
+          : undefined,
       });
     case "run.retry":
       return orchestrator.retryRun(String(params.runId));

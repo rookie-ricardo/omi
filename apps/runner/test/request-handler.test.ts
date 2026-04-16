@@ -128,6 +128,14 @@ describe("runner request handler", () => {
         sessionId: "session_1",
         toolCalls: [],
       })),
+      setSessionWorkspaceRoot: vi.fn((sessionId: string, workspaceRoot: string | null) => ({
+        sessionId,
+        workspaceRoot: workspaceRoot ?? "/workspace/default",
+      })),
+      setSessionPermissionMode: vi.fn((sessionId: string, mode: "default" | "full-access") => ({
+        sessionId,
+        mode,
+      })),
       switchModel: vi.fn(() => ({
         sessionId: "session_1",
         runtime: runtimeState,
@@ -234,6 +242,57 @@ describe("runner request handler", () => {
     });
     expect(normalizeResult("session.title.update", updatedTitleResponse)).toEqual(
       parseResult("session.title.update", updatedTitleResponse),
+    );
+
+    const workspaceResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_workspace",
+      method: "session.workspace.set",
+      params: {
+        sessionId: "session_1",
+        workspaceRoot: "/workspace/repo-a",
+      },
+    });
+    expect(workspaceResponse).toEqual({
+      sessionId: "session_1",
+      workspaceRoot: "/workspace/repo-a",
+    });
+    expect(normalizeResult("session.workspace.set", workspaceResponse)).toEqual(
+      parseResult("session.workspace.set", workspaceResponse),
+    );
+
+    const permissionResponse = await handleRunnerRequest(orchestrator, {
+      id: "rpc_permission",
+      method: "session.permission.set",
+      params: {
+        sessionId: "session_1",
+        mode: "full-access",
+      },
+    });
+    expect(permissionResponse).toEqual({
+      sessionId: "session_1",
+      mode: "full-access",
+    });
+    expect(normalizeResult("session.permission.set", permissionResponse)).toEqual(
+      parseResult("session.permission.set", permissionResponse),
+    );
+
+    await handleRunnerRequest(orchestrator, {
+      id: "rpc_run_start",
+      method: "run.start",
+      params: {
+        sessionId: "session_1",
+        taskId: null,
+        prompt: "inspect selected files first",
+        contextFiles: ["src/index.ts", "README.md"],
+      },
+    });
+    expect(orchestrator.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session_1",
+        taskId: null,
+        prompt: "inspect selected files first",
+        contextFiles: ["src/index.ts", "README.md"],
+      }),
     );
 
     const createdBranchResponse = await handleRunnerRequest(orchestrator, {

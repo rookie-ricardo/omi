@@ -133,6 +133,62 @@ describe("agent session", () => {
     expect(failedEvent?.payload.runId).toBe(run.id);
   });
 
+  it("persists streamed assistant text when canceling an active run", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Cancel preserves stream");
+    const runtime = new SessionManager().getOrCreate(session.id);
+    const providerConfig = database.upsertProviderConfig(makeProviderConfig());
+    runtime.setSelectedProviderConfig(providerConfig.id);
+    const events: RunnerEventEnvelope[] = [];
+    const provider = {
+      async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+        input.onTextDelta?.("当前目录是 /Users/zhangyanqi/IdeaProjects/omi");
+        return await new Promise<ProviderRunResult>((_resolve, reject) => {
+          const onAbort = () => {
+            input.signal?.removeEventListener("abort", onAbort);
+            reject(new Error("aborted"));
+          };
+          if (input.signal?.aborted) {
+            reject(new Error("aborted"));
+            return;
+          }
+          input.signal?.addEventListener("abort", onAbort);
+        });
+      },
+      cancel() {},
+    };
+
+    const agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: (event) => events.push(event),
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+    });
+
+    const run = agentSession.startRun({
+      prompt: "运行一下 pwd",
+      providerConfig,
+      taskId: null,
+    });
+
+    await waitFor(() =>
+      database.listEvents(run.id).some((event) => event.type === "run.delta"),
+    );
+    agentSession.cancelRun(run.id);
+    await waitFor(() => database.getRun(run.id)?.status === "canceled");
+    await waitFor(() =>
+      database
+        .listMessages(session.id)
+        .some((message) => message.role === "assistant" && message.content.includes("IdeaProjects/omi")),
+    );
+
+    expect(database.getSession(session.id)?.latestAssistantMessage).toContain("IdeaProjects/omi");
+    expect(events.some((event) => event.type === "run.canceled")).toBe(true);
+  });
+
   it("runs a prompt independent of orchestrator and persists lifecycle state", async () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Session");
@@ -1078,6 +1134,161 @@ describe("agent session", () => {
     expect(events.some((event) => event.type === "run.blocked")).toBe(true);
     expect(database.getRun(run.id)?.status).toBe("canceled");
     expect(database.getRun(run.id)?.terminalReason).toBe("canceled");
+  });
+
+  it("bypasses approval blocking in full-access mode", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Full access");
+    const runtime = new SessionManager().getOrCreate(session.id);
+    const providerConfig = database.upsertProviderConfig(makeProviderConfig());
+    runtime.setSelectedProviderConfig(providerConfig.id);
+    const events: RunnerEventEnvelope[] = [];
+    let providerTurn = 0;
+    const provider = {
+      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
+        if (providerTurn === 0) {
+          providerTurn += 1;
+          return {
+            assistantText: "",
+            assistantMessage: null,
+            stopReason: "tool_use" as const,
+            toolCalls: [
+              {
+                id: "tool-call-full-access",
+                name: "bash",
+                input: { command: "pwd" },
+              },
+            ],
+            usage: { inputTokens: 0, outputTokens: 0 },
+            error: null,
+          };
+        }
+        return {
+          assistantText: "done",
+          assistantMessage: null,
+          stopReason: "end_turn" as const,
+          toolCalls: [],
+          usage: { inputTokens: 0, outputTokens: 0 },
+          error: null,
+        };
+      },
+      cancel() {},
+    };
+
+    const agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: (event) => events.push(event),
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+      permissionMode: "full-access",
+    });
+
+    const run = agentSession.startRun({
+      prompt: "run bash in full-access mode",
+      providerConfig,
+      taskId: null,
+    });
+
+    await waitFor(() => database.getRun(run.id)?.status === "completed");
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === "run.tool_requested" &&
+          event.payload.requiresApproval === false,
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.type === "run.blocked")).toBe(false);
+    expect(runtime.snapshot().pendingApprovalToolCallIds).toEqual([]);
+    expect(database.getRun(run.id)?.status).toBe("completed");
+  });
+
+  it("handles approval decisions that arrive immediately on tool request", async () => {
+    const database = createMemoryDatabase();
+    const session = database.createSession("Immediate approval");
+    const runtime = new SessionManager().getOrCreate(session.id);
+    const providerConfig = database.upsertProviderConfig(makeProviderConfig());
+    runtime.setSelectedProviderConfig(providerConfig.id);
+    const events: RunnerEventEnvelope[] = [];
+    let providerTurn = 0;
+    let agentSession: AgentSession | null = null;
+    const provider = {
+      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
+        if (providerTurn === 0) {
+          providerTurn += 1;
+          return {
+            assistantText: "",
+            assistantMessage: null,
+            stopReason: "tool_use" as const,
+            toolCalls: [
+              {
+                id: "tool-call-race",
+                name: "bash",
+                input: { command: "pwd" },
+              },
+            ],
+            usage: { inputTokens: 0, outputTokens: 0 },
+            error: null,
+          };
+        }
+        return {
+          assistantText: "approved",
+          assistantMessage: null,
+          stopReason: "end_turn" as const,
+          toolCalls: [],
+          usage: { inputTokens: 0, outputTokens: 0 },
+          error: null,
+        };
+      },
+      cancel() {},
+    };
+
+    agentSession = new AgentSession({
+      database,
+      sessionId: session.id,
+      workspaceRoot: process.cwd(),
+      emit: (event) => {
+        events.push(event);
+        if (event.type !== "run.tool_requested") {
+          return;
+        }
+        const toolCallId =
+          typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : null;
+        if (agentSession && toolCallId) {
+          agentSession.approveTool(toolCallId);
+        }
+      },
+      resources: makeStaticResources(),
+      runtime,
+      provider,
+    });
+
+    const run = agentSession.startRun({
+      prompt: "show cwd with immediate approval",
+      providerConfig,
+      taskId: null,
+    });
+
+    await waitFor(() => database.getRun(run.id)?.status === "completed");
+
+    expect(
+      events.some(
+        (event) =>
+          event.type === "run.tool_requested" && event.payload.requiresApproval === true,
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "run.tool_decided" &&
+          event.payload.decision === "approved",
+      ),
+    ).toBe(true);
+    expect(runtime.snapshot().blockedToolCallId).toBeNull();
+    expect(runtime.snapshot().pendingApprovalToolCallIds).toEqual([]);
   });
 });
 
