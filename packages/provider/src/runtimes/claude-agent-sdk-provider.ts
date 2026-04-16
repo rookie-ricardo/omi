@@ -1,14 +1,15 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, tool as createClaudeMcpTool } from "@anthropic-ai/claude-agent-sdk";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import type { ProviderAdapter, ProviderRunInput, ProviderRunResult } from "../providers";
-import type { ModelStopReason, ModelToolCall, ModelUsage } from "../types";
+import type { ModelStopReason, ModelUsage } from "../types";
 import {
   buildSingleTurnPrompt,
   createAssistantMessage,
   linkAbortSignal,
   mapClaudeStopReasonToModel,
-  normalizeToolInput,
 } from "./runtime-utils";
+import { jsonSchemaToZodShape } from "./tool-schema";
 
 interface ClaudeAgentSdkDeps {
   query: typeof query;
@@ -17,32 +18,6 @@ interface ClaudeAgentSdkDeps {
 const DEFAULT_DEPS: ClaudeAgentSdkDeps = {
   query,
 };
-
-const OMI_TO_CLAUDE_TOOL_NAME: Record<string, string> = {
-  bash: "Bash",
-  read: "Read",
-  edit: "Edit",
-  notebook_edit: "NotebookEdit",
-  write: "Write",
-  ls: "LS",
-  grep: "Grep",
-  glob: "Glob",
-  "web.fetch": "WebFetch",
-  "web.search": "WebSearch",
-  "todo.write": "TodoWrite",
-  ask_user: "AskUserQuestion",
-};
-
-const CLAUDE_TO_OMI_TOOL_NAME: Record<string, string> = Object.fromEntries(
-  Object.entries(OMI_TO_CLAUDE_TOOL_NAME).map(([omiName, claudeName]) => [claudeName, omiName]),
-);
-
-function mapClaudeToolName(toolName: string): string {
-  if (CLAUDE_TO_OMI_TOOL_NAME[toolName]) {
-    return CLAUDE_TO_OMI_TOOL_NAME[toolName];
-  }
-  return toolName.toLowerCase();
-}
 
 function collectDeltaText(event: unknown): string {
   if (typeof event !== "object" || event === null) {
@@ -79,6 +54,26 @@ function parseResultUsage(rawUsage: unknown): ModelUsage {
   };
 }
 
+function renderToolOutputText(output: unknown): string {
+  if (typeof output === "string") {
+    return output;
+  }
+  if (Array.isArray(output)) {
+    const lines = output.map((entry) => {
+      if (typeof entry !== "object" || entry === null) {
+        return JSON.stringify(entry);
+      }
+      const item = entry as Record<string, unknown>;
+      if (item.type === "text" && typeof item.text === "string") {
+        return item.text;
+      }
+      return JSON.stringify(item);
+    });
+    return lines.join("\n");
+  }
+  return JSON.stringify(output ?? "");
+}
+
 export class ClaudeAgentSdkProvider implements ProviderAdapter {
   private readonly abortControllers = new Map<string, AbortController>();
 
@@ -94,16 +89,44 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     let usage: ModelUsage = { inputTokens: 0, outputTokens: 0 };
     let stopReason: ModelStopReason = "end_turn";
     let error: string | null = null;
+    let toolCallCounter = 0;
 
-    const capturedToolCalls = new Map<string, ModelToolCall>();
-    const enabledTools = new Set(input.enabledTools ?? (input.tools ?? []).map((tool) => tool.name));
-    const claudeTools = Array.from(
-      new Set(
-        Array.from(enabledTools)
-          .map((toolName) => OMI_TO_CLAUDE_TOOL_NAME[toolName])
-          .filter((toolName): toolName is string => Boolean(toolName)),
+    const runnableTools = (input.tools ?? []).filter(
+      (tool) => !input.enabledTools || input.enabledTools.includes(tool.name),
+    );
+
+    const mcpTools = runnableTools.map((tool) =>
+      createClaudeMcpTool(
+        tool.name,
+        tool.description,
+        jsonSchemaToZodShape(tool.parameters),
+        async (args): Promise<CallToolResult> => {
+          try {
+            const result = await tool.execute(
+              `${input.runId}:native:${tool.name}:${++toolCallCounter}`,
+              args as Record<string, unknown>,
+              abortController.signal,
+              () => {},
+            );
+            const outputText = renderToolOutputText(result.content);
+            return {
+              content: [{ type: "text", text: outputText }],
+              isError: false,
+            };
+          } catch (caughtError) {
+            const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+            return {
+              content: [{ type: "text", text: message }],
+              isError: true,
+            };
+          }
+        },
       ),
     );
+    const mcpServer = createSdkMcpServer({
+      name: `omi-${input.runId}`,
+      tools: mcpTools,
+    });
 
     const queryStream = this.deps.query({
       prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
@@ -111,32 +134,10 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
         cwd: input.workspaceRoot,
         model: input.providerConfig.model,
         systemPrompt: input.systemPrompt,
-        maxTurns: 1,
-        permissionMode: "dontAsk",
-        tools: claudeTools,
-        canUseTool: async (toolName, toolInput, options) => {
-          const mappedToolName = mapClaudeToolName(toolName);
-          if (!enabledTools.has(mappedToolName)) {
-            return {
-              behavior: "deny",
-              message: `Tool '${mappedToolName}' is not enabled in this run.`,
-              toolUseID: options.toolUseID,
-            };
-          }
-
-          if (!capturedToolCalls.has(options.toolUseID)) {
-            capturedToolCalls.set(options.toolUseID, {
-              id: options.toolUseID,
-              name: mappedToolName,
-              input: normalizeToolInput(toolInput),
-            });
-          }
-
-          return {
-            behavior: "deny",
-            message: "Tool execution is delegated to the external orchestrator.",
-            toolUseID: options.toolUseID,
-          };
+        maxTurns: 20,
+        tools: [],
+        mcpServers: {
+          omi: mcpServer,
         },
         abortController,
         env: {
@@ -173,6 +174,9 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
           if (typeof message.stop_reason === "string" || message.stop_reason === null) {
             stopReason = mapClaudeStopReasonToModel(message.stop_reason);
           }
+          if (typeof (message as Record<string, unknown>).result === "string") {
+            fallbackAssistantText += String((message as Record<string, unknown>).result);
+          }
 
           if (message.subtype !== "success") {
             const errors = Array.isArray(message.errors) ? message.errors : [];
@@ -187,21 +191,18 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     } finally {
       unlinkAbortSignal();
       this.abortControllers.delete(input.runId);
+      queryStream.close();
+      await mcpServer.instance.close();
     }
 
     if (assistantText.length === 0 && fallbackAssistantText.length > 0) {
       assistantText = fallbackAssistantText;
     }
 
-    const toolCalls = Array.from(capturedToolCalls.values());
-    if (toolCalls.length > 0) {
-      stopReason = "tool_use";
-    }
-
     const assistantMessage = createAssistantMessage({
       providerConfig: input.providerConfig,
       assistantText,
-      toolCalls,
+      toolCalls: [],
       usage,
       stopReason,
     });
@@ -210,7 +211,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       assistantText,
       assistantMessage,
       stopReason,
-      toolCalls,
+      toolCalls: [],
       usage,
       error,
     };

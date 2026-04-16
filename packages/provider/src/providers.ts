@@ -83,7 +83,7 @@ export interface ProviderRouterOptions {
  * PiAiProvider - runtime router facade.
  *
  * Routes anthropic providers to Claude runtime and others to Vercel runtime.
- * Tool execution remains in the agent layer (QueryEngine).
+ * Tool execution is handled by runtime-native SDK agent loops.
  */
 export class PiAiProvider implements ProviderAdapter {
   private readonly claudeProvider: ProviderAdapter;

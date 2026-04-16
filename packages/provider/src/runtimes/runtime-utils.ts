@@ -96,13 +96,6 @@ export function createAssistantMessage(params: {
   };
 }
 
-export function normalizeToolInput(input: unknown): Record<string, unknown> {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    return {};
-  }
-  return input as Record<string, unknown>;
-}
-
 function renderTextLikeContent(content: unknown): string {
   if (typeof content === "string") {
     return content;

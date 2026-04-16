@@ -1,15 +1,14 @@
-import { streamText, jsonSchema } from "ai";
+import { streamText, jsonSchema, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 
 import { createModelFromConfig } from "../model-registry";
 import type { ProviderAdapter, ProviderRunInput, ProviderRunResult } from "../providers";
-import type { ModelToolCall, ModelUsage } from "../types";
+import type { ModelUsage } from "../types";
 import {
   buildSingleTurnPrompt,
   createAssistantMessage,
   linkAbortSignal,
   mapVercelFinishReasonToModel,
-  normalizeToolInput,
 } from "./runtime-utils";
 
 interface VercelAiSdkDeps {
@@ -33,10 +32,10 @@ export class VercelAiSdkProvider implements ProviderAdapter {
     this.abortControllers.set(input.runId, abortController);
 
     let assistantText = "";
-    let toolCalls: ModelToolCall[] = [];
     let usage: ModelUsage = { inputTokens: 0, outputTokens: 0 };
     let stopReason: ProviderRunResult["stopReason"] = "end_turn";
     let error: string | null = null;
+    let toolCallCounter = 0;
 
     try {
       const modelConfig = createModelFromConfig(input.providerConfig);
@@ -50,6 +49,18 @@ export class VercelAiSdkProvider implements ProviderAdapter {
           accumulator[tool.name] = {
             description: tool.description,
             inputSchema: jsonSchema(tool.parameters as any),
+            execute: async (toolInput: Record<string, unknown>) => {
+              const result = await tool.execute(
+                `${input.runId}:native:${tool.name}:${++toolCallCounter}`,
+                toolInput,
+                abortController.signal,
+                () => {},
+              );
+              return {
+                content: result.content,
+                details: result.details,
+              };
+            },
           };
           return accumulator;
         }, {}) as any;
@@ -59,6 +70,7 @@ export class VercelAiSdkProvider implements ProviderAdapter {
         system: input.systemPrompt,
         prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
         tools: activeTools,
+        stopWhen: stepCountIs(20),
         abortSignal: abortController.signal,
       });
 
@@ -67,28 +79,21 @@ export class VercelAiSdkProvider implements ProviderAdapter {
         await input.onTextDelta?.(delta);
       }
 
-      const [resolvedToolCalls, resolvedFinishReason, resolvedUsage] = await Promise.all([
-        textStreamResult.toolCalls,
+      const [resolvedFinishReason, resolvedUsage] = await Promise.all([
         textStreamResult.finishReason,
         textStreamResult.usage,
       ]);
-
-      toolCalls = resolvedToolCalls.map((toolCall) => ({
-        id: toolCall.toolCallId,
-        name: toolCall.toolName,
-        input: normalizeToolInput(toolCall.input),
-      }));
       stopReason = mapVercelFinishReasonToModel(resolvedFinishReason);
+      if (stopReason === "tool_use") {
+        // Tool calls are fully handled inside the SDK loop.
+        stopReason = "end_turn";
+      }
       usage = {
         inputTokens: resolvedUsage.inputTokens ?? 0,
         outputTokens: resolvedUsage.outputTokens ?? 0,
         cacheReadTokens: resolvedUsage.inputTokenDetails?.cacheReadTokens ?? undefined,
         cacheCreationTokens: resolvedUsage.inputTokenDetails?.cacheWriteTokens ?? undefined,
       };
-
-      if (toolCalls.length > 0) {
-        stopReason = "tool_use";
-      }
     } catch (caughtError) {
       error = caughtError instanceof Error ? caughtError.message : String(caughtError);
       stopReason = "error";
@@ -100,7 +105,7 @@ export class VercelAiSdkProvider implements ProviderAdapter {
     const assistantMessage = createAssistantMessage({
       providerConfig: input.providerConfig,
       assistantText,
-      toolCalls,
+      toolCalls: [],
       usage,
       stopReason,
     });
@@ -109,7 +114,7 @@ export class VercelAiSdkProvider implements ProviderAdapter {
       assistantText,
       assistantMessage,
       stopReason,
-      toolCalls,
+      toolCalls: [],
       usage,
       error,
     };

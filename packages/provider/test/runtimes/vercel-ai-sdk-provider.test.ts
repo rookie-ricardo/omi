@@ -39,20 +39,15 @@ function makeTool(name: string): OmiTool {
 }
 
 describe("VercelAiSdkProvider", () => {
-  it("streams text and returns tool calls from ai sdk", async () => {
+  it("runs native sdk loop with tool execute callbacks", async () => {
     const onTextDelta = vi.fn();
-    const streamTextSpy = vi.fn(() => ({
+    const streamTextSpy = vi.fn((options: any) => ({
       textStream: (async function* () {
+        await options.tools.bash.execute({ query: "ls -la" });
         yield "hel";
         yield "lo";
       })(),
-      toolCalls: Promise.resolve([
-        {
-          toolCallId: "tool_1",
-          toolName: "bash",
-          input: { query: "ls -la" },
-        },
-      ]),
+      toolCalls: Promise.resolve([]),
       finishReason: Promise.resolve("tool-calls"),
       usage: Promise.resolve({
         inputTokens: 12,
@@ -88,14 +83,8 @@ describe("VercelAiSdkProvider", () => {
     });
 
     expect(result.assistantText).toBe("hello");
-    expect(result.stopReason).toBe("tool_use");
-    expect(result.toolCalls).toEqual([
-      {
-        id: "tool_1",
-        name: "bash",
-        input: { query: "ls -la" },
-      },
-    ]);
+    expect(result.stopReason).toBe("end_turn");
+    expect(result.toolCalls).toEqual([]);
     expect(result.usage).toEqual({
       inputTokens: 12,
       outputTokens: 34,
