@@ -29,7 +29,7 @@ import {
   sessionCompactionSnapshotSchema,
 } from "@omi/memory";
 import {
-  PiAiProvider,
+  createProviderAdapter,
   type ProviderAdapter,
   type ProviderRunResult,
   type ProviderToolRequestedEvent,
@@ -122,7 +122,7 @@ export class AgentSession {
   private workspaceRoot: string;
 
   constructor(private readonly options: AgentSessionOptions) {
-    this.provider = options.provider ?? new PiAiProvider();
+    this.provider = options.provider ?? createProviderAdapter();
     this.evaluatorOverride = options.evaluator ?? null;
     this.permissionMode = options.permissionMode ?? "default";
     this.workspaceRoot = options.workspaceRoot;

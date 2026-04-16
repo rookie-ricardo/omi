@@ -84,6 +84,16 @@ describe("protocol", () => {
     expect(resolved.extensions).toEqual(["workspace-extension"]);
   });
 
+  it("parses runtime selection events", () => {
+    const resolved = parseEvent("run.runtime_selected", {
+      runId: "run_1",
+      sessionId: "session_1",
+      runtime: "claude-agent-sdk",
+    });
+
+    expect(resolved.runtime).toBe("claude-agent-sdk");
+  });
+
   it("parses protocol result payloads", () => {
     const runtime = parseResult("session.runtime.get", {
       sessionId: "session_1",

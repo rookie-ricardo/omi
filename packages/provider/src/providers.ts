@@ -3,8 +3,10 @@ import type { Message } from "@mariozechner/pi-ai";
 import type { OmiTool, ThinkingLevel, ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
-import { PiAiModelClient } from "./model-client/pi-ai-client";
-import type { ModelClientCallbacks, ModelStopReason, ModelToolCall, ModelUsage, ToolName } from "./model-client/types";
+import type { ModelStopReason, ModelToolCall, ModelUsage, ToolName } from "./model-client/types";
+import { resolveProviderRuntime } from "./runtimes/resolver";
+import { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
+import { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";
 
 export interface ProviderAdapter {
   run(input: ProviderRunInput): Promise<ProviderRunResult>;
@@ -72,57 +74,45 @@ export function buildAgentInitialState(input: ProviderRunInput) {
   };
 }
 
+export interface ProviderRouterOptions {
+  claudeProvider?: ProviderAdapter;
+  vercelProvider?: ProviderAdapter;
+}
+
 /**
- * PiAiProvider - unified provider implementation backed by PiAiModelClient.
+ * PiAiProvider - runtime router facade.
  *
- * Single-turn caller: streams one LLM response and returns it with any tool calls.
- * Tool execution is handled by the agent layer (QueryEngine).
+ * Routes anthropic providers to Claude runtime and others to Vercel runtime.
+ * Tool execution remains in the agent layer (QueryEngine).
  */
 export class PiAiProvider implements ProviderAdapter {
-  private readonly modelClient: PiAiModelClient;
+  private readonly claudeProvider: ProviderAdapter;
+  private readonly vercelProvider: ProviderAdapter;
 
-  constructor() {
-    this.modelClient = new PiAiModelClient();
+  constructor(options: ProviderRouterOptions = {}) {
+    this.claudeProvider = options.claudeProvider ?? new ClaudeAgentSdkProvider();
+    this.vercelProvider = options.vercelProvider ?? new VercelAiSdkProvider();
   }
 
   async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-    const callbacks: ModelClientCallbacks = {
-      onTextDelta: input.onTextDelta,
-      onUsage: () => {},
-      onError: () => {},
-      onRequestStart: () => {},
-    };
-
-    const result = await this.modelClient.run(
-      {
-        runId: input.runId,
-        sessionId: input.sessionId,
-        prompt: input.prompt,
-        historyMessages: input.historyMessages,
-        systemPrompt: input.systemPrompt,
-        providerConfig: input.providerConfig,
-        enabledTools: input.enabledTools,
-        tools: input.tools,
-        thinkingLevel: input.thinkingLevel,
-        toolExecutionMode: input.toolExecutionMode,
-      },
-      callbacks,
-    );
-
-    return {
-      assistantText: result.assistantText,
-      assistantMessage: result.assistantMessage,
-      stopReason: result.stopReason,
-      toolCalls: result.toolCalls,
-      usage: result.usage,
-      error: result.error,
-    };
+    const runtime = resolveProviderRuntime(input.providerConfig);
+    const targetProvider = runtime === "claude-agent-sdk" ? this.claudeProvider : this.vercelProvider;
+    return targetProvider.run(input);
   }
 
   cancel(runId: string): void {
-    this.modelClient.cancel(runId);
+    for (const provider of new Set([this.claudeProvider, this.vercelProvider])) {
+      provider.cancel(runId);
+    }
   }
 }
 
-export { canonicalizeForHash, buildStableToolCallId } from "./model-client/pi-ai-client";
+export function createProviderAdapter(options: ProviderRouterOptions = {}): ProviderAdapter {
+  return new PiAiProvider(options);
+}
+
+export { canonicalizeForHash, buildStableToolCallId } from "./tool-call-id";
 export type { ModelToolCall, ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./model-client/types";
+export { resolveProviderRuntime, type ProviderRuntime } from "./runtimes/resolver";
+export { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
+export { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";

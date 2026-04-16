@@ -786,6 +786,11 @@ export const eventSchemas = {
     sessionId: z.string(),
     taskId: z.string().nullable(),
   }),
+  "run.runtime_selected": z.object({
+    runId: z.string(),
+    sessionId: z.string(),
+    runtime: z.enum(["claude-agent-sdk", "vercel-ai-sdk"]),
+  }),
   "run.skills_resolved": z.object({
     runId: z.string(),
     sessionId: z.string(),

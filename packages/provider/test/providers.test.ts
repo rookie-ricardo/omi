@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Message, ThinkingLevel } from "@mariozechner/pi-ai";
+import { type Message } from "@mariozechner/pi-ai";
 
 import type { ProviderConfig } from "@omi/core";
 
 import {
   buildAgentInitialState,
+  createProviderAdapter,
   createModelFromConfig,
+  resolveProviderRuntime,
   PiAiProvider,
   THINKING_LEVELS,
   THINKING_LEVELS_WITH_XHIGH,
@@ -70,6 +72,74 @@ describe("providers", () => {
         content: [{ type: "text", text: "previous user" }],
       }),
     ]);
+  });
+
+  it("routes anthropic provider configs to claude runtime", () => {
+    expect(resolveProviderRuntime(makeConfig({ type: "anthropic" }))).toBe("claude-agent-sdk");
+    expect(resolveProviderRuntime(makeConfig({ type: "anthropic-compatible" }))).toBe("claude-agent-sdk");
+  });
+
+  it("routes non-anthropic provider configs to vercel runtime", () => {
+    expect(
+      resolveProviderRuntime(
+        makeConfig({
+          type: "openai",
+          protocol: "openai-responses",
+          model: "gpt-4.1-mini",
+        }),
+      ),
+    ).toBe("vercel-ai-sdk");
+  });
+
+  it("routes provider run calls through runtime-specific adapters", async () => {
+    const claudeRuntime: ProviderAdapter = {
+      run: vi.fn(async () => ({
+        assistantText: "claude",
+        assistantMessage: null,
+        stopReason: "end_turn" as const,
+        toolCalls: [],
+        usage: { inputTokens: 1, outputTokens: 1 },
+        error: null,
+      })),
+      cancel: vi.fn(),
+    };
+    const vercelRuntime: ProviderAdapter = {
+      run: vi.fn(async () => ({
+        assistantText: "vercel",
+        assistantMessage: null,
+        stopReason: "end_turn" as const,
+        toolCalls: [],
+        usage: { inputTokens: 2, outputTokens: 2 },
+        error: null,
+      })),
+      cancel: vi.fn(),
+    };
+    const provider = createProviderAdapter({
+      claudeProvider: claudeRuntime,
+      vercelProvider: vercelRuntime,
+    });
+
+    const anthropicResult = await provider.run({
+      runId: "run_1",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "hello",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+    });
+    const openaiResult = await provider.run({
+      runId: "run_2",
+      sessionId: "session_1",
+      workspaceRoot: "/workspace",
+      prompt: "hello",
+      historyMessages: [],
+      providerConfig: makeConfig({ type: "openai", protocol: "openai-responses", model: "gpt-4o-mini" }),
+    });
+
+    expect(anthropicResult.assistantText).toBe("claude");
+    expect(openaiResult.assistantText).toBe("vercel");
+    expect(claudeRuntime.run).toHaveBeenCalledTimes(1);
+    expect(vercelRuntime.run).toHaveBeenCalledTimes(1);
   });
 });
 

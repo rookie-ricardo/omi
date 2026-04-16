@@ -30,7 +30,15 @@ import {
   type ContextPipelineConfig,
   type ContextPipelineResult,
 } from "@omi/memory";
-import { createModelFromConfig, PiAiProvider, CostTracker, createCostTracker, buildStableToolCallId } from "@omi/provider";
+import {
+  createModelFromConfig,
+  createProviderAdapter,
+  CostTracker,
+  createCostTracker,
+  buildStableToolCallId,
+  resolveProviderRuntime,
+  type ProviderRuntime,
+} from "@omi/provider";
 import type { ProviderAdapter, ProviderRunResult, ModelToolCall } from "@omi/provider";
 import type { ToolResultMessage, Message as PiAiMessage } from "@mariozechner/pi-ai";
 import { SAFE_TOOL_NAMES, listBuiltInToolNames, createAllTools, requiresApproval, isBuiltInTool } from "@omi/tools";
@@ -131,6 +139,7 @@ interface PreparedRunContext {
   runId: string;
   sessionStatus: Session["status"];
   branchLeafEntryId: string | null;
+  providerRuntime: ProviderRuntime;
   currentHistoryMessages: RuntimeMessage[];
   resolvedSkill: ResolvedSkill | null;
 }
@@ -203,7 +212,7 @@ export class QueryEngine {
   private readonly bufferedApprovalDecisions = new Map<string, "approved" | "rejected">();
 
   constructor(private readonly deps: QueryEngineDeps) {
-    this.provider = deps.provider ?? new PiAiProvider();
+    this.provider = deps.provider ?? createProviderAdapter();
     this.state = createInitialMutableState();
     // Initialize permission evaluator with denial tracker
     this.denialTracker = deps.denialTracker ?? new MemoryDenialTracker();
@@ -1057,6 +1066,16 @@ export class QueryEngine {
     });
 
     this.deps.runtime.beginRun(input.run.id, input.prompt);
+    const providerRuntime = resolveProviderRuntime(input.providerConfig);
+
+    this.emitEvent({
+      type: "run.runtime_selected",
+      payload: {
+        runId: input.run.id,
+        sessionId: input.session.id,
+        runtime: providerRuntime,
+      },
+    });
 
     this.emitEvent({
       type: "run.started",
@@ -1074,6 +1093,7 @@ export class QueryEngine {
       runId: input.run.id,
       sessionStatus,
       branchLeafEntryId,
+      providerRuntime,
       currentHistoryMessages,
       resolvedSkill: null,
     };
@@ -1126,6 +1146,14 @@ export class QueryEngine {
         sessionId: input.session.id,
         extensions: extensionCatalog.items.map((ext) => ext.name),
         diagnostics: extensionCatalog.diagnostics,
+      },
+    });
+    await extensionRunner.emit({
+      type: "run.runtime_selected",
+      payload: {
+        runId: input.run.id,
+        sessionId: input.session.id,
+        runtime: prepared.providerRuntime,
       },
     });
     await extensionRunner.emit({

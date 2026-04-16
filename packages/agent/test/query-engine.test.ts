@@ -522,6 +522,58 @@ describe("QueryEngine", () => {
       expect(providerPrompt).toContain("review these files");
     });
 
+    it("emits selected runtime based on provider type", async () => {
+      const session = createTestSession();
+      const run = createTestRun(session.id);
+      const database = createTestDatabase(session, run);
+      const events: QueryEngineEvent[] = [];
+      const mockRuntime = createMockRuntime(session.id);
+
+      const provider = {
+        async run(): Promise<ProviderRunResult> {
+          return {
+            assistantText: "done",
+            assistantMessage: null,
+            stopReason: "end_turn" as const,
+            toolCalls: [],
+            usage: { inputTokens: 0, outputTokens: 0 },
+            error: null,
+          };
+        },
+        cancel() {},
+      };
+
+      const deps: QueryEngineDeps = {
+        database,
+        sessionId: session.id,
+        workspaceRoot: process.cwd(),
+        emit: (event) => events.push(event),
+        resources: makeStaticResources(),
+        runtime: mockRuntime,
+        provider,
+      };
+
+      const engine = new QueryEngine(deps);
+      await engine.execute({
+        session,
+        task: null,
+        run,
+        prompt: "hello",
+        providerConfig: createTestProviderConfig(),
+        historyEntryId: null,
+        checkpointSummary: null,
+        checkpointDetails: null,
+      });
+
+      expect(
+        events.some(
+          (event) =>
+            event.type === "run.runtime_selected" &&
+            (event as { payload?: { runtime?: string } }).payload?.runtime === "claude-agent-sdk",
+        ),
+      ).toBe(true);
+    });
+
     // TODO: re-enable after migrating preflight check logic out of provider
     it.skip("uses explicit plan state as the single source of truth for preflight checks", async () => {
       const planState = createPlanStateManager();
