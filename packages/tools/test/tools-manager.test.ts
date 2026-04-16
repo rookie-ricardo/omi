@@ -130,6 +130,11 @@ describe("tools-manager", () => {
     it("在 silent 模式下不输出日志", async () => {
       const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
+      // 避免在缺少 fd 的环境里触发下载分支导致超时
+      if (getToolPath("fd") === null) {
+        process.env.OMI_OFFLINE = "1";
+      }
+
       await ensureTool("fd", true);
 
       // silent 模式下应该不输出日志
