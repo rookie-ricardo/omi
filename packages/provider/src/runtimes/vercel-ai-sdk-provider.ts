@@ -3,8 +3,9 @@ import { createOpenAI } from "@ai-sdk/openai";
 
 import { createModelFromConfig } from "../model-registry";
 import type { ProviderAdapter, ProviderRunInput, ProviderRunResult } from "../providers";
-import type { ModelToolCall, ModelUsage } from "../model-client/types";
+import type { ModelToolCall, ModelUsage } from "../types";
 import {
+  buildSingleTurnPrompt,
   createAssistantMessage,
   linkAbortSignal,
   mapVercelFinishReasonToModel,
@@ -56,7 +57,7 @@ export class VercelAiSdkProvider implements ProviderAdapter {
       const textStreamResult = this.deps.streamText({
         model: openaiProvider(input.providerConfig.model),
         system: input.systemPrompt,
-        prompt: input.prompt,
+        prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
         tools: activeTools,
         abortSignal: abortController.signal,
       });

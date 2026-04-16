@@ -1,13 +1,7 @@
 import type { ProviderConfig } from "@omi/core";
+
 import type { ProtocolType } from "./types";
 
-/**
- * Protocol router configuration.
- * Maps protocol + model to pi-ai API configuration.
- *
- * IMPORTANT: All routing decisions are based on explicit providerConfig.protocol.
- * No global defaults or implicit priority rules.
- */
 export interface ProtocolRouterConfig {
   protocol: ProtocolType;
   apiVariant: string;
@@ -18,19 +12,12 @@ export interface ProtocolRouterConfig {
   maxConcurrentTools: number;
 }
 
-/**
- * Known API variants per protocol.
- */
 const PROTOCOL_API_VARIANTS: Record<ProtocolType, string[]> = {
   "anthropic-messages": ["anthropic-messages"],
   "openai-responses": ["openai-responses"],
   "openai-chat": ["openai-completions"],
 };
 
-/**
- * Protocol capabilities per API variant.
- * These determine what features are available for each protocol.
- */
 const API_CAPABILITIES: Record<string, {
   supportsToolLoop: boolean;
   supportsUsageInStreaming: boolean;
@@ -38,13 +25,12 @@ const API_CAPABILITIES: Record<string, {
   supportsPromptCaching: boolean;
   maxConcurrentTools: number;
 }> = {
-  // Anthropic messages API
   "anthropic-messages": {
     supportsToolLoop: true,
     supportsUsageInStreaming: true,
     supportsThinking: true,
     supportsPromptCaching: true,
-    maxConcurrentTools: 1, // Claude requires sequential tool calls
+    maxConcurrentTools: 1,
   },
   "anthropic-responses": {
     supportsToolLoop: true,
@@ -53,7 +39,6 @@ const API_CAPABILITIES: Record<string, {
     supportsPromptCaching: true,
     maxConcurrentTools: 1,
   },
-  // OpenAI Responses API
   "openai-responses": {
     supportsToolLoop: true,
     supportsUsageInStreaming: false,
@@ -61,7 +46,6 @@ const API_CAPABILITIES: Record<string, {
     supportsPromptCaching: true,
     maxConcurrentTools: 5,
   },
-  // OpenAI Chat Completions
   "openai-completions": {
     supportsToolLoop: true,
     supportsUsageInStreaming: false,
@@ -99,10 +83,6 @@ const API_CAPABILITIES: Record<string, {
   },
 };
 
-/**
- * Resolve the API variant for a provider configuration.
- * The API variant is determined by the configured protocol.
- */
 export function resolveApiVariant(providerConfig: ProviderConfig): string {
   switch (resolveProtocol(providerConfig)) {
     case "anthropic-messages":
@@ -114,9 +94,6 @@ export function resolveApiVariant(providerConfig: ProviderConfig): string {
   }
 }
 
-/**
- * Get protocol capabilities for a given API variant.
- */
 export function getApiCapabilities(apiVariant: string): {
   supportsToolLoop: boolean;
   supportsUsageInStreaming: boolean;
@@ -127,20 +104,12 @@ export function getApiCapabilities(apiVariant: string): {
   return API_CAPABILITIES[apiVariant] ?? API_CAPABILITIES["openai-completions"];
 }
 
-/**
- * Get the supported API variants for a protocol type.
- */
 export function getSupportedApiVariants(protocol: ProtocolType): string[] {
   return [...PROTOCOL_API_VARIANTS[protocol]];
 }
 
-/**
- * Route a provider configuration to the appropriate protocol and API variant.
- * Returns the full protocol routing configuration.
- */
 export function routeProtocol(providerConfig: ProviderConfig): ProtocolRouterConfig {
   const protocol = resolveProtocol(providerConfig);
-
   const apiVariant = resolveApiVariant(providerConfig);
   const capabilities = getApiCapabilities(apiVariant);
 
@@ -151,9 +120,6 @@ export function routeProtocol(providerConfig: ProviderConfig): ProtocolRouterCon
   };
 }
 
-/**
- * Check if a protocol supports a specific feature.
- */
 export function protocolSupportsFeature(
   providerConfig: ProviderConfig,
   feature: keyof Omit<ProtocolRouterConfig, "protocol" | "apiVariant">,
@@ -176,3 +142,4 @@ function resolveProtocol(providerConfig: ProviderConfig): ProtocolType {
     `providerConfig.protocol must be one of anthropic-messages | openai-responses | openai-chat`,
   );
 }
+

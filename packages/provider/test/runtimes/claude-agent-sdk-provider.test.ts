@@ -61,7 +61,13 @@ describe("ClaudeAgentSdkProvider", () => {
       sessionId: "session_1",
       workspaceRoot: "/workspace",
       prompt: "show files",
-      historyMessages: [],
+      historyMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "previous context" }],
+          timestamp: 1,
+        },
+      ],
       providerConfig: makeConfig(),
       enabledTools: ["bash"],
       onTextDelta,
@@ -85,6 +91,11 @@ describe("ClaudeAgentSdkProvider", () => {
     expect(result.error).toBeNull();
     expect(onTextDelta).toHaveBeenCalledWith("Working...");
     expect(querySpy).toHaveBeenCalledTimes(1);
+    expect(querySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("user: previous context"),
+      }),
+    );
   });
 
   it("returns error when sdk yields non-success result", async () => {
@@ -118,4 +129,3 @@ describe("ClaudeAgentSdkProvider", () => {
     expect(result.toolCalls).toEqual([]);
   });
 });
-

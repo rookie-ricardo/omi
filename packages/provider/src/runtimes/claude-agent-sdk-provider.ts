@@ -1,8 +1,9 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 import type { ProviderAdapter, ProviderRunInput, ProviderRunResult } from "../providers";
-import type { ModelStopReason, ModelToolCall, ModelUsage } from "../model-client/types";
+import type { ModelStopReason, ModelToolCall, ModelUsage } from "../types";
 import {
+  buildSingleTurnPrompt,
   createAssistantMessage,
   linkAbortSignal,
   mapClaudeStopReasonToModel,
@@ -105,7 +106,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     );
 
     const queryStream = this.deps.query({
-      prompt: input.prompt,
+      prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
       options: {
         cwd: input.workspaceRoot,
         model: input.providerConfig.model,

@@ -19,7 +19,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import type { ProviderConfig } from "@omi/core";
-import { routeProtocol } from "./model-client/protocol-router";
+import { routeProtocol } from "./protocol-router";
 
 const DEFAULT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 type ThinkingLevel = (typeof DEFAULT_THINKING_LEVELS)[number];

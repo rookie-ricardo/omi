@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { ProviderConfig } from "@omi/core";
 
-import { createModelFromConfig } from "../../src/model-registry";
-import { getSupportedApiVariants, routeProtocol } from "../../src/model-client/protocol-router";
+import { createModelFromConfig } from "../src/model-registry";
+import { getSupportedApiVariants, routeProtocol } from "../src/protocol-router";
 
 describe("protocol-router", () => {
   it("routes an explicit providerConfig.protocol to the matching pi-ai api variant", () => {

@@ -3,7 +3,7 @@ import type { Message } from "@mariozechner/pi-ai";
 import type { OmiTool, ThinkingLevel, ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
-import type { ModelStopReason, ModelToolCall, ModelUsage, ToolName } from "./model-client/types";
+import type { ModelStopReason, ModelToolCall, ModelUsage, ToolName } from "./types";
 import { resolveProviderRuntime } from "./runtimes/resolver";
 import { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
 import { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";
@@ -112,7 +112,7 @@ export function createProviderAdapter(options: ProviderRouterOptions = {}): Prov
 }
 
 export { canonicalizeForHash, buildStableToolCallId } from "./tool-call-id";
-export type { ModelToolCall, ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./model-client/types";
+export type { ModelToolCall, ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./types";
 export { resolveProviderRuntime, type ProviderRuntime } from "./runtimes/resolver";
 export { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
 export { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";

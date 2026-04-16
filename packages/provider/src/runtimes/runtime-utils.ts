@@ -1,7 +1,8 @@
 import type { AssistantMessage, StopReason } from "@mariozechner/pi-ai";
+import type { Message } from "@mariozechner/pi-ai";
 import type { ProviderConfig } from "@omi/core";
 
-import type { ModelStopReason, ModelToolCall, ModelUsage } from "../model-client/types";
+import type { ModelStopReason, ModelToolCall, ModelUsage } from "../types";
 
 export function linkAbortSignal(
   source: AbortSignal | undefined,
@@ -102,3 +103,68 @@ export function normalizeToolInput(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+function renderTextLikeContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const pieces = content.flatMap((part) => {
+    if (typeof part !== "object" || part === null) {
+      return [];
+    }
+    const value = part as Record<string, unknown>;
+    if (value.type === "text" && typeof value.text === "string") {
+      return [value.text];
+    }
+    if (value.type === "image") {
+      return ["[image]"];
+    }
+    return [];
+  });
+  return pieces.join("");
+}
+
+function renderMessageForTranscript(message: Message): string {
+  if (message.role === "user") {
+    const text = renderTextLikeContent(message.content);
+    return text.length > 0 ? `user: ${text}` : "user:";
+  }
+
+  if (message.role === "assistant") {
+    const chunks: string[] = [];
+    for (const block of message.content) {
+      if (block.type === "text") {
+        chunks.push(block.text);
+      }
+      if (block.type === "toolCall") {
+        chunks.push(
+          `[tool_call:${block.name} id=${block.id} args=${JSON.stringify(block.arguments ?? {})}]`,
+        );
+      }
+    }
+    return chunks.length > 0 ? `assistant: ${chunks.join("\n")}` : "assistant:";
+  }
+
+  const toolText = renderTextLikeContent(message.content);
+  const toolDetails = typeof message.details === "undefined" ? "" : ` details=${JSON.stringify(message.details)}`;
+  const base = `tool_result:${message.toolName} id=${message.toolCallId} error=${message.isError}`;
+  if (toolText.length > 0) {
+    return `${base} output=${toolText}${toolDetails}`;
+  }
+  return `${base}${toolDetails}`;
+}
+
+export function buildSingleTurnPrompt(prompt: string, historyMessages: Message[]): string {
+  if (historyMessages.length === 0) {
+    return prompt;
+  }
+
+  const transcript = historyMessages.map((message) => renderMessageForTranscript(message)).join("\n\n");
+  if (prompt.trim().length === 0) {
+    return transcript;
+  }
+  return `${transcript}\n\nuser: ${prompt}`;
+}

@@ -41,31 +41,32 @@ function makeTool(name: string): OmiTool {
 describe("VercelAiSdkProvider", () => {
   it("streams text and returns tool calls from ai sdk", async () => {
     const onTextDelta = vi.fn();
+    const streamTextSpy = vi.fn(() => ({
+      textStream: (async function* () {
+        yield "hel";
+        yield "lo";
+      })(),
+      toolCalls: Promise.resolve([
+        {
+          toolCallId: "tool_1",
+          toolName: "bash",
+          input: { query: "ls -la" },
+        },
+      ]),
+      finishReason: Promise.resolve("tool-calls"),
+      usage: Promise.resolve({
+        inputTokens: 12,
+        outputTokens: 34,
+        inputTokenDetails: {
+          cacheReadTokens: 5,
+          cacheWriteTokens: 7,
+        },
+      }),
+    }) as any);
 
     const provider = new VercelAiSdkProvider({
       createOpenAI: vi.fn(() => vi.fn((modelId: string) => ({ modelId })) as any),
-      streamText: vi.fn(() => ({
-        textStream: (async function* () {
-          yield "hel";
-          yield "lo";
-        })(),
-        toolCalls: Promise.resolve([
-          {
-            toolCallId: "tool_1",
-            toolName: "bash",
-            input: { query: "ls -la" },
-          },
-        ]),
-        finishReason: Promise.resolve("tool-calls"),
-        usage: Promise.resolve({
-          inputTokens: 12,
-          outputTokens: 34,
-          inputTokenDetails: {
-            cacheReadTokens: 5,
-            cacheWriteTokens: 7,
-          },
-        }),
-      }) as any),
+      streamText: streamTextSpy,
     });
 
     const result = await provider.run({
@@ -73,7 +74,13 @@ describe("VercelAiSdkProvider", () => {
       sessionId: "session_1",
       workspaceRoot: "/workspace",
       prompt: "list files",
-      historyMessages: [],
+      historyMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "previous context" }],
+          timestamp: 1,
+        },
+      ],
       providerConfig: makeConfig(),
       tools: [makeTool("bash")],
       enabledTools: ["bash"],
@@ -97,6 +104,11 @@ describe("VercelAiSdkProvider", () => {
     });
     expect(result.error).toBeNull();
     expect(onTextDelta).toHaveBeenCalledTimes(2);
+    expect(streamTextSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("user: previous context"),
+      }),
+    );
   });
 
   it("supports cancellation", async () => {
@@ -136,4 +148,3 @@ describe("VercelAiSdkProvider", () => {
     expect(result.error).toContain("aborted");
   });
 });
-
