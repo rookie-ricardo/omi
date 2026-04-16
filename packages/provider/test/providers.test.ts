@@ -97,7 +97,6 @@ describe("providers", () => {
         assistantText: "claude",
         assistantMessage: null,
         stopReason: "end_turn" as const,
-        toolCalls: [],
         usage: { inputTokens: 1, outputTokens: 1 },
         error: null,
       })),
@@ -108,7 +107,6 @@ describe("providers", () => {
         assistantText: "vercel",
         assistantMessage: null,
         stopReason: "end_turn" as const,
-        toolCalls: [],
         usage: { inputTokens: 2, outputTokens: 2 },
         error: null,
       })),
@@ -373,20 +371,41 @@ describe("ProviderRunResult 接口", () => {
   });
 });
 
-describe("ProviderToolRequestedEvent 接口", () => {
+describe("ProviderToolLifecycleEvent 接口", () => {
   it("应该包含所有必需字段", () => {
     const event = {
+      stage: "requested" as const,
       runId: "run-1",
       sessionId: "session-1",
       toolCallId: "run-1:tool:event-1",
       toolName: "bash",
       input: { command: "ls" },
-      requiresApproval: true,
     };
 
+    expect(event.stage).toBe("requested");
     expect(event.runId).toBe("run-1");
     expect(event.toolName).toBe("bash");
-    expect(event.requiresApproval).toBe(true);
+    expect(event.input).toEqual({ command: "ls" });
+  });
+});
+
+describe("ProviderToolLifecycleControl 接口", () => {
+  it("应该支持 requested 阶段控制", () => {
+    const control = {
+      allowExecution: true,
+      requiresApproval: false,
+    };
+
+    expect(control.allowExecution).toBe(true);
+    expect(control.requiresApproval).toBe(false);
+  });
+
+  it("应该支持审批阶段控制", () => {
+    const control = {
+      decision: "approved" as const,
+    };
+
+    expect(control.decision).toBe("approved");
   });
 });
 

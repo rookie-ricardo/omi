@@ -50,7 +50,6 @@ describe("agent session", () => {
           assistantText: "done",
           assistantMessage: null,
           stopReason: "end_turn" as const,
-          toolCalls: [],
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
         };
@@ -98,7 +97,6 @@ describe("agent session", () => {
           assistantText: "unexpected",
           assistantMessage: null,
           stopReason: "end_turn" as const,
-          toolCalls: [],
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
         };
@@ -213,7 +211,32 @@ describe("agent session", () => {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
         input.onTextDelta?.("hello");
-        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        await input.onToolLifecycle?.({
+          stage: "requested",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-session",
+          toolName: "bash",
+          input: { command: "git diff --name-only" },
+        });
+        await input.onToolLifecycle?.({
+          stage: "started",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-session",
+          toolName: "bash",
+          input: { command: "git diff --name-only" },
+        });
+        await input.onToolLifecycle?.({
+          stage: "finished",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-session",
+          toolName: "bash",
+          input: { command: "git diff --name-only" },
+          output: [{ type: "text", text: "src/index.ts" }],
+        });
+        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -303,12 +326,11 @@ describe("agent session", () => {
     );
     expect(queryLoopEvents.length).toBeGreaterThan(0);
     expect(queryLoopEvents[0]?.payload).toMatchObject({
-      type: "query_loop.transition",
       runId: run.id,
       sessionId: session.id,
     });
     expect(queryLoopEvents.some((event) => event.type === "query_loop.terminal")).toBe(true);
-    expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["read"]);
+    expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["bash"]);
     expect(extensionEvents).toEqual(
       expect.arrayContaining(["run.started", "run.tool_requested", "run.tool_started", "run.tool_finished", "run.completed"]),
     );
@@ -355,7 +377,7 @@ describe("agent session", () => {
     runtime.setSelectedProviderConfig(storedProviderConfig.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
-        return { assistantText: "branch done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "branch done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -427,7 +449,7 @@ describe("agent session", () => {
           await firstRunGate;
         }
         finishedRuns.push(input.runId);
-        return { assistantText: `done-${input.runId}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${input.runId}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -478,7 +500,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -534,7 +556,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -628,7 +650,7 @@ describe("agent session", () => {
     database.setActiveBranchId(session.id, mainBranch.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
-        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -717,7 +739,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -787,7 +809,7 @@ describe("agent session", () => {
           shouldOverflow = false;
           throw new Error("prompt is too long: 99999 tokens > 8192 maximum");
         }
-        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -832,7 +854,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -923,7 +945,7 @@ describe("agent session", () => {
         if (callRecords.length === 1) {
           throw new Error("boom");
         }
-        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -998,7 +1020,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         executedRuns.push(input.runId);
-        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -1036,15 +1058,54 @@ describe("agent session", () => {
     runtime.setSelectedProviderConfig(providerConfig.id);
     const events: RunnerEventEnvelope[] = [];
     let latestToolCallId: string | null = null;
-    let approvalGateResolve!: () => void;
-    const approvalGate = new Promise<void>((resolve) => {
-      approvalGateResolve = resolve;
-    });
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         latestToolCallId = "tool-call-approve";
-        await approvalGate;
-        return { assistantText: "approved", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        const requested = await input.onToolLifecycle?.({
+          stage: "requested",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: latestToolCallId,
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        if (requested?.requiresApproval) {
+          const approval = await input.onToolLifecycle?.({
+            stage: "approval_requested",
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: latestToolCallId,
+            toolName: "bash",
+            input: { command: "pwd" },
+          });
+          if (approval?.decision !== "approved") {
+            return {
+              assistantText: "rejected",
+              assistantMessage: null,
+              stopReason: "error" as const,
+              usage: { inputTokens: 0, outputTokens: 0 },
+              error: "rejected",
+            };
+          }
+        }
+        await input.onToolLifecycle?.({
+          stage: "started",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: latestToolCallId,
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        await input.onToolLifecycle?.({
+          stage: "finished",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: latestToolCallId,
+          toolName: "bash",
+          input: { command: "pwd" },
+          output: [{ type: "text", text: "/workspace" }],
+        });
+        return { assistantText: "approved", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -1090,15 +1151,34 @@ describe("agent session", () => {
     runtime.setSelectedProviderConfig(providerConfig.id);
     const events: RunnerEventEnvelope[] = [];
     let latestToolCallId: string | null = null;
-    let rejectGateResolve!: () => void;
-    const rejectGate = new Promise<void>((resolve) => {
-      rejectGateResolve = resolve;
-    });
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         latestToolCallId = "tool-call-reject";
-        await rejectGate;
-        throw new Error("Tool rejected");
+        const requested = await input.onToolLifecycle?.({
+          stage: "requested",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: latestToolCallId,
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        if (requested?.requiresApproval) {
+          await input.onToolLifecycle?.({
+            stage: "approval_requested",
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: latestToolCallId,
+            toolName: "bash",
+            input: { command: "pwd" },
+          });
+        }
+        return {
+          assistantText: "rejected",
+          assistantMessage: null,
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 0, outputTokens: 0 },
+          error: null,
+        };
       },
       cancel() {},
     };
@@ -1143,31 +1223,40 @@ describe("agent session", () => {
     const providerConfig = database.upsertProviderConfig(makeProviderConfig());
     runtime.setSelectedProviderConfig(providerConfig.id);
     const events: RunnerEventEnvelope[] = [];
-    let providerTurn = 0;
     const provider = {
-      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
-        if (providerTurn === 0) {
-          providerTurn += 1;
-          return {
-            assistantText: "",
-            assistantMessage: null,
-            stopReason: "tool_use" as const,
-            toolCalls: [
-              {
-                id: "tool-call-full-access",
-                name: "bash",
-                input: { command: "pwd" },
-              },
-            ],
-            usage: { inputTokens: 0, outputTokens: 0 },
-            error: null,
-          };
+      async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+        const requested = await input.onToolLifecycle?.({
+          stage: "requested",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-full-access",
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        if (requested?.requiresApproval) {
+          throw new Error("full-access mode should bypass approval");
         }
+        await input.onToolLifecycle?.({
+          stage: "started",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-full-access",
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        await input.onToolLifecycle?.({
+          stage: "finished",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-full-access",
+          toolName: "bash",
+          input: { command: "pwd" },
+          output: [{ type: "text", text: "/workspace" }],
+        });
         return {
           assistantText: "done",
           assistantMessage: null,
           stopReason: "end_turn" as const,
-          toolCalls: [],
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
         };
@@ -1213,32 +1302,57 @@ describe("agent session", () => {
     const providerConfig = database.upsertProviderConfig(makeProviderConfig());
     runtime.setSelectedProviderConfig(providerConfig.id);
     const events: RunnerEventEnvelope[] = [];
-    let providerTurn = 0;
     let agentSession: AgentSession | null = null;
     const provider = {
-      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
-        if (providerTurn === 0) {
-          providerTurn += 1;
-          return {
-            assistantText: "",
-            assistantMessage: null,
-            stopReason: "tool_use" as const,
-            toolCalls: [
-              {
-                id: "tool-call-race",
-                name: "bash",
-                input: { command: "pwd" },
-              },
-            ],
-            usage: { inputTokens: 0, outputTokens: 0 },
-            error: null,
-          };
+      async run(input: ProviderRunInput): Promise<ProviderRunResult> {
+        const requested = await input.onToolLifecycle?.({
+          stage: "requested",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-race",
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        if (requested?.requiresApproval) {
+          const approval = await input.onToolLifecycle?.({
+            stage: "approval_requested",
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: "tool-call-race",
+            toolName: "bash",
+            input: { command: "pwd" },
+          });
+          if (approval?.decision === "rejected") {
+            return {
+              assistantText: "rejected",
+              assistantMessage: null,
+              stopReason: "error" as const,
+              usage: { inputTokens: 0, outputTokens: 0 },
+              error: "rejected",
+            };
+          }
         }
+        await input.onToolLifecycle?.({
+          stage: "started",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-race",
+          toolName: "bash",
+          input: { command: "pwd" },
+        });
+        await input.onToolLifecycle?.({
+          stage: "finished",
+          runId: input.runId,
+          sessionId: input.sessionId,
+          toolCallId: "tool-call-race",
+          toolName: "bash",
+          input: { command: "pwd" },
+          output: [{ type: "text", text: "/workspace" }],
+        });
         return {
           assistantText: "approved",
           assistantMessage: null,
           stopReason: "end_turn" as const,
-          toolCalls: [],
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
         };

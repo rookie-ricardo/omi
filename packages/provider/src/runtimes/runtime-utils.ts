@@ -2,7 +2,7 @@ import type { AssistantMessage, StopReason } from "@mariozechner/pi-ai";
 import type { Message } from "@mariozechner/pi-ai";
 import type { ProviderConfig } from "@omi/core";
 
-import type { ModelStopReason, ModelToolCall, ModelUsage } from "../types";
+import type { ModelStopReason, ModelUsage } from "../types";
 
 export function linkAbortSignal(
   source: AbortSignal | undefined,
@@ -25,14 +25,13 @@ export function linkAbortSignal(
 }
 
 export function mapModelStopReasonToPiAi(reason: ModelStopReason): StopReason {
-  if (reason === "tool_use") return "toolUse";
   if (reason === "max_tokens") return "length";
   if (reason === "error") return "error";
   return "stop";
 }
 
 export function mapVercelFinishReasonToModel(reason: string | undefined): ModelStopReason {
-  if (reason === "tool-calls") return "tool_use";
+  if (reason === "tool-calls") return "error";
   if (reason === "length") return "max_tokens";
   if (reason === "content-filter") return "content_filter";
   if (reason === "error") return "error";
@@ -40,7 +39,7 @@ export function mapVercelFinishReasonToModel(reason: string | undefined): ModelS
 }
 
 export function mapClaudeStopReasonToModel(reason: string | null | undefined): ModelStopReason {
-  if (reason === "tool_use") return "tool_use";
+  if (reason === "tool_use") return "error";
   if (reason === "max_tokens") return "max_tokens";
   if (reason === "stop_sequence") return "stop_sequence";
   if (reason === "end_turn") return "end_turn";
@@ -51,7 +50,6 @@ export function mapClaudeStopReasonToModel(reason: string | null | undefined): M
 export function createAssistantMessage(params: {
   providerConfig: ProviderConfig;
   assistantText: string;
-  toolCalls: ModelToolCall[];
   usage: ModelUsage;
   stopReason: ModelStopReason;
 }): AssistantMessage {
@@ -82,17 +80,9 @@ export function createAssistantMessage(params: {
         total: 0,
       },
     },
-    content: [
-      ...(params.assistantText.trim().length > 0
-        ? [{ type: "text" as const, text: params.assistantText }]
-        : []),
-      ...params.toolCalls.map((toolCall) => ({
-        type: "toolCall" as const,
-        id: toolCall.id,
-        name: toolCall.name,
-        arguments: toolCall.input,
-      })),
-    ],
+    content: params.assistantText.trim().length > 0
+      ? [{ type: "text" as const, text: params.assistantText }]
+      : [],
   };
 }
 

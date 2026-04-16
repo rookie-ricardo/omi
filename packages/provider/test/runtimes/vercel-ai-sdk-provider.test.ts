@@ -41,6 +41,7 @@ function makeTool(name: string): OmiTool {
 describe("VercelAiSdkProvider", () => {
   it("runs native sdk loop with tool execute callbacks", async () => {
     const onTextDelta = vi.fn();
+    const lifecycleStages: string[] = [];
     const streamTextSpy = vi.fn((options: any) => ({
       textStream: (async function* () {
         await options.tools.bash.execute({ query: "ls -la" });
@@ -79,19 +80,26 @@ describe("VercelAiSdkProvider", () => {
       providerConfig: makeConfig(),
       tools: [makeTool("bash")],
       enabledTools: ["bash"],
+      onToolLifecycle: async (event) => {
+        lifecycleStages.push(event.stage);
+        if (event.stage === "requested") {
+          return { allowExecution: true, requiresApproval: false };
+        }
+        return {};
+      },
       onTextDelta,
     });
 
     expect(result.assistantText).toBe("hello");
-    expect(result.stopReason).toBe("end_turn");
-    expect(result.toolCalls).toEqual([]);
+    expect(result.stopReason).toBe("error");
+    expect(result.error).toContain("tool-calls");
     expect(result.usage).toEqual({
       inputTokens: 12,
       outputTokens: 34,
       cacheReadTokens: 5,
       cacheCreationTokens: 7,
     });
-    expect(result.error).toBeNull();
+    expect(lifecycleStages).toEqual(["requested", "started", "finished"]);
     expect(onTextDelta).toHaveBeenCalledTimes(2);
     expect(streamTextSpy).toHaveBeenCalledWith(
       expect.objectContaining({

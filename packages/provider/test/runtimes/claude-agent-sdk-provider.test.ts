@@ -38,6 +38,7 @@ function makeTool(name: string, execute: OmiTool["execute"]): OmiTool {
 describe("ClaudeAgentSdkProvider", () => {
   it("runs native sdk loop with in-process MCP tools", async () => {
     const onTextDelta = vi.fn();
+    const toolLifecycleStages: string[] = [];
     const toolExecute = vi.fn(async () => ({
       content: [{ type: "text", text: "ok" }],
       details: {},
@@ -89,12 +90,18 @@ describe("ClaudeAgentSdkProvider", () => {
       providerConfig: makeConfig(),
       tools: [makeTool("bash", toolExecute)],
       enabledTools: ["bash"],
+      onToolLifecycle: async (event) => {
+        toolLifecycleStages.push(event.stage);
+        if (event.stage === "requested") {
+          return { allowExecution: true, requiresApproval: false };
+        }
+        return {};
+      },
       onTextDelta,
     });
 
     expect(result.assistantText).toBe("Working...");
     expect(result.stopReason).toBe("end_turn");
-    expect(result.toolCalls).toEqual([]);
     expect(result.usage).toEqual({
       inputTokens: 10,
       outputTokens: 20,
@@ -110,6 +117,7 @@ describe("ClaudeAgentSdkProvider", () => {
       expect.any(Function),
     );
     expect(onTextDelta).toHaveBeenCalledWith("Working...");
+    expect(toolLifecycleStages).toEqual(["requested", "started", "finished"]);
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(querySpy).toHaveBeenCalledTimes(1);
     expect(querySpy).toHaveBeenCalledWith(
@@ -158,7 +166,6 @@ describe("ClaudeAgentSdkProvider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.error).toContain("model failed");
-    expect(result.toolCalls).toEqual([]);
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });

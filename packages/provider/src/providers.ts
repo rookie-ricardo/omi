@@ -3,7 +3,7 @@ import type { Message } from "@mariozechner/pi-ai";
 import type { OmiTool, ThinkingLevel, ProviderConfig } from "@omi/core";
 
 import { createModelFromConfig } from "./model-registry";
-import type { ModelStopReason, ModelToolCall, ModelUsage, ToolName } from "./types";
+import type { ModelStopReason, ModelUsage, ToolName } from "./types";
 import { resolveProviderRuntime } from "./runtimes/resolver";
 import { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
 import { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";
@@ -24,6 +24,14 @@ export interface ProviderRunInput {
   enabledTools?: ToolName[];
   /** Pre-built tools injected by the agent layer */
   tools?: OmiTool[];
+  /**
+   * Runtime-native tool lifecycle sink.
+   * Provider runtimes must fail-closed when tool execution is attempted
+   * without a valid lifecycle handler response.
+   */
+  onToolLifecycle?: (
+    event: ProviderToolLifecycleEvent,
+  ) => Promise<ProviderToolLifecycleControl | void> | ProviderToolLifecycleControl | void;
   thinkingLevel?: ThinkingLevel;
   toolExecutionMode?: "sequential" | "parallel";
   convertToLlm?: (messages: Message[]) => Message[];
@@ -31,22 +39,38 @@ export interface ProviderRunInput {
   signal?: AbortSignal;
 }
 
-export interface ProviderRunResult {
-  assistantText: string;
-  assistantMessage: unknown; // Raw provider message for history append
-  stopReason: ModelStopReason;
-  toolCalls: ModelToolCall[];
-  usage: ModelUsage;
-  error: string | null;
-}
+export type ProviderToolLifecycleStage =
+  | "requested"
+  | "approval_requested"
+  | "started"
+  | "progress"
+  | "finished"
+  | "failed";
 
-export interface ProviderToolRequestedEvent {
+export interface ProviderToolLifecycleEvent {
+  stage: ProviderToolLifecycleStage;
   runId: string;
   sessionId: string;
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
-  requiresApproval: boolean;
+  output?: unknown;
+  error?: string;
+}
+
+export interface ProviderToolLifecycleControl {
+  allowExecution?: boolean;
+  requiresApproval?: boolean;
+  decision?: "approved" | "rejected";
+  error?: string;
+}
+
+export interface ProviderRunResult {
+  assistantText: string;
+  assistantMessage: unknown; // Raw provider message for history append
+  stopReason: ModelStopReason;
+  usage: ModelUsage;
+  error: string | null;
 }
 
 // Standard thinking levels
@@ -111,8 +135,7 @@ export function createProviderAdapter(options: ProviderRouterOptions = {}): Prov
   return new PiAiProvider(options);
 }
 
-export { canonicalizeForHash, buildStableToolCallId } from "./tool-call-id";
-export type { ModelToolCall, ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./types";
+export type { ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./types";
 export { resolveProviderRuntime, type ProviderRuntime } from "./runtimes/resolver";
 export { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
 export { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";

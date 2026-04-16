@@ -32,7 +32,6 @@ import {
   createProviderAdapter,
   type ProviderAdapter,
   type ProviderRunResult,
-  type ProviderToolRequestedEvent,
 } from "@omi/provider";
 import {
   runWithToolRuntimeContext,

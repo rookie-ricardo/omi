@@ -35,12 +35,16 @@ import {
   createProviderAdapter,
   CostTracker,
   createCostTracker,
-  buildStableToolCallId,
   resolveProviderRuntime,
   type ProviderRuntime,
 } from "@omi/provider";
-import type { ProviderAdapter, ProviderRunResult, ModelToolCall } from "@omi/provider";
-import type { ToolResultMessage, Message as PiAiMessage } from "@mariozechner/pi-ai";
+import type {
+  ProviderAdapter,
+  ProviderRunResult,
+  ProviderToolLifecycleControl,
+  ProviderToolLifecycleEvent,
+} from "@omi/provider";
+import type { Message as PiAiMessage } from "@mariozechner/pi-ai";
 import { SAFE_TOOL_NAMES, listBuiltInToolNames, createAllTools, requiresApproval, isBuiltInTool } from "@omi/tools";
 import type { ToolName } from "@omi/tools";
 import type { AppStore } from "@omi/store";
@@ -176,8 +180,6 @@ const DEFAULT_RETRY_SETTINGS: RetrySettings = {
   baseDelayMs: DEFAULT_RECOVERY_SETTINGS.baseDelayMs,
   maxDelayMs: DEFAULT_RECOVERY_SETTINGS.maxDelayMs,
 };
-
-const MAX_REPEATED_TOOL_BATCH_WITHOUT_TEXT = 4;
 
 export function resolveToolExecutionMode(
   enabledTools: ToolName[] | undefined,
@@ -333,8 +335,6 @@ export class QueryEngine {
         ? this.filterVisibleTools(prepared.resolvedSkill.enabledToolNames as ToolName[], input.session.id)
         : this.filterVisibleTools(listBuiltInToolNames(), input.session.id);
       const tools = this.buildToolsForProvider(this.deps.workspaceRoot, resolvedToolNames);
-      let repeatedToolBatchSignature: string | null = null;
-      let repeatedToolBatchCount = 0;
 
       // ========== THE AGENTIC LOOP ==========
       while (true) {
@@ -442,6 +442,7 @@ export class QueryEngine {
             resolvedSkill: prepared.resolvedSkill,
             providerConfig: input.providerConfig,
             tools,
+            extensionRunner,
           });
         } catch (error) {
           // Error classification and recovery via RecoveryEngine
@@ -556,75 +557,18 @@ export class QueryEngine {
           llmMessages.push(result.assistantMessage as PiAiMessage);
         }
 
-        // If no tool calls -> finalize
-        const hasToolCalls = result.stopReason === "tool_use" && result.toolCalls.length > 0;
-        if (!hasToolCalls) {
-          repeatedToolBatchSignature = null;
-          repeatedToolBatchCount = 0;
-          this.transition("post_tool_merge", "model_response_complete");
+        this.transition("post_tool_merge", "model_response_complete");
 
-          // Checkpoint: before_terminal_commit
-          this.recoveryEngine!.saveCheckpoint("before_terminal_commit", {
-            turnCount: this.state.turnCount,
-            recoveryCount: this.state.recoveryCount,
-            compactTracking: this.state.compactTracking,
-            partialAssistantText: result.assistantText,
-          });
-
-          await this.finalizeRun(input, result, extensionRunner);
-          return this.terminate("completed", null, result.assistantText);
-        }
-
-        // streaming_response -> executing_tools
-        this.transition("executing_tools", "tool_calls_present");
-        const hasAssistantText = result.assistantText.trim().length > 0;
-        const toolBatchSignature = this.buildToolBatchSignature(result.toolCalls);
-        if (!hasAssistantText && repeatedToolBatchSignature === toolBatchSignature) {
-          repeatedToolBatchCount += 1;
-        } else {
-          repeatedToolBatchSignature = toolBatchSignature;
-          repeatedToolBatchCount = 1;
-        }
-
-        // Execute tools
-        const toolResults = await this.executeToolBatch({
-          toolCalls: result.toolCalls,
-          runId: input.run.id,
-          sessionId: input.session.id,
-          taskId: input.task?.id ?? null,
-          extensionRunner,
-          tools,
-        });
-
-        // Checkpoint: after_tool_batch
-        this.recoveryEngine!.saveCheckpoint("after_tool_batch", {
+        // Checkpoint: before_terminal_commit
+        this.recoveryEngine!.saveCheckpoint("before_terminal_commit", {
           turnCount: this.state.turnCount,
           recoveryCount: this.state.recoveryCount,
           compactTracking: this.state.compactTracking,
           partialAssistantText: result.assistantText,
         });
 
-        // executing_tools -> post_tool_merge
-        this.transition("post_tool_merge", "tool_execution_complete");
-
-        // Append tool results to LLM messages
-        llmMessages.push(...toolResults);
-
-        if (!hasAssistantText && repeatedToolBatchCount >= MAX_REPEATED_TOOL_BATCH_WITHOUT_TEXT) {
-          return this.terminate(
-            "error",
-            `Detected repetitive tool loop after ${repeatedToolBatchCount} identical tool batches.`,
-          );
-        }
-
-        // post_tool_merge -> preprocess_context (THE LOOP BACK!)
-        this.transition("preprocess_context", "tool_results_merged");
-
-        // Check cancellation/suspension after tool execution
-        if (this.canceled) return this.terminate("canceled", null);
-        if (this.suspended) return this.terminate("suspended", null);
-
-        // Continue the loop for next model call
+        await this.finalizeRun(input, result, extensionRunner);
+        return this.terminate("completed", null, result.assistantText);
       }
     } catch (error) {
       return this.terminate(
@@ -705,8 +649,9 @@ export class QueryEngine {
     resolvedSkill: ResolvedSkill | null;
     providerConfig: ProviderConfig;
     tools: import("@omi/core").OmiTool[];
+    extensionRunner: import("@omi/extensions").ExtensionRunner;
   }): Promise<ProviderRunResult> {
-    const { input, systemPrompt, effectivePrompt, llmMessages, resolvedSkill, providerConfig, tools } = params;
+    const { input, systemPrompt, effectivePrompt, llmMessages, resolvedSkill, providerConfig, tools, extensionRunner } = params;
     const resolvedToolNames = resolvedSkill?.enabledToolNames.length
       ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
       : this.filterVisibleTools(listBuiltInToolNames(), input.session.id);
@@ -725,6 +670,13 @@ export class QueryEngine {
         resolvedSkill?.enabledToolNames as ToolName[] | undefined,
       ),
       signal: this.abortController?.signal,
+      onToolLifecycle: async (event) =>
+        this.handleProviderToolLifecycle({
+          input,
+          extensionRunner,
+          tools,
+          event,
+        }),
       onTextDelta: (delta) => {
         this.emitEvent({
           type: "run.delta",
@@ -746,262 +698,297 @@ export class QueryEngine {
   }
 
   // ==========================================================================
-  // Tool execution
+  // Runtime-native tool lifecycle handling
   // ==========================================================================
 
-  private async executeToolBatch(params: {
-    toolCalls: ModelToolCall[];
-    runId: string;
-    sessionId: string;
-    taskId: string | null;
+  private async handleProviderToolLifecycle(params: {
+    input: QueryEngineRunInput;
     extensionRunner: import("@omi/extensions").ExtensionRunner;
     tools: import("@omi/core").OmiTool[];
-  }): Promise<ToolResultMessage[]> {
-    const { toolCalls, runId, sessionId, taskId, extensionRunner, tools } = params;
-    const toolResults: ToolResultMessage[] = [];
+    event: ProviderToolLifecycleEvent;
+  }): Promise<ProviderToolLifecycleControl> {
+    const { input, extensionRunner, tools, event } = params;
+    const runId = input.run.id;
+    const sessionId = input.session.id;
 
-    const executeSingleTool = async (toolCall: ModelToolCall): Promise<ToolResultMessage> => {
-      const { id: piToolCallId, name: toolName, input: toolInput } = toolCall;
-      const toolCallId = buildStableToolCallId(runId, toolCall, toolName, toolInput);
-      let toolError = false;
-      let toolOutput: any = "Unknown Error";
-
-      try {
-        // 1. PreToolUse hooks
-        if (this.hookRegistry?.hasHooks("PreToolUse")) {
-          const hookOutputs = await this.hookRegistry.execute("PreToolUse", {
-            event: "PreToolUse",
-            toolName,
-            toolInput,
-            sessionId,
-            cwd: this.deps.workspaceRoot,
-          });
-          const { shouldBlock, getBlockReason } = await import("@omi/extensions");
-          if (shouldBlock(hookOutputs)) {
-            const reason = getBlockReason(hookOutputs) ?? `Tool '${toolName}' blocked by PreToolUse hook.`;
-            this.emitEvent({
-              type: "run.tool_denied",
-              payload: { runId, sessionId, toolName, reason, source: "hook" },
-            });
-            toolError = true;
-            toolOutput = { error: reason };
-            return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
-          }
-        }
-
-        // 2. Permission check
-        const planMode = this.isPlanMode();
-        const bypassApproval = this.deps.permissionMode === "full-access" && !planMode;
-        const preflight = bypassApproval
-          ? {
-              decision: "allow" as const,
-              reason: null,
-              matchedRule: null,
-            }
-          : this.evaluator.preflightCheck({
-              toolName,
-              input: toolInput,
-              planMode,
-              sessionId,
-            });
-
-        // 3. Replay protection check
-        if (preflight.decision !== "deny" && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
-          const replayReason = `Skipped replayed write tool: ${toolName}`;
-          this.emitEvent({
-            type: "run.tool_denied",
-            payload: { runId, sessionId, toolName, reason: replayReason },
-          });
-          toolError = true;
-          toolOutput = { error: replayReason };
-          return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
-        }
-
-        if (preflight.decision === "deny") {
-          const reason = preflight.reason ?? `Tool '${toolName}' is denied by permission policy.`;
-          this.emitEvent({
-            type: "run.tool_denied",
-            payload: { runId, sessionId, toolName, reason },
-          });
-          toolError = true;
-          toolOutput = { error: reason };
-          return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
-        }
-
-        // 4. Check approved prompts (plan mode)
-        const matchedAllowedPrompt = this.matchApprovedPrompt(toolName, toolInput);
-        const needsApproval = !matchedAllowedPrompt &&
-          !bypassApproval &&
-          (preflight.decision === "ask" || (isBuiltInTool(toolName) ? requiresApproval(toolName) : false));
-
-        if (matchedAllowedPrompt) {
-          this.emitEvent({
-            type: "run.allowed_prompt_matched",
-            payload: { runId, sessionId, toolName, prompt: matchedAllowedPrompt },
-          });
-        }
-
-        // 5. Record tool call in DB
-        this.deps.database.createToolCall({
-          id: toolCallId,
-          runId,
-          sessionId,
-          taskId,
-          toolName,
-          approvalState: needsApproval ? "pending" : "not_required",
-          input: toolInput,
-          output: null,
-          error: null,
-        });
-
-        this.emitEvent({
-          type: "run.tool_requested",
-          payload: { runId, sessionId, toolCallId, toolName, requiresApproval: needsApproval, input: toolInput },
-        });
-
-        await extensionRunner.emit({
-          type: "run.tool_requested",
-          payload: { runId, sessionId, toolName, input: toolInput, requiresApproval: needsApproval },
-        });
-
-        // 6. Block for approval if needed
-        if (needsApproval) {
-          this.deps.runtime.blockOnTool(runId, toolCallId);
-          const session = this.requireSession();
-          this.deps.database.updateSession(sessionId, {
-            status: nextSessionStatus(session.status, "tool_blocked"),
-          });
-          this.emitEvent({
-            type: "run.blocked",
-            payload: { runId, toolCallId, reason: `Waiting for approval: ${toolName}` },
-          });
-
-          // Wait for user decision
-          const bufferedDecision = this.bufferedApprovalDecisions.get(toolCallId);
-          const decision = bufferedDecision
-            ? (() => {
-                this.bufferedApprovalDecisions.delete(toolCallId);
-                return bufferedDecision;
-              })()
-            : await new Promise<"approved" | "rejected">((resolve) => {
-                this.pendingApprovals.set(toolCallId, { runId, resolve });
-              });
-          this.pendingApprovals.delete(toolCallId);
-
-          // Record decision
-          this.handleToolDecision(runId, sessionId, toolCallId, decision);
-
-          if (decision === "rejected") {
-            toolError = true;
-            toolOutput = { error: "Tool execution rejected by user." };
-            return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
-          }
-        }
-
-        // 7. Emit tool started
-        this.emitEvent({
-          type: "run.tool_started",
-          payload: { runId, toolCallId, toolName },
-        });
-        void extensionRunner.emit({
-          type: "run.tool_started",
-          payload: { runId, sessionId, toolCallId, toolName },
-        });
-
-        // 8. Execute the tool
-        const toolDef = tools.find(t => t.name === toolName);
-        if (!toolDef) {
-          toolError = true;
-          toolOutput = { error: `Tool ${toolName} not found` };
-        } else {
-          const execResult = await toolDef.execute(
-            toolCallId,
-            toolInput,
-            this.abortController?.signal ?? new AbortController().signal,
-            (_update) => {
-              // Tool update callback
-            },
-          );
-          toolOutput = execResult.content;
-        }
-      } catch (e) {
-        toolError = true;
-        toolOutput = { error: e instanceof Error ? e.message : String(e) };
-      }
-
-      // 9. Record write tool for replay protection
-      this.recoveryEngine?.recordWriteTool(toolCallId, toolName, toolInput);
-
-      // 10. Update tool call in DB
-      this.deps.database.updateToolCall(toolCallId, {
-        output: toolOutput,
-        error: toolError ? JSON.stringify(toolOutput) : null,
-      });
-
-      // 11. Emit tool finished
-      this.emitEvent({
-        type: "run.tool_finished",
-        payload: { runId, toolCallId, toolName, output: toolOutput },
-      });
-      void extensionRunner.emit({
-        type: "run.tool_finished",
-        payload: { runId, sessionId, toolCallId, toolName, output: toolOutput, isError: toolError },
-      });
-
-      // 12. PostToolUse hooks
-      if (this.hookRegistry?.hasHooks("PostToolUse") || this.hookRegistry?.hasHooks("PostToolUseFailure")) {
-        const hookEvent = toolError ? "PostToolUseFailure" : "PostToolUse";
-        void this.hookRegistry.execute(hookEvent as import("@omi/extensions").HookEvent, {
-          event: hookEvent,
-          toolName,
-          toolOutput,
-          toolUseId: toolCallId,
-          sessionId,
-          cwd: this.deps.workspaceRoot,
-          error: toolError ? JSON.stringify(toolOutput) : undefined,
-        });
-      }
-
-      // 13. Check for interrupt/suspension
-      if (!toolError && toolOutput?.details && typeof toolOutput.details === "object" && (toolOutput.details as any).isInterrupt) {
-        this.suspended = true;
-      }
-
-      return this.buildToolResultMessage(piToolCallId, toolName, toolOutput, toolError);
-    };
-
-    // Execute sequentially by default
-    for (const toolCall of toolCalls) {
-      if (this.abortController?.signal.aborted || this.canceled) break;
-      const result = await executeSingleTool(toolCall);
-      toolResults.push(result);
+    if (event.runId !== runId || event.sessionId !== sessionId) {
+      throw new Error("Provider tool lifecycle event scope mismatch.");
     }
 
-    return toolResults;
+    switch (event.stage) {
+      case "requested":
+        return this.onToolRequestedLifecycle({
+          input,
+          extensionRunner,
+          tools,
+          event,
+        });
+      case "approval_requested":
+        return this.onToolApprovalRequestedLifecycle(event);
+      case "started":
+        return this.onToolStartedLifecycle({
+          extensionRunner,
+          event,
+        });
+      case "progress":
+        return {};
+      case "finished":
+        return this.onToolFinishedLifecycle({
+          extensionRunner,
+          event,
+          isError: false,
+        });
+      case "failed":
+        return this.onToolFinishedLifecycle({
+          extensionRunner,
+          event,
+          isError: true,
+        });
+      default:
+        return {};
+    }
   }
 
-  private buildToolBatchSignature(toolCalls: ModelToolCall[]): string {
-    return toolCalls
-      .map((toolCall) => `${toolCall.name}:${JSON.stringify(toolCall.input)}`)
-      .join("|");
-  }
+  private async onToolRequestedLifecycle(params: {
+    input: QueryEngineRunInput;
+    extensionRunner: import("@omi/extensions").ExtensionRunner;
+    tools: import("@omi/core").OmiTool[];
+    event: ProviderToolLifecycleEvent;
+  }): Promise<ProviderToolLifecycleControl> {
+    const { input, extensionRunner, tools, event } = params;
+    const runId = input.run.id;
+    const sessionId = input.session.id;
+    const taskId = input.task?.id ?? null;
+    const toolCallId = event.toolCallId;
+    const toolName = event.toolName;
+    const toolInput = event.input;
 
-  private buildToolResultMessage(
-    piToolCallId: string,
-    toolName: string,
-    output: any,
-    isError: boolean,
-  ): ToolResultMessage {
+    const toolDef = tools.find((tool) => tool.name === toolName);
+    if (!toolDef) {
+      return {
+        allowExecution: false,
+        error: `Tool '${toolName}' is not enabled for this run.`,
+      };
+    }
+
+    if (this.hookRegistry?.hasHooks("PreToolUse")) {
+      const hookOutputs = await this.hookRegistry.execute("PreToolUse", {
+        event: "PreToolUse",
+        toolName,
+        toolInput,
+        sessionId,
+        cwd: this.deps.workspaceRoot,
+      });
+      const { shouldBlock, getBlockReason } = await import("@omi/extensions");
+      if (shouldBlock(hookOutputs)) {
+        const reason = getBlockReason(hookOutputs) ?? `Tool '${toolName}' blocked by PreToolUse hook.`;
+        this.emitEvent({
+          type: "run.tool_denied",
+          payload: { runId, sessionId, toolName, reason, source: "hook" },
+        });
+        return {
+          allowExecution: false,
+          error: reason,
+        };
+      }
+    }
+
+    const planMode = this.isPlanMode();
+    const bypassApproval = this.deps.permissionMode === "full-access" && !planMode;
+    const preflight = bypassApproval
+      ? {
+          decision: "allow" as const,
+          reason: null,
+          matchedRule: null,
+        }
+      : this.evaluator.preflightCheck({
+          toolName,
+          input: toolInput,
+          planMode,
+          sessionId,
+        });
+
+    if (preflight.decision !== "deny" && this.recoveryEngine?.shouldSkipTool("", toolName, toolInput)) {
+      const replayReason = `Skipped replayed write tool: ${toolName}`;
+      this.emitEvent({
+        type: "run.tool_denied",
+        payload: { runId, sessionId, toolName, reason: replayReason },
+      });
+      return {
+        allowExecution: false,
+        error: replayReason,
+      };
+    }
+
+    if (preflight.decision === "deny") {
+      const reason = preflight.reason ?? `Tool '${toolName}' is denied by permission policy.`;
+      this.emitEvent({
+        type: "run.tool_denied",
+        payload: { runId, sessionId, toolName, reason },
+      });
+      return {
+        allowExecution: false,
+        error: reason,
+      };
+    }
+
+    const matchedAllowedPrompt = this.matchApprovedPrompt(toolName, toolInput);
+    const needsApproval = !matchedAllowedPrompt &&
+      !bypassApproval &&
+      (preflight.decision === "ask" || (isBuiltInTool(toolName) ? requiresApproval(toolName) : false));
+
+    if (matchedAllowedPrompt) {
+      this.emitEvent({
+        type: "run.allowed_prompt_matched",
+        payload: { runId, sessionId, toolName, prompt: matchedAllowedPrompt },
+      });
+    }
+
+    if (!this.deps.database.getToolCall(toolCallId)) {
+      this.deps.database.createToolCall({
+        id: toolCallId,
+        runId,
+        sessionId,
+        taskId,
+        toolName,
+        approvalState: needsApproval ? "pending" : "not_required",
+        input: toolInput,
+        output: null,
+        error: null,
+      });
+    }
+
+    this.emitEvent({
+      type: "run.tool_requested",
+      payload: { runId, sessionId, toolCallId, toolName, requiresApproval: needsApproval, input: toolInput },
+    });
+
+    await extensionRunner.emit({
+      type: "run.tool_requested",
+      payload: { runId, sessionId, toolName, input: toolInput, requiresApproval: needsApproval },
+    });
+
     return {
-      role: "toolResult",
-      toolCallId: piToolCallId,
-      toolName,
-      content: Array.isArray(output)
-        ? output
-        : [{ type: "text", text: typeof output === "string" ? output : JSON.stringify(output) }],
-      isError,
-      timestamp: Date.now(),
-    } as ToolResultMessage;
+      allowExecution: true,
+      requiresApproval: needsApproval,
+    };
+  }
+
+  private async onToolApprovalRequestedLifecycle(
+    event: ProviderToolLifecycleEvent,
+  ): Promise<ProviderToolLifecycleControl> {
+    const runId = event.runId;
+    const sessionId = event.sessionId;
+    const toolCallId = event.toolCallId;
+    const toolName = event.toolName;
+
+    this.deps.runtime.blockOnTool(runId, toolCallId);
+    const session = this.requireSession();
+    this.deps.database.updateSession(sessionId, {
+      status: nextSessionStatus(session.status, "tool_blocked"),
+    });
+    this.emitEvent({
+      type: "run.blocked",
+      payload: { runId, toolCallId, reason: `Waiting for approval: ${toolName}` },
+    });
+
+    const decision = await this.waitForToolDecision(runId, toolCallId);
+    this.handleToolDecision(runId, sessionId, toolCallId, decision);
+    return { decision };
+  }
+
+  private async onToolStartedLifecycle(params: {
+    extensionRunner: import("@omi/extensions").ExtensionRunner;
+    event: ProviderToolLifecycleEvent;
+  }): Promise<ProviderToolLifecycleControl> {
+    const { extensionRunner, event } = params;
+    const runId = event.runId;
+    const sessionId = event.sessionId;
+    const toolCallId = event.toolCallId;
+    const toolName = event.toolName;
+
+    this.emitEvent({
+      type: "run.tool_started",
+      payload: { runId, toolCallId, toolName },
+    });
+    await extensionRunner.emit({
+      type: "run.tool_started",
+      payload: { runId, sessionId, toolCallId, toolName },
+    });
+    return {};
+  }
+
+  private async onToolFinishedLifecycle(params: {
+    extensionRunner: import("@omi/extensions").ExtensionRunner;
+    event: ProviderToolLifecycleEvent;
+    isError: boolean;
+  }): Promise<ProviderToolLifecycleControl> {
+    const { extensionRunner, event, isError } = params;
+    const runId = event.runId;
+    const sessionId = event.sessionId;
+    const toolCallId = event.toolCallId;
+    const toolName = event.toolName;
+    const toolOutput = typeof event.output === "undefined"
+      ? (isError ? { error: event.error ?? "Tool execution failed." } : [])
+      : event.output;
+
+    this.recoveryEngine?.recordWriteTool(toolCallId, toolName, event.input);
+
+    this.deps.database.updateToolCall(toolCallId, {
+      output: toolOutput,
+      error: isError ? (event.error ?? JSON.stringify(toolOutput)) : null,
+    });
+
+    this.emitEvent({
+      type: "run.tool_finished",
+      payload: { runId, toolCallId, toolName, output: toolOutput },
+    });
+    await extensionRunner.emit({
+      type: "run.tool_finished",
+      payload: { runId, sessionId, toolCallId, toolName, output: toolOutput, isError },
+    });
+
+    if (this.hookRegistry?.hasHooks("PostToolUse") || this.hookRegistry?.hasHooks("PostToolUseFailure")) {
+      const hookEvent = isError ? "PostToolUseFailure" : "PostToolUse";
+      void this.hookRegistry.execute(hookEvent as import("@omi/extensions").HookEvent, {
+        event: hookEvent,
+        toolName,
+        toolOutput,
+        toolUseId: toolCallId,
+        sessionId,
+        cwd: this.deps.workspaceRoot,
+        error: isError ? (event.error ?? JSON.stringify(toolOutput)) : undefined,
+      });
+    }
+
+    if (!isError && typeof toolOutput === "object" && toolOutput !== null) {
+      const details =
+        "details" in (toolOutput as Record<string, unknown>)
+          ? (toolOutput as Record<string, unknown>).details
+          : null;
+      if (typeof details === "object" && details !== null && (details as Record<string, unknown>).isInterrupt === true) {
+        this.suspended = true;
+      }
+    }
+
+    return {};
+  }
+
+  private async waitForToolDecision(
+    runId: string,
+    toolCallId: string,
+  ): Promise<"approved" | "rejected"> {
+    const bufferedDecision = this.bufferedApprovalDecisions.get(toolCallId);
+    if (bufferedDecision) {
+      this.bufferedApprovalDecisions.delete(toolCallId);
+      return bufferedDecision;
+    }
+
+    const decision = await new Promise<"approved" | "rejected">((resolve) => {
+      this.pendingApprovals.set(toolCallId, { runId, resolve });
+    });
+    this.pendingApprovals.delete(toolCallId);
+    return decision;
   }
 
   // ==========================================================================

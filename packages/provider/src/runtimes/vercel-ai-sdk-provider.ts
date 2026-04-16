@@ -2,7 +2,12 @@ import { streamText, jsonSchema, stepCountIs } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 
 import { createModelFromConfig } from "../model-registry";
-import type { ProviderAdapter, ProviderRunInput, ProviderRunResult } from "../providers";
+import type {
+  ProviderAdapter,
+  ProviderRunInput,
+  ProviderRunResult,
+  ProviderToolLifecycleControl,
+} from "../providers";
 import type { ModelUsage } from "../types";
 import {
   buildSingleTurnPrompt,
@@ -36,6 +41,19 @@ export class VercelAiSdkProvider implements ProviderAdapter {
     let stopReason: ProviderRunResult["stopReason"] = "end_turn";
     let error: string | null = null;
     let toolCallCounter = 0;
+    const emitToolLifecycle = async (
+      event: Omit<Parameters<NonNullable<ProviderRunInput["onToolLifecycle"]>>[0], "runId" | "sessionId">,
+    ): Promise<ProviderToolLifecycleControl> => {
+      if (!input.onToolLifecycle) {
+        throw new Error("Missing onToolLifecycle handler for runtime-native tool execution (fail-closed).");
+      }
+      const control = await input.onToolLifecycle({
+        ...event,
+        runId: input.runId,
+        sessionId: input.sessionId,
+      });
+      return control ?? {};
+    };
 
     try {
       const modelConfig = createModelFromConfig(input.providerConfig);
@@ -50,16 +68,95 @@ export class VercelAiSdkProvider implements ProviderAdapter {
             description: tool.description,
             inputSchema: jsonSchema(tool.parameters as any),
             execute: async (toolInput: Record<string, unknown>) => {
-              const result = await tool.execute(
-                `${input.runId}:native:${tool.name}:${++toolCallCounter}`,
-                toolInput,
-                abortController.signal,
-                () => {},
-              );
-              return {
-                content: result.content,
-                details: result.details,
-              };
+              const toolCallId = `${input.runId}:native:${tool.name}:${++toolCallCounter}`;
+              const requested = await emitToolLifecycle({
+                stage: "requested",
+                toolCallId,
+                toolName: tool.name,
+                input: toolInput,
+              });
+              if (typeof requested.allowExecution !== "boolean") {
+                throw new Error(
+                  `Tool lifecycle handler must return { allowExecution: boolean } for requested stage (${tool.name}).`,
+                );
+              }
+              if (!requested.allowExecution) {
+                return {
+                  content: [{ type: "text", text: requested.error ?? `Tool '${tool.name}' denied by runtime policy.` }],
+                  details: { denied: true },
+                };
+              }
+              if (typeof requested.requiresApproval !== "boolean") {
+                throw new Error(
+                  `Tool lifecycle handler must return { requiresApproval: boolean } when execution is allowed (${tool.name}).`,
+                );
+              }
+              if (requested.requiresApproval) {
+                const approval = await emitToolLifecycle({
+                  stage: "approval_requested",
+                  toolCallId,
+                  toolName: tool.name,
+                  input: toolInput,
+                });
+                if (approval.decision !== "approved" && approval.decision !== "rejected") {
+                  throw new Error(
+                    `Tool lifecycle handler must return decision for approval_requested stage (${tool.name}).`,
+                  );
+                }
+                if (approval.decision === "rejected") {
+                  return {
+                    content: [{ type: "text", text: approval.error ?? "Tool execution rejected by user." }],
+                    details: { rejected: true },
+                  };
+                }
+              }
+              await emitToolLifecycle({
+                stage: "started",
+                toolCallId,
+                toolName: tool.name,
+                input: toolInput,
+              });
+              try {
+                const result = await tool.execute(
+                  toolCallId,
+                  toolInput,
+                  abortController.signal,
+                  (update) => {
+                    void emitToolLifecycle({
+                      stage: "progress",
+                      toolCallId,
+                      toolName: tool.name,
+                      input: toolInput,
+                      output: update,
+                    });
+                  },
+                );
+                await emitToolLifecycle({
+                  stage: "finished",
+                  toolCallId,
+                  toolName: tool.name,
+                  input: toolInput,
+                  output: result.content,
+                });
+                return {
+                  content: result.content,
+                  details: result.details,
+                };
+              } catch (caughtError) {
+                const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+                await emitToolLifecycle({
+                  stage: "failed",
+                  toolCallId,
+                  toolName: tool.name,
+                  input: toolInput,
+                  error: message,
+                  output: { error: message },
+                });
+                return {
+                  content: [{ type: "text", text: message }],
+                  details: { error: message },
+                };
+              }
             },
           };
           return accumulator;
@@ -84,9 +181,8 @@ export class VercelAiSdkProvider implements ProviderAdapter {
         textStreamResult.usage,
       ]);
       stopReason = mapVercelFinishReasonToModel(resolvedFinishReason);
-      if (stopReason === "tool_use") {
-        // Tool calls are fully handled inside the SDK loop.
-        stopReason = "end_turn";
+      if (resolvedFinishReason === "tool-calls") {
+        error = "SDK loop ended with unresolved tool-calls finish reason.";
       }
       usage = {
         inputTokens: resolvedUsage.inputTokens ?? 0,
@@ -105,7 +201,6 @@ export class VercelAiSdkProvider implements ProviderAdapter {
     const assistantMessage = createAssistantMessage({
       providerConfig: input.providerConfig,
       assistantText,
-      toolCalls: [],
       usage,
       stopReason,
     });
@@ -114,7 +209,6 @@ export class VercelAiSdkProvider implements ProviderAdapter {
       assistantText,
       assistantMessage,
       stopReason,
-      toolCalls: [],
       usage,
       error,
     };

@@ -49,7 +49,6 @@ describe("query-state", () => {
         "preprocess_context",
         "calling_model",
         "streaming_response",
-        "executing_tools",
         "post_tool_merge",
         "terminal",
         "recovering",
@@ -83,10 +82,6 @@ describe("query-state", () => {
       expect(isValidTransition("calling_model", "terminal")).toBe(true);
     });
 
-    it("allows streaming_response -> executing_tools", () => {
-      expect(isValidTransition("streaming_response", "executing_tools")).toBe(true);
-    });
-
     it("allows streaming_response -> terminal", () => {
       expect(isValidTransition("streaming_response", "terminal")).toBe(true);
     });
@@ -97,18 +92,6 @@ describe("query-state", () => {
 
     it("allows streaming_response -> preprocess_context (max_output_tokens recovery)", () => {
       expect(isValidTransition("streaming_response", "preprocess_context")).toBe(true);
-    });
-
-    it("allows executing_tools -> post_tool_merge", () => {
-      expect(isValidTransition("executing_tools", "post_tool_merge")).toBe(true);
-    });
-
-    it("allows executing_tools -> terminal", () => {
-      expect(isValidTransition("executing_tools", "terminal")).toBe(true);
-    });
-
-    it("allows executing_tools -> recovering", () => {
-      expect(isValidTransition("executing_tools", "recovering")).toBe(true);
     });
 
     it("allows post_tool_merge -> preprocess_context (loop continuation)", () => {
@@ -136,7 +119,6 @@ describe("query-state", () => {
       expect(isValidTransition("terminal", "preprocess_context")).toBe(false);
       expect(isValidTransition("terminal", "calling_model")).toBe(false);
       expect(isValidTransition("terminal", "streaming_response")).toBe(false);
-      expect(isValidTransition("terminal", "executing_tools")).toBe(false);
       expect(isValidTransition("terminal", "post_tool_merge")).toBe(false);
       expect(isValidTransition("terminal", "recovering")).toBe(false);
     });
@@ -146,7 +128,6 @@ describe("query-state", () => {
         "init",
         "calling_model",
         "streaming_response",
-        "executing_tools",
         "post_tool_merge",
         "terminal",
         "recovering",
@@ -159,7 +140,6 @@ describe("query-state", () => {
     it("disallows backward transitions from preprocess_context", () => {
       expect(isValidTransition("preprocess_context", "init")).toBe(false);
       expect(isValidTransition("preprocess_context", "streaming_response")).toBe(false);
-      expect(isValidTransition("preprocess_context", "executing_tools")).toBe(false);
       expect(isValidTransition("preprocess_context", "recovering")).toBe(false);
     });
 
@@ -176,13 +156,12 @@ describe("query-state", () => {
       // init -> preprocess_context (1)
       // preprocess_context -> calling_model, terminal (2)
       // calling_model -> streaming_response, recovering, terminal (3)
-      // streaming_response -> executing_tools, terminal, recovering, preprocess_context, post_tool_merge (5)
-      // executing_tools -> post_tool_merge, terminal, recovering (3)
+      // streaming_response -> terminal, recovering, preprocess_context, post_tool_merge (4)
       // post_tool_merge -> preprocess_context, terminal (2)
       // recovering -> calling_model, preprocess_context, terminal (3)
       // terminal -> (none) (0)
-      // Total: 1+2+3+5+3+2+3+0 = 19
-      expect(transitions).toHaveLength(19);
+      // Total: 1+2+3+4+2+3+0 = 15
+      expect(transitions).toHaveLength(15);
     });
 
     it("every returned transition passes isValidTransition", () => {

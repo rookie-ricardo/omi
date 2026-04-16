@@ -1,7 +1,12 @@
 import { createSdkMcpServer, query, tool as createClaudeMcpTool } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-import type { ProviderAdapter, ProviderRunInput, ProviderRunResult } from "../providers";
+import type {
+  ProviderAdapter,
+  ProviderRunInput,
+  ProviderRunResult,
+  ProviderToolLifecycleControl,
+} from "../providers";
 import type { ModelStopReason, ModelUsage } from "../types";
 import {
   buildSingleTurnPrompt,
@@ -90,6 +95,19 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     let stopReason: ModelStopReason = "end_turn";
     let error: string | null = null;
     let toolCallCounter = 0;
+    const emitToolLifecycle = async (
+      event: Omit<Parameters<NonNullable<ProviderRunInput["onToolLifecycle"]>>[0], "runId" | "sessionId">,
+    ): Promise<ProviderToolLifecycleControl> => {
+      if (!input.onToolLifecycle) {
+        throw new Error("Missing onToolLifecycle handler for runtime-native tool execution (fail-closed).");
+      }
+      const control = await input.onToolLifecycle({
+        ...event,
+        runId: input.runId,
+        sessionId: input.sessionId,
+      });
+      return control ?? {};
+    };
 
     const runnableTools = (input.tools ?? []).filter(
       (tool) => !input.enabledTools || input.enabledTools.includes(tool.name),
@@ -101,13 +119,77 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
         tool.description,
         jsonSchemaToZodShape(tool.parameters),
         async (args): Promise<CallToolResult> => {
+          const toolCallId = `${input.runId}:native:${tool.name}:${++toolCallCounter}`;
+          const toolInput = args as Record<string, unknown>;
+          const requested = await emitToolLifecycle({
+            stage: "requested",
+            toolCallId,
+            toolName: tool.name,
+            input: toolInput,
+          });
+          if (typeof requested.allowExecution !== "boolean") {
+            throw new Error(
+              `Tool lifecycle handler must return { allowExecution: boolean } for requested stage (${tool.name}).`,
+            );
+          }
+          if (!requested.allowExecution) {
+            return {
+              content: [{ type: "text", text: requested.error ?? `Tool '${tool.name}' denied by runtime policy.` }],
+              isError: true,
+            };
+          }
+          if (typeof requested.requiresApproval !== "boolean") {
+            throw new Error(
+              `Tool lifecycle handler must return { requiresApproval: boolean } when execution is allowed (${tool.name}).`,
+            );
+          }
+          if (requested.requiresApproval) {
+            const approval = await emitToolLifecycle({
+              stage: "approval_requested",
+              toolCallId,
+              toolName: tool.name,
+              input: toolInput,
+            });
+            if (approval.decision !== "approved" && approval.decision !== "rejected") {
+              throw new Error(
+                `Tool lifecycle handler must return decision for approval_requested stage (${tool.name}).`,
+              );
+            }
+            if (approval.decision === "rejected") {
+              return {
+                content: [{ type: "text", text: approval.error ?? "Tool execution rejected by user." }],
+                isError: true,
+              };
+            }
+          }
+          await emitToolLifecycle({
+            stage: "started",
+            toolCallId,
+            toolName: tool.name,
+            input: toolInput,
+          });
           try {
             const result = await tool.execute(
-              `${input.runId}:native:${tool.name}:${++toolCallCounter}`,
-              args as Record<string, unknown>,
+              toolCallId,
+              toolInput,
               abortController.signal,
-              () => {},
+              (update) => {
+                void emitToolLifecycle({
+                  stage: "progress",
+                  toolCallId,
+                  toolName: tool.name,
+                  input: toolInput,
+                  output: update,
+                });
+              },
             );
+            await emitToolLifecycle({
+              stage: "finished",
+              toolCallId,
+              toolName: tool.name,
+              input: toolInput,
+              output: result.content,
+            });
             const outputText = renderToolOutputText(result.content);
             return {
               content: [{ type: "text", text: outputText }],
@@ -115,6 +197,14 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
             };
           } catch (caughtError) {
             const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
+            await emitToolLifecycle({
+              stage: "failed",
+              toolCallId,
+              toolName: tool.name,
+              input: toolInput,
+              error: message,
+              output: { error: message },
+            });
             return {
               content: [{ type: "text", text: message }],
               isError: true,
@@ -173,6 +263,9 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
           usage = parseResultUsage(message.usage);
           if (typeof message.stop_reason === "string" || message.stop_reason === null) {
             stopReason = mapClaudeStopReasonToModel(message.stop_reason);
+            if (message.stop_reason === "tool_use") {
+              error = "SDK loop ended with unresolved tool_use stop reason.";
+            }
           }
           if (typeof (message as Record<string, unknown>).result === "string") {
             fallbackAssistantText += String((message as Record<string, unknown>).result);
@@ -202,7 +295,6 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     const assistantMessage = createAssistantMessage({
       providerConfig: input.providerConfig,
       assistantText,
-      toolCalls: [],
       usage,
       stopReason,
     });
@@ -211,7 +303,6 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       assistantText,
       assistantMessage,
       stopReason,
-      toolCalls: [],
       usage,
       error,
     };

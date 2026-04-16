@@ -301,18 +301,17 @@ describe("QueryEngine", () => {
   });
 
   describe("state machine validation", () => {
-    it("all 19 valid transitions are defined in the state machine", () => {
+    it("all 15 valid transitions are defined in the state machine", () => {
       const transitions = getAllValidTransitions();
-      expect(transitions).toHaveLength(19);
+      expect(transitions).toHaveLength(15);
     });
 
-    it("state machine covers the full lifecycle with tools: init -> preprocess -> model -> stream -> tools -> merge -> terminal", () => {
+    it("state machine covers the full lifecycle with runtime-native tools: init -> preprocess -> model -> stream -> merge -> terminal", () => {
       const happyPathWithTools: Array<{ from: QueryLoopState; to: QueryLoopState }> = [
         { from: "init", to: "preprocess_context" },
         { from: "preprocess_context", to: "calling_model" },
         { from: "calling_model", to: "streaming_response" },
-        { from: "streaming_response", to: "executing_tools" },
-        { from: "executing_tools", to: "post_tool_merge" },
+        { from: "streaming_response", to: "post_tool_merge" },
         { from: "post_tool_merge", to: "terminal" },
       ];
 
@@ -338,24 +337,12 @@ describe("QueryEngine", () => {
       expect(isValidTransition("streaming_response", "post_tool_merge")).toBe(true);
     });
 
-    it("state machine supports tool execution branch", () => {
-      const toolPath: Array<{ from: QueryLoopState; to: QueryLoopState }> = [
-        { from: "streaming_response", to: "executing_tools" },
-        { from: "executing_tools", to: "post_tool_merge" },
-      ];
-
-      for (const { from, to } of toolPath) {
-        expect(isValidTransition(from, to)).toBe(true);
-      }
-    });
-
     it("state machine supports recovery transitions", () => {
       const recoveryPath: Array<{ from: QueryLoopState; to: QueryLoopState }> = [
         { from: "calling_model", to: "recovering" },
         { from: "recovering", to: "calling_model" },
         { from: "recovering", to: "preprocess_context" },
         { from: "streaming_response", to: "recovering" },
-        { from: "executing_tools", to: "recovering" },
         { from: "recovering", to: "terminal" },
       ];
 
@@ -374,7 +361,6 @@ describe("QueryEngine", () => {
         "preprocess_context",
         "calling_model",
         "streaming_response",
-        "executing_tools",
         "post_tool_merge",
         "recovering",
       ];
@@ -389,7 +375,6 @@ describe("QueryEngine", () => {
         "preprocess_context",
         "calling_model",
         "streaming_response",
-        "executing_tools",
         "post_tool_merge",
         "terminal",
         "recovering",
@@ -423,7 +408,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           providerCalls.push(input);
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -484,7 +469,6 @@ describe("QueryEngine", () => {
             assistantText: "done",
             assistantMessage: null,
             stopReason: "end_turn" as const,
-            toolCalls: [],
             usage: { inputTokens: 0, outputTokens: 0 },
             error: null,
           };
@@ -535,7 +519,6 @@ describe("QueryEngine", () => {
             assistantText: "done",
             assistantMessage: null,
             stopReason: "end_turn" as const,
-            toolCalls: [],
             usage: { inputTokens: 0, outputTokens: 0 },
             error: null,
           };
@@ -586,7 +569,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           // preflightToolCheck removed from ProviderRunInput - test needs rewrite
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -648,7 +631,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           // onToolRequested/onToolDecision removed from ProviderRunInput - test needs rewrite
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -703,7 +686,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           // onToolRequested/onToolDecision removed from ProviderRunInput - test needs rewrite
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -766,7 +749,6 @@ describe("QueryEngine", () => {
           assistantText: "...",
           assistantMessage: null,
           stopReason: "end_turn" as const,
-          toolCalls: [],
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
         })),
@@ -823,7 +805,7 @@ describe("QueryEngine", () => {
           if (providerCalls.length === 1) {
             throw new Error("max_output tokens exceeded");
           }
-          return { assistantText: "continued", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "continued", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -861,7 +843,7 @@ describe("QueryEngine", () => {
       ).toBe(true);
     });
 
-    it("fails fast on repetitive identical tool-only loops", async () => {
+    it("handles runtime-native tool lifecycle in a single provider turn", async () => {
       const session = createTestSession();
       const run = createTestRun(session.id);
       const database = createTestDatabase(session, run);
@@ -870,19 +852,37 @@ describe("QueryEngine", () => {
       let providerCalls = 0;
 
       const provider = {
-        async run(): Promise<ProviderRunResult> {
+        async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           providerCalls += 1;
+          await input.onToolLifecycle?.({
+            stage: "requested",
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: "tool-call-1",
+            toolName: "bash",
+            input: { command: "pwd" },
+          });
+          await input.onToolLifecycle?.({
+            stage: "started",
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: "tool-call-1",
+            toolName: "bash",
+            input: { command: "pwd" },
+          });
+          await input.onToolLifecycle?.({
+            stage: "finished",
+            runId: input.runId,
+            sessionId: input.sessionId,
+            toolCallId: "tool-call-1",
+            toolName: "bash",
+            input: { command: "pwd" },
+            output: [{ type: "text", text: "/tmp" }],
+          });
           return {
-            assistantText: "",
+            assistantText: "done",
             assistantMessage: null,
-            stopReason: "tool_use" as const,
-            toolCalls: [
-              {
-                id: `tool-call-${providerCalls}`,
-                name: "bash",
-                input: { command: "pwd" },
-              },
-            ],
+            stopReason: "end_turn" as const,
             usage: { inputTokens: 0, outputTokens: 0 },
             error: null,
           };
@@ -913,14 +913,23 @@ describe("QueryEngine", () => {
         checkpointDetails: null,
       });
 
-      expect(result.terminalReason).toBe("error");
-      expect(result.error).toContain("Detected repetitive tool loop");
-      expect(providerCalls).toBe(4);
+      expect(result.terminalReason).toBe("completed");
+      expect(result.error).toBeNull();
+      expect(providerCalls).toBe(1);
+      expect(
+        events.some((event) => event.type === "run.tool_requested"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.type === "run.tool_started"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.type === "run.tool_finished"),
+      ).toBe(true);
       expect(
         events.some(
           (event) =>
             event.type === "query_loop.terminal" &&
-            (event as { reason?: string }).reason === "error",
+            (event as { reason?: string }).reason === "completed",
         ),
       ).toBe(true);
     });
@@ -961,7 +970,7 @@ describe("QueryEngine", () => {
 
       const provider = {
         async run(): Promise<ProviderRunResult> {
-          return { assistantText: "restored", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "restored", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -1044,7 +1053,7 @@ describe("QueryEngine", () => {
             decision: "allow",
             reason: null,
           });
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };

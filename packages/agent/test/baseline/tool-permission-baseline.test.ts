@@ -235,7 +235,7 @@ describe("Tool & Permission baseline", () => {
         await gate;
         anyInput.onToolStarted?.(tcId, "bash");
         anyInput.onToolFinished?.(tcId, "bash", { ok: true }, false);
-        return { assistantText: "tool done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "tool done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -318,6 +318,9 @@ describe("Tool & Permission baseline", () => {
       "bash_background",
       "config.read",
       "config.write",
+      "cron.create",
+      "cron.delete",
+      "cron.list",
       "discover_skills",
       "edit",
       "enter_worktree",
@@ -334,6 +337,8 @@ describe("Tool & Permission baseline", () => {
       "plan.enter",
       "plan.exit",
       "read",
+      "remote_trigger",
+      "skill",
       "subagent.close",
       "subagent.delegate",
       "subagent.get",

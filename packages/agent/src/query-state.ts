@@ -15,15 +15,10 @@ import type { RuntimeMessage } from "@omi/memory";
  *   calling_model -> streaming_response
  *   calling_model -> recovering (on transient error)
  *   calling_model -> terminal (on fatal error)
- *   streaming_response -> executing_tools (on tool_use stop reason)
  *   streaming_response -> terminal (on end_turn / max_tokens / error)
  *   streaming_response -> recovering (on retryable error)
  *   streaming_response -> preprocess_context (on max_output_tokens recovery)
- *   streaming_response -> post_tool_merge (no tool calls, direct merge)
- *   executing_tools -> post_tool_merge
- *   executing_tools -> terminal (on cancellation)
- *   executing_tools -> recovering (on tool error)
- *   post_tool_merge -> preprocess_context (continue loop)
+ *   streaming_response -> post_tool_merge (response merged)
  *   post_tool_merge -> terminal (on max_turns / budget_exceeded / cancel)
  *   recovering -> calling_model (overflow retry)
  *   recovering -> preprocess_context (retry)
@@ -34,7 +29,6 @@ export type QueryLoopState =
   | "preprocess_context"
   | "calling_model"
   | "streaming_response"
-  | "executing_tools"
   | "post_tool_merge"
   | "terminal"
   | "recovering";
@@ -184,13 +178,11 @@ const VALID_TRANSITIONS: Record<QueryLoopState, Set<QueryLoopState>> = {
   preprocess_context: new Set(["calling_model", "terminal"]),
   calling_model: new Set(["streaming_response", "recovering", "terminal"]),
   streaming_response: new Set([
-    "executing_tools",
     "terminal",
     "recovering",
     "preprocess_context",
     "post_tool_merge",
   ]),
-  executing_tools: new Set(["post_tool_merge", "terminal", "recovering"]),
   post_tool_merge: new Set([
     "preprocess_context",
     "terminal",

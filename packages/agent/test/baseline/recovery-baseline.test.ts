@@ -217,7 +217,7 @@ describe("Recovery baseline", () => {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         callRecords.push({ runId: input.runId, prompt: input.prompt });
         if (callRecords.length === 1) throw new Error("boom");
-        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -258,7 +258,7 @@ describe("Recovery baseline", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         executedRuns.push(input.runId);
-        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -287,7 +287,7 @@ describe("Recovery baseline", () => {
 
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -319,7 +319,7 @@ describe("Recovery baseline", () => {
         calls.push(input);
         callCount++;
         if (callCount <= 1) throw new Error("503 Service Unavailable");
-        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, toolCalls: [], usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
