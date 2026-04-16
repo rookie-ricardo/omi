@@ -280,12 +280,12 @@ describe("createModelFromConfig - 新增 Provider", () => {
 		it("应该为 mistral 创建模型", () => {
 			const config: ProviderConfig = {
 				id: "provider-1",
-				name: "Mistral Provider",
-				type: "mistral",
+								name: "mistral",
 				protocol: "openai-chat",
 				baseUrl: "https://api.mistral.ai",
 				apiKey: "test-api-key",
 				model: "mistral-large-latest",
+    url: "",
 				createdAt: "2024-01-01T00:00:00.000Z",
 				updatedAt: "2024-01-01T00:00:00.000Z",
 			};
@@ -302,12 +302,12 @@ describe("createModelFromConfig - 新增 Provider", () => {
 		it("应该为 xai 创建模型", () => {
 			const config: ProviderConfig = {
 				id: "provider-1",
-				name: "xAI Provider",
-				type: "xai",
+								name: "xai",
 				protocol: "openai-chat",
 				baseUrl: "https://api.x.ai",
 				apiKey: "test-api-key",
 				model: "grok-beta",
+    url: "",
 				createdAt: "2024-01-01T00:00:00.000Z",
 				updatedAt: "2024-01-01T00:00:00.000Z",
 			};
@@ -324,12 +324,12 @@ describe("createModelFromConfig - 新增 Provider", () => {
 		it("应该为 groq 创建模型", () => {
 			const config: ProviderConfig = {
 				id: "provider-1",
-				name: "Groq Provider",
-				type: "groq",
+								name: "groq",
 				protocol: "openai-chat",
 				baseUrl: "https://api.groq.com/openai/v1",
 				apiKey: "test-api-key",
 				model: "llama-3.3-70b-versatile",
+    url: "",
 				createdAt: "2024-01-01T00:00:00.000Z",
 				updatedAt: "2024-01-01T00:00:00.000Z",
 			};
@@ -358,31 +358,31 @@ describe("createModelFromConfig - 新增 Provider", () => {
 });
 
 describe("边界情况", () => {
-	it("不支持的 provider 类型应该抛出错误", () => {
+	it("不支持的 provider 名称应该抛出错误", () => {
 		const config: ProviderConfig = {
 			id: "provider-1",
-			name: "Unsupported Provider",
-			type: "unsupported" as any,
+			name: "unsupported" as any,
 			protocol: "openai-chat",
 			baseUrl: "https://api.example.com",
 			apiKey: "test-api-key",
 			model: "model-1",
+			url: "",
 			createdAt: "2024-01-01T00:00:00.000Z",
 			updatedAt: "2024-01-01T00:00:00.000Z",
 		};
 
-		expect(() => createModelFromConfig(config)).toThrow("Unsupported provider type: unsupported");
+		expect(() => createModelFromConfig(config)).toThrow("Unsupported provider name: unsupported");
 	});
 
 	it("openai-compatible 应该创建自定义模型", () => {
 		const config: ProviderConfig = {
 			id: "provider-1",
-			name: "OpenAI Compatible",
-			type: "openai-compatible",
+						name: "openai-compatible",
 			protocol: "openai-chat",
 			baseUrl: "https://api.example.com/v1",
 			apiKey: "test-api-key",
 			model: "custom-model",
+    url: "",
 			createdAt: "2024-01-01T00:00:00.000Z",
 			updatedAt: "2024-01-01T00:00:00.000Z",
 		};
@@ -397,12 +397,12 @@ describe("边界情况", () => {
 	it("anthropic-compatible 应该创建自定义模型", () => {
 		const config: ProviderConfig = {
 			id: "provider-1",
-			name: "Anthropic Compatible",
-			type: "anthropic-compatible",
+						name: "anthropic-compatible",
 			protocol: "anthropic-messages",
 			baseUrl: "https://api.example.com",
 			apiKey: "test-api-key",
 			model: "custom-model",
+    url: "",
 			createdAt: "2024-01-01T00:00:00.000Z",
 			updatedAt: "2024-01-01T00:00:00.000Z",
 		};

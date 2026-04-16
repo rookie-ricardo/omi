@@ -998,7 +998,7 @@ export class QueryEngine {
   private prepareRun(input: QueryEngineRunInput): PreparedRunContext {
     this.deps.database.updateRun(input.run.id, {
       status: "running",
-      provider: input.providerConfig.type,
+      provider: input.providerConfig.name,
       prompt: input.prompt,
     });
 
@@ -1444,7 +1444,7 @@ export class QueryEngine {
       goal: `Compaction fallback snapshot (${input.mode})`,
       constraints: [
         `session_id=${input.session.id}`,
-        `provider=${input.providerConfig.type}`,
+        `provider=${input.providerConfig.name}`,
         `prompt=${this.truncateFallbackToken(input.prompt ?? "n/a")}`,
       ],
       progress: {

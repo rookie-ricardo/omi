@@ -171,11 +171,11 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     CREATE TABLE IF NOT EXISTS provider_configs (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      type TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT '',
       base_url TEXT NOT NULL,
       api_key TEXT NOT NULL,
       model TEXT NOT NULL,
+      url TEXT NOT NULL DEFAULT '',
       enabled INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -994,6 +994,28 @@ const DATABASE_MIGRATIONS: DatabaseMigration[] = [
     },
   },
   {
+    id: "20260416_provider_configs_name_url",
+    apply(sqlite) {
+      ensureColumnExists(
+        sqlite,
+        "provider_configs",
+        "url",
+        "ALTER TABLE provider_configs ADD COLUMN url TEXT NOT NULL DEFAULT ''",
+      );
+
+      const hasTypeColumn = hasColumn(sqlite, "provider_configs", "type");
+      if (hasTypeColumn) {
+        sqlite.exec(`
+          UPDATE provider_configs
+          SET name = CASE
+            WHEN type IS NOT NULL AND trim(type) <> '' THEN type
+            ELSE name
+          END
+        `);
+      }
+    },
+  },
+  {
     id: "20260402_session_kernel_branches",
     apply(sqlite) {
       ensureColumnExists(sqlite, "runs", "origin_run_id", "ALTER TABLE runs ADD COLUMN origin_run_id TEXT");
@@ -1282,6 +1304,20 @@ function ensureColumnExists(
   if (!columns.has(columnName)) {
     sqlite.exec(alterStatement);
   }
+}
+
+function hasColumn(
+  sqlite: MigrationDatabase,
+  tableName: string,
+  columnName: string,
+): boolean {
+  const columns = new Set<string>(
+    sqlite
+      .prepare(`PRAGMA table_info(${tableName})`)
+      .all()
+      .map((row: unknown) => (row as { name: string }).name),
+  );
+  return columns.has(columnName);
 }
 
 function ensureIndexExists(

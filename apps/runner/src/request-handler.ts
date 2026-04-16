@@ -275,12 +275,12 @@ async function executeCommand(
     case "provider.config.save":
       return orchestrator.saveProviderConfig({
         id: params.id ? String(params.id) : undefined,
-        name: params.name ? String(params.name) : undefined,
-        type: String(params.type),
+        name: String(params.name),
         protocol: String(params.protocol) as "anthropic-messages" | "openai-chat" | "openai-responses",
         baseUrl: String(params.baseUrl ?? ""),
         model: String(params.model),
         apiKey: String(params.apiKey),
+        url: String(params.url ?? ""),
       });
     case "provider.config.delete":
       return orchestrator.deleteProviderConfig(String(params.id));

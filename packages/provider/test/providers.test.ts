@@ -18,7 +18,7 @@ import {
 describe("providers", () => {
   it("builds a built-in OpenAI model from pi-ai", () => {
     const model = createModelFromConfig(
-      makeConfig({ type: "openai", protocol: "openai-responses", model: "gpt-4.1-mini" }),
+      makeConfig({ name: "openai", protocol: "openai-responses", model: "gpt-4.1-mini" }),
     );
     expect(model.provider).toBe("openai");
     expect(model.api).toBe("openai-responses");
@@ -27,7 +27,7 @@ describe("providers", () => {
 
   it("builds a built-in OpenRouter model from pi-ai", () => {
     const model = createModelFromConfig(
-      makeConfig({ type: "openrouter", protocol: "openai-chat", model: "openai/gpt-4o-mini" }),
+      makeConfig({ name: "openrouter", protocol: "openai-chat", model: "openai/gpt-4o-mini" }),
     );
     expect(model.provider).toBe("openrouter");
     expect(model.api).toBe("openai-completions");
@@ -36,7 +36,7 @@ describe("providers", () => {
   it("builds a custom OpenAI-compatible model", () => {
     const model = createModelFromConfig(
       makeConfig({
-        type: "openai-compatible",
+        name: "openai-compatible",
         protocol: "openai-chat",
         model: "gpt-oss:20b",
         baseUrl: "http://localhost:11434/v1",
@@ -62,7 +62,7 @@ describe("providers", () => {
       workspaceRoot: "/workspace",
       prompt: "current prompt",
       historyMessages,
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
       enabledTools: [],
     });
 
@@ -75,15 +75,15 @@ describe("providers", () => {
   });
 
   it("routes anthropic provider configs to claude runtime", () => {
-    expect(resolveProviderRuntime(makeConfig({ type: "anthropic" }))).toBe("claude-agent-sdk");
-    expect(resolveProviderRuntime(makeConfig({ type: "anthropic-compatible" }))).toBe("claude-agent-sdk");
+    expect(resolveProviderRuntime(makeConfig({ name: "anthropic" }))).toBe("claude-agent-sdk");
+    expect(resolveProviderRuntime(makeConfig({ name: "anthropic-compatible" }))).toBe("claude-agent-sdk");
   });
 
   it("routes non-anthropic provider configs to vercel runtime", () => {
     expect(
       resolveProviderRuntime(
         makeConfig({
-          type: "openai",
+          name: "openai",
           protocol: "openai-responses",
           model: "gpt-4.1-mini",
         }),
@@ -123,7 +123,7 @@ describe("providers", () => {
       workspaceRoot: "/workspace",
       prompt: "hello",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
     });
     const openaiResult = await provider.run({
       runId: "run_2",
@@ -131,7 +131,7 @@ describe("providers", () => {
       workspaceRoot: "/workspace",
       prompt: "hello",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "openai", protocol: "openai-responses", model: "gpt-4o-mini" }),
+      providerConfig: makeConfig({ name: "openai", protocol: "openai-responses", model: "gpt-4o-mini" }),
     });
 
     expect(anthropicResult.assistantText).toBe("claude");
@@ -177,7 +177,7 @@ describe("buildAgentInitialState", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
       systemPrompt: "Custom system prompt",
     });
 
@@ -191,7 +191,7 @@ describe("buildAgentInitialState", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
     });
 
     expect(initialState.systemPrompt).toBe("");
@@ -204,7 +204,7 @@ describe("buildAgentInitialState", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
       thinkingLevel: "high",
     });
 
@@ -218,7 +218,7 @@ describe("buildAgentInitialState", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
     });
 
     expect(initialState.thinkingLevel).toBe("off");
@@ -231,7 +231,7 @@ describe("buildAgentInitialState", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "openai", protocol: "openai-responses", model: "gpt-4o" }),
+      providerConfig: makeConfig({ name: "openai", protocol: "openai-responses", model: "gpt-4o" }),
     });
 
     expect(initialState.model.provider).toBe("openai");
@@ -245,7 +245,7 @@ describe("buildAgentInitialState", () => {
         workspaceRoot: "/workspace",
         prompt: "test",
         historyMessages: [],
-        providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+        providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
         enabledTools: ["bash"],
       });
 
@@ -260,7 +260,7 @@ describe("buildAgentInitialState", () => {
         workspaceRoot: "/workspace",
         prompt: "test",
         historyMessages: [],
-        providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+        providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
         enabledTools: [],
       });
 
@@ -281,7 +281,7 @@ describe("PiAiProvider", () => {
       workspaceRoot: "/test/workspace",
       prompt: "Test prompt",
       historyMessages: [],
-      providerConfig: makeConfig({ type: "anthropic", protocol: "anthropic-messages" }),
+      providerConfig: makeConfig({ name: "anthropic", protocol: "anthropic-messages" }),
       enabledTools: [],
       thinkingLevel: "off",
       toolExecutionMode: "sequential",
@@ -442,12 +442,12 @@ describe("工具执行模式", () => {
 function makeConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     id: "provider_1",
-    name: "Test Provider",
-    type: "anthropic",
+    name: "anthropic",
     protocol: "anthropic-messages",
     baseUrl: "",
     apiKey: "test-api-key",
     model: "claude-sonnet-4-20250514",
+    url: "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

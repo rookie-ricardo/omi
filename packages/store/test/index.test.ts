@@ -39,7 +39,7 @@ describe("database migrations", () => {
         "20260402_session_kernel_branches",
       ]),
     );
-    expect(migrationIds(sqlite)).toHaveLength(3);
+    expect(migrationIds(sqlite)).toHaveLength(4);
   });
 
   it("upgrades legacy databases with missing columns", () => {
@@ -52,17 +52,18 @@ describe("database migrations", () => {
       expect.arrayContaining(["prompt", "source_run_id", "recovery_mode"]),
     );
     expect(tableColumns(sqlite, "provider_configs")).toEqual(
-      expect.arrayContaining(["protocol", "api_key"]),
+      expect.arrayContaining(["protocol", "api_key", "url"]),
     );
     expect(migrationIds(sqlite)).toEqual(
       expect.arrayContaining([
         "20260331_runs_lineage_columns",
         "20260331_provider_configs_api_key",
+        "20260416_provider_configs_name_url",
       ]),
     );
     // The session_kernel_branches migration requires session_history_entries
     // which doesn't exist in legacy schemas, so it may not be applied
-    expect(migrationIds(sqlite)).toHaveLength(3);
+    expect(migrationIds(sqlite)).toHaveLength(4);
   });
 
   it("reverts the session kernel migration and drops WS-01 tables", () => {
@@ -237,11 +238,11 @@ function createFreshSchema(sqlite: BetterSqlite3.Database): void {
     CREATE TABLE provider_configs (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      type TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT '',
       base_url TEXT NOT NULL,
       api_key TEXT NOT NULL,
       model TEXT NOT NULL,
+      url TEXT NOT NULL DEFAULT '',
       enabled INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

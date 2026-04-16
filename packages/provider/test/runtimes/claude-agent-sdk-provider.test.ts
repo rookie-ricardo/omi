@@ -7,12 +7,12 @@ import { ClaudeAgentSdkProvider } from "../../src/runtimes/claude-agent-sdk-prov
 function makeConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     id: "provider_1",
-    name: "Anthropic",
-    type: "anthropic",
+        name: "anthropic",
     protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     apiKey: "test-key",
     model: "claude-sonnet-4-5",
+    url: "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

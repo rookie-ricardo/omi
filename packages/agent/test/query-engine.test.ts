@@ -60,8 +60,8 @@ function createTestRun(sessionId: string): Run {
 function createTestProviderConfig(): ProviderConfig {
   return {
     id: createId("provider"),
-    name: "Test Provider",
-    type: "anthropic",
+    name: "anthropic",
+    url: "",
     protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     apiKey: "test-key",

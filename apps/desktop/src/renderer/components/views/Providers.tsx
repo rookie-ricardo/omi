@@ -13,36 +13,24 @@ const PROTOCOLS: { value: ProtocolType; label: string }[] = [
   { value: "anthropic-messages", label: "Anthropic Messages" },
 ];
 
-const PROVIDER_TYPES = [
-  { value: "friday", label: "Friday" },
-  { value: "custom", label: "自定义" },
-];
-
-const FRIDAY_BASE_URL_MAP: Record<ProtocolType, string> = {
-  "openai-chat": "https://oneai.17usoft.com/v1/chat/completions",
-  "openai-responses": "https://oneai.17usoft.com/v1/responses",
-  "anthropic-messages": "https://oneai.17usoft.com/anthropic",
-};
-
 interface FormState {
   id?: string;
   name: string;
-  type: string;
   protocol: ProtocolType;
   baseUrl: string;
   model: string;
   apiKey: string;
+  url: string;
 }
 
 function emptyForm(): FormState {
-  const protocol = PROTOCOLS[0].value;
   return {
-    type: "friday",
     name: "",
-    protocol,
-    baseUrl: FRIDAY_BASE_URL_MAP[protocol],
+    protocol: PROTOCOLS[0].value,
+    baseUrl: "",
     model: "",
     apiKey: "",
+    url: "",
   };
 }
 
@@ -66,45 +54,33 @@ export default function Providers() {
     setForm({
       id: config.id,
       name: config.name,
-      type: config.type,
       protocol: (config.protocol as ProtocolType) ?? "openai-chat",
       baseUrl: config.baseUrl,
       model: config.model,
       apiKey: "",
+      url: config.url ?? "",
     });
     setShowForm(true);
-  }
-
-  function handleProviderTypeChange(type: string) {
-    setForm((prev) => {
-      const protocol = type === "friday" ? prev.protocol : prev.protocol;
-      return {
-        ...prev,
-        type,
-        baseUrl: type === "friday" ? FRIDAY_BASE_URL_MAP[protocol] : "",
-      };
-    });
   }
 
   function handleProtocolChange(protocol: ProtocolType) {
     setForm((prev) => ({
       ...prev,
       protocol,
-      baseUrl: prev.type === "friday" ? FRIDAY_BASE_URL_MAP[protocol] : prev.baseUrl,
     }));
   }
 
   async function handleSave() {
-    if (!form.model || (!form.id && !form.apiKey)) return;
+    if (!form.name.trim() || !form.model || (!form.id && !form.apiKey)) return;
     setSaving(true);
     await saveProviderConfig({
       id: form.id,
-      name: form.type === "custom" ? form.name : undefined,
-      type: form.type,
+      name: form.name.trim(),
       protocol: form.protocol,
       baseUrl: form.baseUrl,
       model: form.model,
       apiKey: form.apiKey || undefined!,
+      url: form.url,
     });
     setSaving(false);
     setShowForm(false);
@@ -113,8 +89,6 @@ export default function Providers() {
   async function handleDelete(id: string) {
     await deleteProviderConfig(id);
   }
-
-  const isFriday = form.type === "friday";
 
   return (
     <div className="flex-1 overflow-y-auto h-full">
@@ -149,25 +123,15 @@ export default function Providers() {
                 </div>
 
                 <div className="p-4 space-y-4">
-                  <FormField label="提供商">
-                    <FormSelect
-                      value={form.type}
-                      onChange={handleProviderTypeChange}
-                      options={PROVIDER_TYPES}
+                  <FormField label="名称">
+                    <input
+                      type="text"
+                      value={form.name}
+                      onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                      placeholder="例如 openai / anthropic / openai-compatible"
+                      className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
                     />
                   </FormField>
-
-                  {form.type === "custom" ? (
-                    <FormField label="名称">
-                      <input
-                        type="text"
-                        value={form.name}
-                        onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
-                        placeholder="输入提供商名称"
-                        className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
-                      />
-                    </FormField>
-                  ) : null}
 
                   <FormField label="协议">
                     <FormSelect
@@ -183,6 +147,16 @@ export default function Providers() {
                       value={form.baseUrl}
                       onChange={(e) => setForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
                       placeholder="https://api.example.com"
+                      className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
+                    />
+                  </FormField>
+
+                  <FormField label="图标 URL">
+                    <input
+                      type="text"
+                      value={form.url}
+                      onChange={(e) => setForm((prev) => ({ ...prev, url: e.target.value }))}
+                      placeholder="https://cdn.example.com/icon.png"
                       className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-gray-100 outline-none focus:border-blue-400 dark:focus:border-blue-500 transition-colors"
                     />
                   </FormField>
@@ -216,7 +190,7 @@ export default function Providers() {
                     </button>
                     <button
                       onClick={() => void handleSave()}
-                      disabled={saving || !form.model || (form.type === "custom" && !form.name) || (!form.id && !form.apiKey)}
+                      disabled={saving || !form.name.trim() || !form.model || (!form.id && !form.apiKey)}
                       className="px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded-lg text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {saving ? "保存中..." : "保存"}

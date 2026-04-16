@@ -34,7 +34,7 @@ function waitFor(predicate: () => boolean, timeoutMs = 2500): Promise<void> {
 function makeProviderConfig(): ProviderConfig {
   const now = nowIso();
   return {
-    id: createId("provider"), name: "Test", type: "anthropic", protocol: "anthropic-messages",
+    id: createId("provider"), name: "anthropic", url: "", protocol: "anthropic-messages",
     baseUrl: "https://api.anthropic.com", apiKey: "test-key",
     model: "claude-sonnet-4-20250514", createdAt: now, updatedAt: now,
   };

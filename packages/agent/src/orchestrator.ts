@@ -28,7 +28,7 @@ import {
   type RunnerEventEnvelope,
 } from "./agent-session";
 import { listBuiltInModels, listBuiltInProviders, McpRegistry as McpRegistryImpl } from "@omi/provider";
-import { getProviderDefaults, type SettingsManager } from "@omi/settings";
+import type { SettingsManager } from "@omi/settings";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader";
 import type { SessionCompactionSnapshot } from "@omi/memory";
 import {
@@ -283,22 +283,21 @@ export class AppOrchestrator {
 
   saveProviderConfig(input: {
     id?: string;
-    name?: string;
-    type: string;
+    name: string;
     protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
     baseUrl: string;
     model: string;
     apiKey: string;
+    url?: string;
   }): ProviderConfig {
-    const defaults = getProviderDefaults(input.type);
     return this.database.upsertProviderConfig({
       id: input.id,
-      name: input.name ?? defaults.name,
-      type: input.type,
+      name: input.name,
       protocol: input.protocol,
       baseUrl: input.baseUrl,
       model: input.model,
       apiKey: input.apiKey,
+      url: input.url ?? "",
     });
   }
 

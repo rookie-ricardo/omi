@@ -33,8 +33,8 @@ describe("WS-01 Session Kernel 验收测试", () => {
       const session = db.createSession("Recovery Context");
       const providerConfig = db.upsertProviderConfig({
         id: createId("provider"),
-        name: "Test Provider",
-        type: "anthropic",
+        name: "anthropic",
+        url: "",
         protocol: "anthropic-messages",
         baseUrl: "https://api.anthropic.com",
         apiKey: "test-key",
@@ -378,8 +378,8 @@ describe("WS-01 Session Kernel 验收测试", () => {
       const session = db.createSession("Multiple Queued Runs");
       const providerConfig = db.upsertProviderConfig({
         id: createId("provider"),
-        name: "Test",
-        type: "anthropic",
+        name: "anthropic",
+        url: "",
         protocol: "anthropic-messages",
         baseUrl: "",
         apiKey: "key",

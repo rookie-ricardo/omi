@@ -8,7 +8,7 @@ import { getSupportedApiVariants, routeProtocol } from "../src/protocol-router";
 describe("protocol-router", () => {
   it("routes an explicit providerConfig.protocol to the matching pi-ai api variant", () => {
     const config = makeConfig({
-      type: "openai",
+      name: "openai",
       protocol: "openai-chat",
       model: "gpt-4.1-mini",
     });
@@ -23,7 +23,7 @@ describe("protocol-router", () => {
 
   it("rejects provider configs without an explicit protocol", () => {
     const config = makeConfig({
-      type: "openai",
+      name: "openai",
       protocol: undefined,
       model: "gpt-4.1-mini",
     });
@@ -43,12 +43,12 @@ describe("protocol-router", () => {
 function makeConfig(overrides: Partial<ProviderConfig>): ProviderConfig {
   return {
     id: "provider_1",
-    name: "Test Provider",
-    type: "anthropic",
+    name: "anthropic",
     protocol: "anthropic-messages",
     baseUrl: "",
     apiKey: "test-api-key",
     model: "claude-sonnet-4-20250514",
+    url: "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

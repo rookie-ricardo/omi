@@ -58,7 +58,7 @@ export function createAssistantMessage(params: {
   return {
     role: "assistant",
     api: params.providerConfig.protocol,
-    provider: params.providerConfig.type,
+    provider: params.providerConfig.name,
     model: params.providerConfig.model,
     stopReason: mapModelStopReasonToPiAi(params.stopReason),
     timestamp,

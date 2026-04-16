@@ -7,12 +7,12 @@ import { VercelAiSdkProvider } from "../../src/runtimes/vercel-ai-sdk-provider";
 function makeConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     id: "provider_1",
-    name: "OpenAI",
-    type: "openai",
+        name: "openai",
     protocol: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "test-key",
     model: "gpt-4.1-mini",
+    url: "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

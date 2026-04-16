@@ -48,15 +48,15 @@ function waitFor(predicate: () => boolean, timeoutMs = 2500): Promise<void> {
 
 function makeProviderConfig(overrides?: Partial<ProviderConfig>): ProviderConfig {
   const now = nowIso();
-  const type = overrides?.type ?? "anthropic";
+  const name = overrides?.name ?? "anthropic";
   return {
     id: overrides?.id ?? createId("provider"),
-    name: overrides?.name ?? "Test Provider",
-    type,
-    protocol: overrides?.protocol ?? (type === "anthropic" ? "anthropic-messages" : "openai-chat"),
+    name,
+    protocol: overrides?.protocol ?? (name.startsWith("anthropic") ? "anthropic-messages" : "openai-chat"),
     baseUrl: overrides?.baseUrl ?? "https://api.anthropic.com",
     apiKey: overrides?.apiKey ?? "test-key",
     model: overrides?.model ?? "claude-sonnet-4-20250514",
+    url: overrides?.url ?? "",
     createdAt: overrides?.createdAt ?? now,
     updatedAt: overrides?.updatedAt ?? now,
   };

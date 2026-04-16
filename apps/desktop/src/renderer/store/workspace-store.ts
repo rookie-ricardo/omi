@@ -122,12 +122,12 @@ interface WorkspaceStoreActions {
   switchModel: (providerConfigId: string) => Promise<void>;
   saveProviderConfig: (params: {
     id?: string;
-    name?: string;
-    type: string;
+    name: string;
     protocol: "anthropic-messages" | "openai-chat" | "openai-responses";
     baseUrl?: string;
     model: string;
     apiKey: string;
+    url?: string;
   }) => Promise<void>;
   deleteProviderConfig: (id: string) => Promise<void>;
   setReasoningLevel: (level: ReasoningLevel) => void;
@@ -929,11 +929,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     await invokeRunner("provider.config.save", {
       id: params.id,
       name: params.name,
-      type: params.type,
       protocol,
       baseUrl: params.baseUrl ?? "",
       model: params.model,
       apiKey: params.apiKey,
+      url: params.url ?? "",
     });
     await get().loadModelCatalog();
   },

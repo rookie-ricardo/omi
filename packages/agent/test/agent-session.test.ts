@@ -272,8 +272,8 @@ describe("agent session", () => {
     };
     const providerConfig: ProviderConfig = {
       id: createId("provider"),
-      name: "Default anthropic",
-      type: "anthropic",
+      name: "anthropic",
+      url: "",
       protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
@@ -727,8 +727,8 @@ describe("agent session", () => {
     const runtime = new SessionManager().getOrCreate(session.id);
     const providerConfig = database.upsertProviderConfig(
       makeProviderConfig({
-        name: "OpenAI test",
-        type: "openai",
+        name: "openai",
+        url: "",
         baseUrl: "https://api.openai.com/v1",
         apiKey: "test-openai-key",
         model: "gpt-4",
@@ -792,8 +792,8 @@ describe("agent session", () => {
     const runtime = new SessionManager().getOrCreate(session.id);
     const providerConfig = database.upsertProviderConfig(
       makeProviderConfig({
-        name: "OpenAI test",
-        type: "openai",
+        name: "openai",
+        url: "",
         baseUrl: "https://api.openai.com/v1",
         apiKey: "test-openai-key",
         model: "gpt-4",
@@ -1441,15 +1441,15 @@ function makeSkill(name: string): SkillDescriptor {
 
 function makeProviderConfig(overrides?: Partial<ProviderConfig>): ProviderConfig {
   const now = nowIso();
-  const type = overrides?.type ?? "anthropic";
+  const name = overrides?.name ?? "anthropic";
   return {
     id: overrides?.id ?? createId("provider"),
-    name: overrides?.name ?? "Default anthropic",
-    type,
-    protocol: overrides?.protocol ?? (type === "anthropic" ? "anthropic-messages" : "openai-chat"),
+    name,
+    protocol: overrides?.protocol ?? (name.startsWith("anthropic") ? "anthropic-messages" : "openai-chat"),
     baseUrl: overrides?.baseUrl ?? "https://api.anthropic.com",
     apiKey: overrides?.apiKey ?? "test-api-key",
     model: overrides?.model ?? "claude-sonnet-4-20250514",
+    url: overrides?.url ?? "",
     createdAt: overrides?.createdAt ?? now,
     updatedAt: overrides?.updatedAt ?? now,
   };
@@ -1479,7 +1479,7 @@ function makeTestCompactionSummarizer() {
         keyDecisions: [`tokensBefore:${input.tokensBefore}`],
         nextSteps: [`resume:${input.mode}`],
         criticalContext: [
-          `provider:${input.providerConfig.type}`,
+          `provider:${input.providerConfig.name}`,
           `tokensKept:${input.tokensKept}`,
         ],
       };

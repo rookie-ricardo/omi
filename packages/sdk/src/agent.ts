@@ -477,12 +477,12 @@ export class Agent {
 
 	private seedProviderConfig(): ProviderConfig {
 		return this.database.upsertProviderConfig({
-			name: "default",
-			type: "anthropic",
+			name: "anthropic",
 			protocol: "anthropic-messages",
 			baseUrl: this.options.baseURL ?? "https://api.anthropic.com",
 			model: this.options.model ?? "claude-sonnet-4-6",
 			apiKey: this.options.apiKey ?? "",
+			url: "",
 		});
 	}
 

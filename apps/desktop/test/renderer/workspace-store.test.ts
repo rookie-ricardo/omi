@@ -36,12 +36,12 @@ function createGatewayMock(): {
 
   const providerConfig: ProviderConfig = {
     id: "provider_1",
-    name: "OpenAI",
-    type: "openai",
+    name: "openai",
     protocol: "openai-chat",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "test-key",
     model: "gpt-5.4",
+    url: "",
     createdAt: now,
     updatedAt: now,
   };
@@ -506,22 +506,24 @@ describe("workspace store", () => {
     setRunnerGatewayForTests(gateway);
 
     await useWorkspaceStore.getState().saveProviderConfig({
-      type: "openai",
+      name: "openai",
       protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-4.1-mini",
       apiKey: "sk-test",
+      url: "https://cdn.example.com/openai.png",
     });
 
     expect(getCalls()).toContainEqual({
       method: "provider.config.save",
       params: {
         id: undefined,
-        type: "openai",
+        name: "openai",
         protocol: "openai-chat",
         baseUrl: "https://api.openai.com/v1",
         model: "gpt-4.1-mini",
         apiKey: "sk-test",
+        url: "https://cdn.example.com/openai.png",
       },
     });
   });
@@ -532,11 +534,12 @@ describe("workspace store", () => {
 
     await expect(
       useWorkspaceStore.getState().saveProviderConfig({
-        type: "openai",
+        name: "openai",
         protocol: undefined as unknown as "anthropic-messages" | "openai-chat" | "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         model: "gpt-4.1-mini",
         apiKey: "sk-test",
+        url: "",
       }),
     ).rejects.toThrow("provider.config.save requires protocol");
 

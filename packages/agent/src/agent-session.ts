@@ -147,7 +147,7 @@ export class AgentSession {
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: input.providerConfig.type,
+      provider: input.providerConfig.name,
       prompt: input.prompt,
       sourceRunId: null,
       recoveryMode: "start",
@@ -224,7 +224,7 @@ export class AgentSession {
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: input.providerConfig.type,
+      provider: input.providerConfig.name,
       prompt: input.prompt,
       sourceRunId: null,
       recoveryMode: "start",
@@ -278,7 +278,7 @@ export class AgentSession {
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: providerConfig.type,
+      provider: providerConfig.name,
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "retry",
@@ -329,7 +329,7 @@ export class AgentSession {
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: providerConfig.type,
+      provider: providerConfig.name,
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "resume",
@@ -935,11 +935,11 @@ export class AgentSession {
     this.options.database.upsertProviderConfig({
       id: currentConfig.id,
       name: currentConfig.name,
-      type: currentConfig.type,
       protocol: currentConfig.protocol,
       baseUrl: currentConfig.baseUrl,
       apiKey: currentConfig.apiKey,
       model: modelId,
+      url: currentConfig.url,
     });
 
     this.options.runtime.setSelectedProviderConfig(currentConfig.id);

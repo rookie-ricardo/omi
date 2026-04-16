@@ -127,11 +127,11 @@ export const sessionRuntimeTable = sqliteTable("session_runtime", {
 export const providerConfigsTable = sqliteTable("provider_configs", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  type: text("type").notNull(),
   protocol: text("protocol").notNull().default(""),
   baseUrl: text("base_url").notNull(),
   apiKey: text("api_key").notNull(),
   model: text("model").notNull(),
+  url: text("url").notNull().default(""),
   enabled: integer("enabled", { mode: "boolean" }).notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

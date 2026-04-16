@@ -7,7 +7,7 @@ import { createModelFromConfig } from "../src/model-registry";
 describe("model registry", () => {
   it("builds a built-in OpenAI model from pi-ai", () => {
     const model = createModelFromConfig(
-      makeConfig({ type: "openai", protocol: "openai-responses", model: "gpt-4.1-mini" }),
+      makeConfig({ name: "openai", protocol: "openai-responses", model: "gpt-4.1-mini" }),
     );
     expect(model.provider).toBe("openai");
     expect(model.api).toBe("openai-responses");
@@ -16,7 +16,7 @@ describe("model registry", () => {
 
   it("builds a built-in OpenRouter model from pi-ai", () => {
     const model = createModelFromConfig(
-      makeConfig({ type: "openrouter", protocol: "openai-chat", model: "openai/gpt-4o-mini" }),
+      makeConfig({ name: "openrouter", protocol: "openai-chat", model: "openai/gpt-4o-mini" }),
     );
     expect(model.provider).toBe("openrouter");
     expect(model.api).toBe("openai-completions");
@@ -25,7 +25,7 @@ describe("model registry", () => {
   it("builds a custom OpenAI-compatible model", () => {
     const model = createModelFromConfig(
       makeConfig({
-        type: "openai-compatible",
+        name: "openai-compatible",
         protocol: "openai-chat",
         model: "gpt-oss:20b",
         baseUrl: "http://localhost:11434/v1",
@@ -39,7 +39,7 @@ describe("model registry", () => {
   it("builds a custom Anthropic-compatible model", () => {
     const model = createModelFromConfig(
       makeConfig({
-        type: "anthropic-compatible",
+        name: "anthropic-compatible",
         protocol: "anthropic-messages",
         model: "claude-sonnet-4-20250514",
         baseUrl: "http://localhost:8080",
@@ -53,27 +53,27 @@ describe("model registry", () => {
   it("rejects unknown models for built-in providers", () => {
     expect(() =>
       createModelFromConfig(
-        makeConfig({ type: "openai", protocol: "openai-responses", model: "does-not-exist" }),
+        makeConfig({ name: "openai", protocol: "openai-responses", model: "does-not-exist" }),
       ),
     ).toThrowError(/Model does-not-exist is not available for provider openai/);
   });
 
-  it("rejects unsupported provider types", () => {
+  it("rejects unsupported provider names", () => {
     expect(() =>
-      createModelFromConfig(makeConfig({ type: "made-up-provider", protocol: "openai-chat", model: "x" })),
-    ).toThrowError(/Unsupported provider type: made-up-provider/);
+      createModelFromConfig(makeConfig({ name: "made-up-provider", protocol: "openai-chat", model: "x" })),
+    ).toThrowError(/Unsupported provider name: made-up-provider/);
   });
 });
 
 function makeConfig(overrides: Partial<ProviderConfig>): ProviderConfig {
   return {
     id: "provider_1",
-    name: "Test Provider",
-    type: "anthropic",
+    name: "anthropic",
     protocol: "anthropic-messages",
     baseUrl: "",
     apiKey: "test-api-key",
     model: "claude-sonnet-4-20250514",
+    url: "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,

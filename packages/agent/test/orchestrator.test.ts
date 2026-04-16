@@ -26,15 +26,15 @@ describe("orchestrator", () => {
     const orchestrator = new AppOrchestrator(database, process.cwd(), () => {});
 
     const config = orchestrator.saveProviderConfig({
-      type: "openai",
+      name: "openai",
+      url: "",
       protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-5.4",
       apiKey: "sk-test",
     });
 
-    expect(config.type).toBe("openai");
-    expect(config.name).toBe("OpenAI");
+    expect(config.name).toBe("openai");
     expect(config.protocol).toBe("openai-chat");
     expect(config.baseUrl).toBe("https://api.openai.com/v1");
     expect(config.apiKey).toBe("sk-test");
@@ -127,8 +127,8 @@ describe("orchestrator", () => {
 
     const session = orchestrator.createSession("Test");
     database.upsertProviderConfig({
-      name: "Anthropic",
-      type: "anthropic",
+      name: "anthropic",
+      url: "",
       protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
@@ -148,7 +148,7 @@ describe("orchestrator", () => {
         taskId: null,
         prompt: "show me git diff",
         contextFiles: ["src/main.ts", "README.md"],
-        providerConfig: expect.objectContaining({ type: "anthropic" }),
+        providerConfig: expect.objectContaining({ name: "anthropic" }),
       }),
     );
     expect(events).toHaveLength(0);
@@ -313,8 +313,8 @@ describe("orchestrator", () => {
   it("lists session history and continues from a selected historical entry", () => {
     const database = createMemoryDatabase();
     database.upsertProviderConfig({
-      name: "Anthropic",
-      type: "anthropic",
+      name: "anthropic",
+      url: "",
       protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
@@ -404,8 +404,8 @@ describe("orchestrator", () => {
   it("lists extensions and built-in models through the orchestrator API", async () => {
     const database = createMemoryDatabase();
     database.upsertProviderConfig({
-      name: "Model A",
-      type: "openai",
+      name: "openai",
+      url: "",
       protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       apiKey: "test-openai-key",
@@ -461,7 +461,7 @@ describe("orchestrator", () => {
     expect(orchestrator.listModels()).toMatchObject({
       providerConfigs: [
         expect.objectContaining({
-          type: "openai",
+          name: "openai",
           model: "gpt-4.1-mini",
         }),
       ],
@@ -473,16 +473,16 @@ describe("orchestrator", () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Model switch");
     const primaryConfig = database.upsertProviderConfig({
-      name: "Anthropic",
-      type: "anthropic",
+      name: "anthropic",
+      url: "",
       protocol: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-anthropic-key",
       model: "claude-sonnet-4-20250514",
     });
     const switchedConfig = database.upsertProviderConfig({
-      name: "OpenAI",
-      type: "openai",
+      name: "openai",
+      url: "",
       protocol: "openai-chat",
       baseUrl: "https://api.openai.com/v1",
       apiKey: "test-openai-key",
@@ -532,7 +532,7 @@ describe("orchestrator", () => {
       expect.objectContaining({
         providerConfig: expect.objectContaining({
           id: switchedConfig.id,
-          type: "openai",
+          name: "openai",
         }),
       }),
     );

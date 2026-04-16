@@ -110,11 +110,11 @@ export const providerProtocolSchema = z.enum([
 export const providerConfigSchema = z.object({
   id: z.string(),
   name: z.string(),
-  type: z.string().min(1),
   protocol: providerProtocolSchema,
   baseUrl: z.string().default(""),
   apiKey: z.string().min(1),
   model: z.string().min(1),
+  url: z.string().default(""),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

@@ -68,7 +68,7 @@ const BUILT_IN_PROVIDERS = [
 type BuiltInProviderName = (typeof BUILT_IN_PROVIDERS)[number];
 
 /**
- * Check if a provider type is a built-in (known) provider.
+ * Check if a provider name is a built-in (known) provider.
  */
 export function isBuiltInProvider(provider: string): provider is BuiltInProviderName {
   return (BUILT_IN_PROVIDERS as readonly string[]).includes(provider);
@@ -97,31 +97,20 @@ export function listBuiltInModels(provider: string): Model<Api>[] {
  */
 export function createModelFromConfig(config: ProviderConfig): Model<Api> {
   const routing = routeProtocol(config);
-  const providerDefaults: Record<string, { provider: string; api: Api; baseUrl: string }> = {
-    anthropic: { provider: "anthropic", api: "anthropic-responses", baseUrl: "https://api.anthropic.com" },
-    openai: { provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
-    openrouter: { provider: "openrouter", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" },
-    google: { provider: "google", api: "google-generative-ai", baseUrl: "https://generativelanguage.googleapis.com" },
-    bedrock: { provider: "bedrock", api: "bedrock-converse-stream", baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com" },
-    azure: { provider: "azure", api: "azure-openai-responses", baseUrl: "https://{resource}.openai.azure.com" },
-    mistral: { provider: "mistral", api: "mistral-conversations", baseUrl: "https://api.mistral.ai" },
-    xai: { provider: "xai", api: "openai-completions", baseUrl: "https://api.x.ai" },
-    groq: { provider: "groq", api: "openai-completions", baseUrl: "https://api.groq.com/openai/v1" },
-    cerebras: { provider: "cerebras", api: "openai-completions", baseUrl: "https://api.cerebras.ai/v1" },
-  };
+  const providerName = config.name;
 
-  // Reject unknown provider types
-  const KNOWN_CUSTOM_TYPES = new Set(["openai-compatible", "anthropic-compatible"]);
-  if (!isBuiltInProvider(config.type) && !providerDefaults[config.type] && !KNOWN_CUSTOM_TYPES.has(config.type)) {
-    throw new Error(`Unsupported provider type: ${config.type}`);
+  // Reject unknown provider names.
+  const KNOWN_CUSTOM_PROVIDERS = new Set(["openai-compatible", "anthropic-compatible"]);
+  if (!isBuiltInProvider(providerName) && !KNOWN_CUSTOM_PROVIDERS.has(providerName)) {
+    throw new Error(`Unsupported provider name: ${providerName}`);
   }
 
   // For built-in providers, validate model availability
-  if (isBuiltInProvider(config.type)) {
-    const models = getModels(config.type as KnownProvider);
+  if (isBuiltInProvider(providerName)) {
+    const models = getModels(providerName as KnownProvider);
     const model = models.find((m) => m.id === config.model);
     if (!model) {
-      throw new Error(`Model ${config.model} is not available for provider ${config.type}`);
+      throw new Error(`Model ${config.model} is not available for provider ${providerName}`);
     }
     return {
       ...model,
@@ -131,7 +120,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
   }
 
   // Custom compatible providers: openai-compatible, anthropic-compatible
-  if (config.type === "openai-compatible") {
+  if (providerName === "openai-compatible") {
     return {
       id: config.model,
       name: config.model,
@@ -146,7 +135,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
     };
   }
 
-  if (config.type === "anthropic-compatible") {
+  if (providerName === "anthropic-compatible") {
     return {
       id: config.model,
       name: config.model,
@@ -165,7 +154,7 @@ export function createModelFromConfig(config: ProviderConfig): Model<Api> {
   return {
     id: config.model,
     name: config.model,
-    provider: config.type,
+    provider: providerName,
     api: routing.apiVariant as Api,
     baseUrl: config.baseUrl || "",
     reasoning: false,

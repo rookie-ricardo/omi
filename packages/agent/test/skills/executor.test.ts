@@ -13,8 +13,8 @@ describe("executor", () => {
     const now = new Date().toISOString();
     const providerConfig = {
       id: "provider-test",
-      name: "Test Provider",
-      type: "anthropic" as const,
+      name: "anthropic",
+      url: "",
       protocol: "anthropic-messages" as const,
       baseUrl: "https://api.anthropic.com",
       apiKey: "test-key",
