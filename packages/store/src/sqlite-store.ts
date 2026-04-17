@@ -197,7 +197,6 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     CREATE TABLE IF NOT EXISTS session_branches (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
-      head_entry_id TEXT,
       title TEXT NOT NULL DEFAULT 'main',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -250,7 +249,6 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
     const mainBranch = sessionBranchSchema.parse({
       id: createId("branch"),
       sessionId: session.id,
-      headEntryId: null,
       title: "main",
       createdAt: now,
       updatedAt: now,
@@ -1049,7 +1047,6 @@ const DATABASE_MIGRATIONS: DatabaseMigration[] = [
         CREATE TABLE IF NOT EXISTS session_branches (
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
-          head_entry_id TEXT,
           title TEXT NOT NULL DEFAULT 'main',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL

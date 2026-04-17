@@ -24,20 +24,6 @@ describe("resource loader", () => {
     writeFileSync(join(homeRoot, ".omi", "AGENTS.md"), "User context from .omi.");
     writeFileSync(join(projectRoot, "CLAUDE.md"), "Parent workspace context.");
     writeFileSync(join(workspaceRoot, "AGENTS.md"), "Workspace context.");
-    mkdirSync(join(homeRoot, ".omi", "extensions"), { recursive: true });
-    mkdirSync(join(workspaceRoot, ".omi", "extensions"), { recursive: true });
-    writeFileSync(
-      join(homeRoot, ".omi", "extensions", "home.mjs"),
-      `export default {
-  name: "home-extension",
-};`,
-    );
-    writeFileSync(
-      join(workspaceRoot, ".omi", "extensions", "workspace.mjs"),
-      `export default {
-  name: "workspace-extension",
-};`,
-    );
 
     writeSkill(
       join(homeRoot, ".agent", "skills", "review"),
@@ -92,11 +78,6 @@ describe("resource loader", () => {
       "Current working directory: /tmp/override-cwd",
     );
     expect(loader.buildSystemPrompt(resolved)).toContain("Activated skill: Git Inspector");
-    expect(loader.getExtensions().diagnostics).toEqual([]);
-    expect(loader.getExtensions().items.map((extension) => extension.name)).toEqual([
-      "home-extension",
-      "workspace-extension",
-    ]);
   });
 });
 

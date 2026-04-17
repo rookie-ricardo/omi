@@ -86,7 +86,6 @@ describe("WS-01 Session Kernel 验收测试", () => {
       const mainBranch = db.createBranch({
         id: createId("branch"),
         sessionId: session.id,
-        headEntryId: null,
         title: "main",
       });
 
@@ -172,13 +171,11 @@ describe("WS-01 Session Kernel 验收测试", () => {
     it("continueFromHistoryEntry 创建独立的分支，不污染原分支历史", () => {
       const db = createMockDatabase();
       const session = db.createSession("Branch Isolation");
-      const manager = new SessionManager(undefined, db);
 
       // 创建分支
       const mainBranch = db.createBranch({
         id: createId("branch"),
         sessionId: session.id,
-        headEntryId: null,
         title: "main",
       });
 
@@ -209,14 +206,10 @@ describe("WS-01 Session Kernel 验收测试", () => {
         originRunId: null,
       });
 
-      // 记录 main 分支的 head
-      db.updateBranch(mainBranch.id, { headEntryId: entry2.id });
-
       // 创建新分支（模拟 continueFromHistoryEntry 的行为）
       const branchFromEntry1 = db.createBranch({
         id: createId("branch"),
         sessionId: session.id,
-        headEntryId: entry1.id,
         title: "branch-from-entry1",
       });
 
@@ -235,11 +228,8 @@ describe("WS-01 Session Kernel 验收测试", () => {
       });
 
       // 验证原分支没有被污染
-      const mainBranchAfter = db.getBranch(mainBranch.id);
-      expect(mainBranchAfter?.headEntryId).toBe(entry2.id); // 仍然是 entry2
-
-      // 验证新分支有正确的 head
-      expect(branchFromEntry1.headEntryId).toBe(entry1.id);
+      const mainBranchHistory = db.getBranchHistory(session.id, mainBranch.id);
+      expect(mainBranchHistory.map((entry) => entry.id)).toEqual([entry1.id, entry2.id]);
 
       // 验证新分支有自己的条目
       const branchHistory = db.getBranchHistory(session.id, branchFromEntry1.id);
@@ -466,7 +456,6 @@ describe("WS-01 Session Kernel 验收测试", () => {
       const branch = db.createBranch({
         id: createId("branch"),
         sessionId: session.id,
-        headEntryId: null,
         title: "feature-branch",
       });
 
@@ -485,9 +474,9 @@ describe("WS-01 Session Kernel 验收测试", () => {
       expect(fetched?.title).toBe("feature-branch");
 
       // 验证可以更新分支
-      db.updateBranch(branch.id, { headEntryId: "new-head" });
+      db.updateBranch(branch.id, { title: "renamed-branch" });
       const updated = db.getBranch(branch.id);
-      expect(updated?.headEntryId).toBe("new-head");
+      expect(updated?.title).toBe("renamed-branch");
     });
 
     it("runCheckpoints 表正确创建并支持 checkpoint 操作", () => {

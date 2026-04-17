@@ -12,7 +12,6 @@ import {
   buildSessionRuntimeMessageEnvelopes,
   buildSessionRuntimeMessages,
   convertRuntimeMessagesToLlm,
-  renderRuntimeMessagesForPrompt,
   sessionCompactionSnapshotSchema,
   estimateContextTokens,
   type ContextUsageEstimate,
@@ -310,11 +309,10 @@ export class QueryEngine {
       this.transition("preprocess_context", "run_starting");
 
       const prepared = this.prepareRun(input);
-      const extensionRunner = await this.loadRunResources(input, prepared);
+      await this.loadRunResources(input, prepared);
       const executionInput = await this.buildExecutionInput(
         input,
         prepared,
-        extensionRunner,
       );
       this.state.messages = prepared.currentHistoryMessages;
       this.state.compactTracking.lastContextTokens = estimateContextTokens(
@@ -440,7 +438,6 @@ export class QueryEngine {
             resolvedSkill: prepared.resolvedSkill,
             providerConfig: input.providerConfig,
             tools,
-            extensionRunner,
           });
         } catch (error) {
           // Error classification and recovery via RecoveryEngine
@@ -550,11 +547,6 @@ export class QueryEngine {
           payload: { runId: input.run.id, sessionId: input.session.id, text: result.assistantText },
         });
 
-        // Append assistant message to LLM message history
-        if (result.assistantMessage) {
-          llmMessages.push(result.assistantMessage as PiAiMessage);
-        }
-
         this.transition("post_tool_merge", "model_response_complete");
 
         // Checkpoint: before_terminal_commit
@@ -565,7 +557,7 @@ export class QueryEngine {
           partialAssistantText: result.assistantText,
         });
 
-        await this.finalizeRun(input, result, extensionRunner);
+        await this.finalizeRun(input, result);
         return this.terminate("completed", null, result.assistantText);
       }
     } catch (error) {
@@ -647,9 +639,8 @@ export class QueryEngine {
     resolvedSkill: ResolvedSkill | null;
     providerConfig: ProviderConfig;
     tools: import("@omi/core").OmiTool[];
-    extensionRunner: import("@omi/extensions").ExtensionRunner;
   }): Promise<ProviderRunResult> {
-    const { input, systemPrompt, effectivePrompt, llmMessages, resolvedSkill, providerConfig, tools, extensionRunner } = params;
+    const { input, systemPrompt, effectivePrompt, llmMessages, resolvedSkill, providerConfig, tools } = params;
     const resolvedToolNames = resolvedSkill?.enabledToolNames.length
       ? this.filterVisibleTools(resolvedSkill.enabledToolNames as ToolName[], input.session.id)
       : this.filterVisibleTools(listBuiltInToolNames(), input.session.id);
@@ -673,7 +664,6 @@ export class QueryEngine {
       onToolLifecycle: async (event) =>
         this.handleProviderToolLifecycle({
           input,
-          extensionRunner,
           tools,
           event,
         }),
@@ -915,11 +905,10 @@ export class QueryEngine {
 
   private async handleProviderToolLifecycle(params: {
     input: QueryEngineRunInput;
-    extensionRunner: import("@omi/extensions").ExtensionRunner;
     tools: import("@omi/core").OmiTool[];
     event: ProviderToolLifecycleEvent;
   }): Promise<ProviderToolLifecycleControl> {
-    const { input, extensionRunner, tools, event } = params;
+    const { input, tools, event } = params;
     const runId = input.run.id;
     const sessionId = input.session.id;
 
@@ -931,28 +920,22 @@ export class QueryEngine {
       case "requested":
         return this.onToolRequestedLifecycle({
           input,
-          extensionRunner,
           tools,
           event,
         });
       case "approval_requested":
         return this.onToolApprovalRequestedLifecycle(event);
       case "started":
-        return this.onToolStartedLifecycle({
-          extensionRunner,
-          event,
-        });
+        return this.onToolStartedLifecycle(event);
       case "progress":
         return {};
       case "finished":
         return this.onToolFinishedLifecycle({
-          extensionRunner,
           event,
           isError: false,
         });
       case "failed":
         return this.onToolFinishedLifecycle({
-          extensionRunner,
           event,
           isError: true,
         });
@@ -963,11 +946,10 @@ export class QueryEngine {
 
   private async onToolRequestedLifecycle(params: {
     input: QueryEngineRunInput;
-    extensionRunner: import("@omi/extensions").ExtensionRunner;
     tools: import("@omi/core").OmiTool[];
     event: ProviderToolLifecycleEvent;
   }): Promise<ProviderToolLifecycleControl> {
-    const { input, extensionRunner, tools, event } = params;
+    const { input, tools, event } = params;
     const runId = input.run.id;
     const sessionId = input.session.id;
     const taskId = input.task?.id ?? null;
@@ -1063,11 +1045,6 @@ export class QueryEngine {
       },
     });
 
-    await extensionRunner.emit({
-      type: "run.tool_requested",
-      payload: { runId, sessionId, toolName, input: toolInput, requiresApproval: needsApproval },
-    });
-
     return {
       allowExecution: true,
       requiresApproval: needsApproval,
@@ -1097,13 +1074,10 @@ export class QueryEngine {
     return { decision };
   }
 
-  private async onToolStartedLifecycle(params: {
-    extensionRunner: import("@omi/extensions").ExtensionRunner;
-    event: ProviderToolLifecycleEvent;
-  }): Promise<ProviderToolLifecycleControl> {
-    const { extensionRunner, event } = params;
+  private async onToolStartedLifecycle(
+    event: ProviderToolLifecycleEvent,
+  ): Promise<ProviderToolLifecycleControl> {
     const runId = event.runId;
-    const sessionId = event.sessionId;
     const toolCallId = event.toolCallId;
     const toolName = event.toolName;
 
@@ -1111,21 +1085,15 @@ export class QueryEngine {
       type: "run.tool_started",
       payload: { runId, toolCallId, toolName },
     });
-    await extensionRunner.emit({
-      type: "run.tool_started",
-      payload: { runId, sessionId, toolCallId, toolName },
-    });
     return {};
   }
 
   private async onToolFinishedLifecycle(params: {
-    extensionRunner: import("@omi/extensions").ExtensionRunner;
     event: ProviderToolLifecycleEvent;
     isError: boolean;
   }): Promise<ProviderToolLifecycleControl> {
-    const { extensionRunner, event, isError } = params;
+    const { event, isError } = params;
     const runId = event.runId;
-    const sessionId = event.sessionId;
     const toolCallId = event.toolCallId;
     const toolName = event.toolName;
     const toolOutput = typeof event.output === "undefined"
@@ -1142,10 +1110,6 @@ export class QueryEngine {
     this.emitEvent({
       type: "run.tool_finished",
       payload: { runId, toolCallId, toolName, output: toolOutput },
-    });
-    await extensionRunner.emit({
-      type: "run.tool_finished",
-      payload: { runId, sessionId, toolCallId, toolName, output: toolOutput, isError },
     });
 
     if (!isError && typeof toolOutput === "object" && toolOutput !== null) {
@@ -1276,8 +1240,7 @@ export class QueryEngine {
   private async loadRunResources(
     input: QueryEngineRunInput,
     prepared: PreparedRunContext,
-  ): Promise<import("@omi/extensions").ExtensionRunner> {
-    const { ExtensionRunner } = await import("@omi/extensions");
+  ): Promise<void> {
     await this.deps.resources.reload();
 
     const resolvedSkill = await this.deps.resources.resolveSkillForPrompt(input.prompt);
@@ -1298,76 +1261,18 @@ export class QueryEngine {
     });
 
     prepared.resolvedSkill = resolvedSkill;
-
-    const extensionRunner = new ExtensionRunner(this.deps.workspaceRoot);
-    const extensionCatalog = this.deps.resources.getExtensions();
-    await extensionRunner.load(extensionCatalog.items);
-
-    this.emitEvent({
-      type: "run.extensions_loaded",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        extensions: extensionCatalog.items.map((ext) => ext.name),
-        diagnostics: extensionCatalog.diagnostics,
-      },
-    });
-
-    await extensionRunner.emit({
-      type: "run.extensions_loaded",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        extensions: extensionCatalog.items.map((ext) => ext.name),
-        diagnostics: extensionCatalog.diagnostics,
-      },
-    });
-    await extensionRunner.emit({
-      type: "run.runtime_selected",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        runtime: prepared.providerRuntime,
-      },
-    });
-    await extensionRunner.emit({
-      type: "run.started",
-      payload: {
-        runId: input.run.id,
-        sessionId: input.session.id,
-        taskId: input.task?.id ?? null,
-      },
-    });
-
-    return extensionRunner;
   }
 
   private async buildExecutionInput(
     input: QueryEngineRunInput,
     prepared: PreparedRunContext,
-    extensionRunner: import("@omi/extensions").ExtensionRunner,
   ): Promise<{ systemPrompt: string; effectivePrompt: string }> {
-    const baseSystemPrompt = this.deps.resources.buildSystemPrompt(
+    const systemPrompt = this.deps.resources.buildSystemPrompt(
       prepared.resolvedSkill,
       this.deps.workspaceRoot,
     );
-    await extensionRunner.beforeRun({
-      prompt: input.prompt,
-      sessionId: input.session.id,
-      workspaceRoot: this.deps.workspaceRoot,
-      systemPrompt: baseSystemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: input.prompt }],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    const systemPrompt = extensionRunner.buildSystemPrompt(baseSystemPrompt);
-    const runtimePrompt = renderRuntimeMessagesForPrompt(extensionRunner.getRuntimeMessages() as RuntimeMessage[]);
     const contextPrompt = formatContextFilePrompt(input.contextFiles);
-    const promptSegments = [runtimePrompt, contextPrompt, input.prompt]
+    const promptSegments = [contextPrompt, input.prompt]
       .map((segment) => segment.trim())
       .filter((segment) => segment.length > 0);
     const effectivePrompt = promptSegments.join("\n\n");
@@ -1382,7 +1287,6 @@ export class QueryEngine {
   private async finalizeRun(
     input: QueryEngineRunInput,
     result: ProviderRunResult,
-    extensionRunner: import("@omi/extensions").ExtensionRunner,
   ): Promise<void> {
     const runId = input.run.id;
     const sessionId = input.session.id;
@@ -1413,11 +1317,6 @@ export class QueryEngine {
     this.persistRuntimeSnapshot(sessionId);
 
     this.emitEvent({
-      type: "run.completed",
-      payload: { runId, sessionId, summary: assistantText },
-    });
-
-    await extensionRunner.emit({
       type: "run.completed",
       payload: { runId, sessionId, summary: assistantText },
     });

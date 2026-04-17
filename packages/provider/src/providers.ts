@@ -95,7 +95,6 @@ export interface ProviderToolLifecycleControl {
 
 export interface ProviderRunResult {
   assistantText: string;
-  assistantMessage: unknown; // Raw provider message for history append
   stopReason: ModelStopReason;
   usage: ModelUsage;
   error: string | null;

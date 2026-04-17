@@ -145,7 +145,6 @@ describe("session manager", () => {
     const mainBranch = database.createBranch({
       id: createId("branch"),
       sessionId: session.id,
-      headEntryId: null,
       title: "main",
     });
     const snapshot = {
@@ -480,9 +479,9 @@ describe("session manager - tree navigation", () => {
       expect(manager.getLeafId("session_1")).toBeNull();
     });
 
-    it("should have branch method", () => {
+    it("should have createBranch method", () => {
       const manager = new SessionManager();
-      expect(typeof manager.branch).toBe("function");
+      expect(typeof manager.createBranch).toBe("function");
     });
 
     it("should have fork method", () => {

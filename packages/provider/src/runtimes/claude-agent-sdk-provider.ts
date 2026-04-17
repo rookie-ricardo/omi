@@ -17,7 +17,6 @@ import type {
 import type { ModelStopReason, ModelUsage } from "../types";
 import {
   buildSingleTurnPrompt,
-  createAssistantMessage,
   linkAbortSignal,
   mapClaudeStopReasonToModel,
 } from "./runtime-utils";
@@ -534,16 +533,8 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       assistantText = fallbackAssistantText;
     }
 
-    const assistantMessage = createAssistantMessage({
-      providerConfig: input.providerConfig,
-      assistantText,
-      usage,
-      stopReason,
-    });
-
     return {
       assistantText,
-      assistantMessage,
       stopReason,
       usage,
       error,

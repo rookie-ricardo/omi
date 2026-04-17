@@ -19,8 +19,7 @@ import type {
 } from "@omi/core";
 import type { AppStore } from "@omi/store";
 import { createId, nowIso } from "@omi/core";
-import { createRuntimeCustomMessage, type CompactionSummaryDocument } from "@omi/memory";
-import type { ExtensionDefinition } from "@omi/extensions";
+import type { CompactionSummaryDocument } from "@omi/memory";
 import type { ProviderRunInput, ProviderRunResult } from "@omi/provider";
 
 import {
@@ -48,7 +47,6 @@ describe("agent session", () => {
         await providerGate;
         return {
           assistantText: "done",
-          assistantMessage: null,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
@@ -95,7 +93,6 @@ describe("agent session", () => {
       async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
         return {
           assistantText: "unexpected",
-          assistantMessage: null,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
@@ -193,20 +190,7 @@ describe("agent session", () => {
     const runtime = new SessionManager().getOrCreate(session.id);
     const events: RunnerEventEnvelope[] = [];
     const providerCalls: ProviderRunInput[] = [];
-    const extensionEvents: string[] = [];
     let resourcesReloaded = 0;
-    const extension: ExtensionDefinition = {
-      name: "session-extension",
-      beforeRun(input, context) {
-        context.appendSystemPrompt(`Extension prompt for ${input.sessionId}`);
-        context.appendRuntimeMessage(
-          createRuntimeCustomMessage("extension-note", "Extension runtime note", true, undefined, 1),
-        );
-      },
-      onEvent(event) {
-        extensionEvents.push(event.type);
-      },
-    };
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
@@ -236,7 +220,7 @@ describe("agent session", () => {
           input: { command: "git diff --name-only" },
           output: [{ type: "text", text: "src/index.ts" }],
         });
-        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -268,7 +252,6 @@ describe("agent session", () => {
         resolvedSkill ? `System prompt\n\n${resolvedSkill.injectedPrompt}` : "",
       getPrompts: () => ({ items: [], diagnostics: [] }),
       getThemes: () => ({ items: [], diagnostics: [] }),
-      getExtensions: () => ({ items: [extension], diagnostics: [] }),
     };
     const providerConfig: ProviderConfig = {
       id: createId("provider"),
@@ -305,8 +288,6 @@ describe("agent session", () => {
     expect(resourcesReloaded).toBe(1);
     expect(providerCalls).toHaveLength(1);
     expect(providerCalls[0]?.systemPrompt).toContain("Activated skill: Git Inspector");
-    expect(providerCalls[0]?.systemPrompt).toContain(`Extension prompt for ${session.id}`);
-    expect(providerCalls[0]?.prompt).toContain("extension-note: Extension runtime note");
     expect(providerCalls[0]?.prompt).toContain("show me git diff");
     expect(providerCalls[0]?.enabledTools).toEqual(["bash"]);
     expect(database.getSession(session.id)?.latestUserMessage).toBe("show me git diff");
@@ -315,7 +296,6 @@ describe("agent session", () => {
       "user",
       "assistant",
     ]);
-    expect(events.some((event) => event.type === "run.extensions_loaded")).toBe(true);
     expect(events.some((event) => event.type === "run.skills_resolved")).toBe(true);
     expect(events.some((event) => event.type === "run.delta")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_requested")).toBe(true);
@@ -331,9 +311,6 @@ describe("agent session", () => {
     });
     expect(queryLoopEvents.some((event) => event.type === "query_loop.terminal")).toBe(true);
     expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["bash"]);
-    expect(extensionEvents).toEqual(
-      expect.arrayContaining(["run.started", "run.tool_requested", "run.tool_started", "run.tool_finished", "run.completed"]),
-    );
     expect(database.listMemories("session", session.id)).toHaveLength(0);
     expect(database.loadSessionRuntimeSnapshot(session.id)).not.toBeNull();
     expect(runtime.snapshot()).toMatchObject({
@@ -355,7 +332,6 @@ describe("agent session", () => {
     const mainBranch = database.createBranch({
       id: createId("branch"),
       sessionId: session.id,
-      headEntryId: null,
       title: "main",
     });
     const baseEntry = database.addSessionHistoryEntry!({
@@ -377,7 +353,7 @@ describe("agent session", () => {
     runtime.setSelectedProviderConfig(storedProviderConfig.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
-        return { assistantText: "branch done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "branch done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -449,7 +425,7 @@ describe("agent session", () => {
           await firstRunGate;
         }
         finishedRuns.push(input.runId);
-        return { assistantText: `done-${input.runId}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${input.runId}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -500,7 +476,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -556,7 +532,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -644,13 +620,12 @@ describe("agent session", () => {
     const mainBranch = database.createBranch({
       id: createId("branch"),
       sessionId: session.id,
-      headEntryId: null,
       title: "main",
     });
     database.setActiveBranchId(session.id, mainBranch.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
-        return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -681,7 +656,6 @@ describe("agent session", () => {
     const featureBranch = database.createBranch({
       id: createId("branch"),
       sessionId: session.id,
-      headEntryId: rootEntry?.id ?? null,
       title: "feature",
     });
     const featureCheckpoint = database.addSessionHistoryEntry?.({
@@ -739,7 +713,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -809,7 +783,7 @@ describe("agent session", () => {
           shouldOverflow = false;
           throw new Error("prompt is too long: 99999 tokens > 8192 maximum");
         }
-        return { assistantText: "recovered", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "recovered", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -854,7 +828,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${providerCalls.length}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -945,7 +919,7 @@ describe("agent session", () => {
         if (callRecords.length === 1) {
           throw new Error("boom");
         }
-        return { assistantText: "retried", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "retried", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -1020,7 +994,7 @@ describe("agent session", () => {
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         executedRuns.push(input.runId);
-        return { assistantText: "resumed", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "resumed", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -1081,7 +1055,6 @@ describe("agent session", () => {
           if (approval?.decision !== "approved") {
             return {
               assistantText: "rejected",
-              assistantMessage: null,
               stopReason: "error" as const,
               usage: { inputTokens: 0, outputTokens: 0 },
               error: "rejected",
@@ -1105,7 +1078,7 @@ describe("agent session", () => {
           input: { command: "pwd" },
           output: [{ type: "text", text: "/workspace" }],
         });
-        return { assistantText: "approved", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "approved", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -1174,7 +1147,6 @@ describe("agent session", () => {
         }
         return {
           assistantText: "rejected",
-          assistantMessage: null,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
@@ -1255,7 +1227,6 @@ describe("agent session", () => {
         });
         return {
           assistantText: "done",
-          assistantMessage: null,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
@@ -1325,7 +1296,6 @@ describe("agent session", () => {
           if (approval?.decision === "rejected") {
             return {
               assistantText: "rejected",
-              assistantMessage: null,
               stopReason: "error" as const,
               usage: { inputTokens: 0, outputTokens: 0 },
               error: "rejected",
@@ -1351,7 +1321,6 @@ describe("agent session", () => {
         });
         return {
           assistantText: "approved",
-          assistantMessage: null,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
@@ -1503,7 +1472,6 @@ function makeStaticResources(): ResourceLoader {
     buildSystemPrompt: () => "",
     getPrompts: () => ({ items: [], diagnostics: [] }),
     getThemes: () => ({ items: [], diagnostics: [] }),
-    getExtensions: () => ({ items: [], diagnostics: [] }),
   };
 }
 

@@ -1,9 +1,7 @@
-import type { AssistantMessage, StopReason } from "@mariozechner/pi-ai";
 import type { Message } from "@mariozechner/pi-ai";
-import type { ProviderConfig } from "@omi/core";
 import type { ModelMessage, ToolResultPart, UserModelMessage } from "ai";
 
-import type { ModelStopReason, ModelUsage } from "../types";
+import type { ModelStopReason } from "../types";
 
 export function linkAbortSignal(
   source: AbortSignal | undefined,
@@ -25,12 +23,6 @@ export function linkAbortSignal(
   return () => source.removeEventListener("abort", onAbort);
 }
 
-export function mapModelStopReasonToPiAi(reason: ModelStopReason): StopReason {
-  if (reason === "max_tokens") return "length";
-  if (reason === "error") return "error";
-  return "stop";
-}
-
 export function mapVercelFinishReasonToModel(reason: string | undefined): ModelStopReason {
   if (reason === "tool-calls") return "error";
   if (reason === "length") return "max_tokens";
@@ -46,45 +38,6 @@ export function mapClaudeStopReasonToModel(reason: string | null | undefined): M
   if (reason === "end_turn") return "end_turn";
   if (!reason) return "end_turn";
   return "error";
-}
-
-export function createAssistantMessage(params: {
-  providerConfig: ProviderConfig;
-  assistantText: string;
-  usage: ModelUsage;
-  stopReason: ModelStopReason;
-}): AssistantMessage {
-  const timestamp = Date.now();
-
-  return {
-    role: "assistant",
-    api: params.providerConfig.protocol,
-    provider: params.providerConfig.name,
-    model: params.providerConfig.model,
-    stopReason: mapModelStopReasonToPiAi(params.stopReason),
-    timestamp,
-    usage: {
-      input: params.usage.inputTokens,
-      output: params.usage.outputTokens,
-      cacheRead: params.usage.cacheReadTokens ?? 0,
-      cacheWrite: params.usage.cacheCreationTokens ?? 0,
-      totalTokens:
-        params.usage.inputTokens +
-        params.usage.outputTokens +
-        (params.usage.cacheReadTokens ?? 0) +
-        (params.usage.cacheCreationTokens ?? 0),
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    content: params.assistantText.trim().length > 0
-      ? [{ type: "text" as const, text: params.assistantText }]
-      : [],
-  };
 }
 
 function renderTextLikeContent(content: unknown): string {

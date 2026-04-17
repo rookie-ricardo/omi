@@ -48,7 +48,6 @@ function makeStaticResources(): ResourceLoader {
     resolveSkillForPrompt: async () => null, buildSystemPrompt: () => "",
     getPrompts: () => ({ items: [], diagnostics: [] }),
     getThemes: () => ({ items: [], diagnostics: [] }),
-    getExtensions: () => ({ items: [], diagnostics: [] }),
   };
 }
 
@@ -235,7 +234,7 @@ describe("Tool & Permission baseline", () => {
         await gate;
         anyInput.onToolStarted?.(tcId, "bash");
         anyInput.onToolFinished?.(tcId, "bash", { ok: true }, false);
-        return { assistantText: "tool done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "tool done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };

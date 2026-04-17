@@ -95,7 +95,6 @@ describe("providers", () => {
     const claudeRuntime: ProviderAdapter = {
       run: vi.fn(async () => ({
         assistantText: "claude",
-        assistantMessage: null,
         stopReason: "end_turn" as const,
         usage: { inputTokens: 1, outputTokens: 1 },
         error: null,
@@ -105,7 +104,6 @@ describe("providers", () => {
     const vercelRuntime: ProviderAdapter = {
       run: vi.fn(async () => ({
         assistantText: "vercel",
-        assistantMessage: null,
         stopReason: "end_turn" as const,
         usage: { inputTokens: 2, outputTokens: 2 },
         error: null,

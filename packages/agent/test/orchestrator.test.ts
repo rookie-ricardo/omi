@@ -401,7 +401,7 @@ describe("orchestrator", () => {
     );
   });
 
-  it("lists extensions and built-in models through the orchestrator API", async () => {
+  it("lists built-in models through the orchestrator API", async () => {
     const database = createMemoryDatabase();
     database.upsertProviderConfig({
       name: "openai",
@@ -424,17 +424,6 @@ describe("orchestrator", () => {
       buildSystemPrompt: () => "",
       getPrompts: () => ({ items: [], diagnostics: [] }),
       getThemes: () => ({ items: [], diagnostics: [] }),
-      getExtensions: () => ({
-        items: [
-          {
-            name: "workspace-extension",
-            setup: vi.fn(),
-            beforeRun: vi.fn(),
-            onEvent: vi.fn(),
-          },
-        ],
-        diagnostics: ["missing manifest"],
-      }),
     } satisfies ResourceLoader;
 
     const orchestrator = new AppOrchestrator(
@@ -443,20 +432,6 @@ describe("orchestrator", () => {
       () => {},
       resourceLoader,
     );
-
-    await expect(orchestrator.listExtensions()).resolves.toMatchObject({
-      workspaceRoot: process.cwd(),
-      diagnostics: ["missing manifest"],
-      extensions: [
-        expect.objectContaining({
-          name: "workspace-extension",
-          hasSetup: true,
-          hasBeforeRun: true,
-          hasOnEvent: true,
-        }),
-      ],
-    });
-    expect(reload).toHaveBeenCalledOnce();
 
     expect(orchestrator.listModels()).toMatchObject({
       providerConfigs: [

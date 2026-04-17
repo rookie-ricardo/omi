@@ -11,7 +11,6 @@ import type {
 import type { ModelUsage } from "../types";
 import {
   buildModelMessages,
-  createAssistantMessage,
   linkAbortSignal,
   mapVercelFinishReasonToModel,
 } from "./runtime-utils";
@@ -199,16 +198,8 @@ export class VercelAiSdkProvider implements ProviderAdapter {
       this.abortControllers.delete(input.runId);
     }
 
-    const assistantMessage = createAssistantMessage({
-      providerConfig: input.providerConfig,
-      assistantText,
-      usage,
-      stopReason,
-    });
-
     return {
       assistantText,
-      assistantMessage,
       stopReason,
       usage,
       error,

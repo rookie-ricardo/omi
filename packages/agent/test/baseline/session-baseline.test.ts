@@ -74,7 +74,6 @@ function makeStaticResources(): ResourceLoader {
     buildSystemPrompt: () => "",
     getPrompts: () => ({ items: [], diagnostics: [] }),
     getThemes: () => ({ items: [], diagnostics: [] }),
-    getExtensions: () => ({ items: [], diagnostics: [] }),
   };
 }
 
@@ -82,7 +81,7 @@ function makeProvider(calls: ProviderRunInput[]) {
   return {
     async run(input: ProviderRunInput): Promise<ProviderRunResult> {
       calls.push(input);
-      return { assistantText: `done-${calls.length}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+      return { assistantText: `done-${calls.length}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
     },
     cancel() {},
     approveTool() {},
@@ -315,7 +314,7 @@ describe("Session baseline", () => {
         calls.push(input);
         callCount++;
         if (callCount === 1) await gate;
-        return { assistantText: `done-${callCount}`, assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: `done-${callCount}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };

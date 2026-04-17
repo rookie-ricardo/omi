@@ -70,19 +70,6 @@ export interface PendingToolCalls {
   pendingToolCalls: ToolCall[];
 }
 
-export interface ExtensionCapability {
-  name: string;
-  hasSetup: boolean;
-  hasBeforeRun: boolean;
-  hasOnEvent: boolean;
-}
-
-export interface ExtensionCatalog {
-  workspaceRoot: string;
-  diagnostics: string[];
-  extensions: ExtensionCapability[];
-}
-
 export interface ModelCatalog {
   providerConfigs: ProviderConfig[];
   builtInProviders: Array<{
@@ -242,22 +229,6 @@ export class AppOrchestrator {
       pendingToolCalls: this.listToolCallsBySession(sessionId).filter(
         (toolCall) => toolCall.approvalState === "pending",
       ),
-    };
-  }
-
-  async listExtensions(): Promise<ExtensionCatalog> {
-    await this.resources.reload();
-    const extensionCatalog = this.resources.getExtensions();
-
-    return {
-      workspaceRoot: this.workspaceRoot,
-      diagnostics: [...extensionCatalog.diagnostics],
-      extensions: extensionCatalog.items.map((extension) => ({
-        name: extension.name,
-        hasSetup: typeof extension.setup === "function",
-        hasBeforeRun: typeof extension.beforeRun === "function",
-        hasOnEvent: typeof extension.onEvent === "function",
-      })),
     };
   }
 

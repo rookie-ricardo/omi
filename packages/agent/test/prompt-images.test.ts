@@ -155,7 +155,6 @@ function createTestResources(): ResourceLoader {
 		buildSystemPrompt: () => "",
 		getPrompts: () => ({ items: [], diagnostics: [] }),
 		getThemes: () => ({ items: [], diagnostics: [] }),
-		getExtensions: () => ({ items: [], diagnostics: [] }),
 	};
 }
 
@@ -177,7 +176,7 @@ describe("AgentSession.prompt() images 参数", () => {
 	it("不带 images 参数调用 prompt() 应该正常工作", async () => {
 		const provider = {
 			async run(): Promise<any> {
-				return { assistantText: "response", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+				return { assistantText: "response", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
 			},
 			cancel() {},
 			approveTool() {},
@@ -207,7 +206,7 @@ describe("AgentSession.prompt() images 参数", () => {
 
 		const provider = {
 			async run(): Promise<any> {
-				return { assistantText: "response", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+				return { assistantText: "response", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
 			},
 			cancel() {},
 			approveTool() {},
@@ -235,7 +234,7 @@ describe("AgentSession.prompt() images 参数", () => {
 	it("images 为空数组调用 prompt() 应该正常工作", async () => {
 		const provider = {
 			async run(): Promise<any> {
-				return { assistantText: "response", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+				return { assistantText: "response", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
 			},
 			cancel() {},
 			approveTool() {},
@@ -264,7 +263,7 @@ describe("AgentSession.prompt() images 参数", () => {
 
 		const provider = {
 			async run(): Promise<any> {
-				return { assistantText: "response", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+				return { assistantText: "response", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
 			},
 			cancel() {},
 			approveTool() {},
@@ -296,7 +295,7 @@ describe("AgentSession.prompt() images 参数", () => {
 
 		const provider = {
 			async run(): Promise<any> {
-				return { assistantText: "response", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+				return { assistantText: "response", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
 			},
 			cancel() {},
 			approveTool() {},
@@ -334,7 +333,7 @@ describe("AgentSession.prompt() images 参数", () => {
 
 		const provider = {
 			async run(): Promise<any> {
-				return { assistantText: "response", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+				return { assistantText: "response", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
 			},
 			cancel() {},
 			approveTool() {},

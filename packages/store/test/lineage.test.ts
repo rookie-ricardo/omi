@@ -56,7 +56,6 @@ describe("session history lineage", () => {
     const featureBranch = store.createBranch({
       id: "branch_feature",
       sessionId: session.id,
-      headEntryId: mainRootEntry?.id ?? null,
       title: "feature",
     });
 

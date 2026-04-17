@@ -228,7 +228,6 @@ export const gitDiffPreviewSchema = z.object({
 export const sessionBranchSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
-  headEntryId: z.string().nullable().default(null),
   title: z.string().default("main"),
   createdAt: z.string(),
   updatedAt: z.string(),

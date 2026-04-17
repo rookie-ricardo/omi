@@ -83,7 +83,6 @@ function makeStaticResources(): ResourceLoader {
     buildSystemPrompt: () => "Test system prompt",
     getPrompts: () => ({ items: [], diagnostics: [] }),
     getThemes: () => ({ items: [], diagnostics: [] }),
-    getExtensions: () => ({ items: [], diagnostics: [] }),
   };
 }
 
@@ -173,7 +172,7 @@ function createTestDatabase(session: Session, run: Run): AppStore {
     createBranch: (input) => ({ ...input, createdAt: nowIso(), updatedAt: nowIso() }),
     getBranch: () => null,
     listBranches: () => [],
-    updateBranch: (id, partial) => ({ id, sessionId: "", headEntryId: null, title: "main", createdAt: nowIso(), updatedAt: nowIso(), ...partial }),
+    updateBranch: (id, partial) => ({ id, sessionId: "", title: "main", createdAt: nowIso(), updatedAt: nowIso(), ...partial }),
     createCheckpoint(input) {
       const checkpoint = { ...input, createdAt: nowIso() };
       const checkpoints = checkpointsByRun.get(input.runId) ?? [];
@@ -408,7 +407,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           providerCalls.push(input);
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -467,7 +466,6 @@ describe("QueryEngine", () => {
           providerCalls.push(input);
           return {
             assistantText: "done",
-            assistantMessage: null,
             stopReason: "end_turn" as const,
             usage: { inputTokens: 0, outputTokens: 0 },
             error: null,
@@ -517,7 +515,6 @@ describe("QueryEngine", () => {
         async run(): Promise<ProviderRunResult> {
           return {
             assistantText: "done",
-            assistantMessage: null,
             stopReason: "end_turn" as const,
             usage: { inputTokens: 0, outputTokens: 0 },
             error: null,
@@ -569,7 +566,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           // preflightToolCheck removed from ProviderRunInput - test needs rewrite
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -631,7 +628,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           // onToolRequested/onToolDecision removed from ProviderRunInput - test needs rewrite
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -686,7 +683,7 @@ describe("QueryEngine", () => {
       const provider = {
         async run(input: ProviderRunInput): Promise<ProviderRunResult> {
           // onToolRequested/onToolDecision removed from ProviderRunInput - test needs rewrite
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -747,7 +744,6 @@ describe("QueryEngine", () => {
       const provider = {
         run: vi.fn(async () => ({
           assistantText: "...",
-          assistantMessage: null,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0 },
           error: null,
@@ -805,7 +801,7 @@ describe("QueryEngine", () => {
           if (providerCalls.length === 1) {
             throw new Error("max_output tokens exceeded");
           }
-          return { assistantText: "continued", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "continued", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -881,7 +877,6 @@ describe("QueryEngine", () => {
           });
           return {
             assistantText: "done",
-            assistantMessage: null,
             stopReason: "end_turn" as const,
             usage: { inputTokens: 0, outputTokens: 0 },
             error: null,
@@ -970,7 +965,7 @@ describe("QueryEngine", () => {
 
       const provider = {
         async run(): Promise<ProviderRunResult> {
-          return { assistantText: "restored", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "restored", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -1053,7 +1048,7 @@ describe("QueryEngine", () => {
             decision: "allow",
             reason: null,
           });
-          return { assistantText: "done", assistantMessage: null, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+          return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
         },
         cancel() {},
       };
@@ -1140,7 +1135,6 @@ describe("QueryEngine", () => {
         listBranches: () => [{
           id: branchId,
           sessionId: session.id,
-          headEntryId: parentEntryId,
           title: "main",
           createdAt: nowIso(),
           updatedAt: nowIso(),
@@ -1277,7 +1271,6 @@ describe("QueryEngine", () => {
         listBranches: () => [{
           id: branchId,
           sessionId: session.id,
-          headEntryId: parentEntryId,
           title: "main",
           createdAt: nowIso(),
           updatedAt: nowIso(),

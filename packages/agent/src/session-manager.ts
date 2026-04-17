@@ -519,23 +519,6 @@ export class SessionManager {
     return buildTree(entries, this.labels, sessionId);
   }
 
-  branch(sessionId: string, branchFromId: string, store?: ReadonlySessionStore): void {
-    const readonlyStore = store ?? this.getReadonlyStore();
-    if (!readonlyStore) {
-      throw new Error(`Cannot branch: session store not available for session ${sessionId}`);
-    }
-
-    const entry = readonlyStore.getSessionHistoryEntry(branchFromId);
-    if (!entry) {
-      throw new Error(`Entry ${branchFromId} not found`);
-    }
-    this.leafIds.set(sessionId, branchFromId);
-  }
-
-  // ============================================================================
-  // Branch CRUD (DB-backed)
-  // ============================================================================
-
   getActiveBranchId(sessionId: string): string | null {
     return this.activeBranchIds.get(sessionId) ?? null;
   }
@@ -548,7 +531,6 @@ export class SessionManager {
     const branch = this.database.createBranch({
       id: createId("branch"),
       sessionId,
-      headEntryId: fromEntryId ?? null,
       title,
     });
 
@@ -579,9 +561,8 @@ export class SessionManager {
     this.runtimes.get(sessionId)?.setActiveBranchId(branchId);
     this.database.setActiveBranchId(sessionId, branchId);
 
-    if (branch.headEntryId) {
-      this.leafIds.set(sessionId, branch.headEntryId);
-    }
+    const branchLeafId = this.database.getBranchHistory(sessionId, branchId).at(-1)?.id ?? null;
+    this.leafIds.set(sessionId, branchLeafId);
 
     return branch;
   }
@@ -598,17 +579,6 @@ export class SessionManager {
       return null;
     }
     return this.database.getBranch(branchId);
-  }
-
-  updateBranchHead(sessionId: string, branchId: string, headEntryId: string): void {
-    if (!this.database) {
-      return;
-    }
-    this.database.updateBranch(branchId, { headEntryId });
-    const activeBranchId = this.activeBranchIds.get(sessionId);
-    if (activeBranchId === branchId) {
-      this.leafIds.set(sessionId, headEntryId);
-    }
   }
 
   fork(sessionId: string, parentSessionId?: string): string {

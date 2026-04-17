@@ -142,7 +142,6 @@ export const sessionBranchesTable = sqliteTable(
   {
     id: text("id").primaryKey(),
     sessionId: text("session_id").notNull(),
-    headEntryId: text("head_entry_id"),
     title: text("title").notNull().default("main"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),

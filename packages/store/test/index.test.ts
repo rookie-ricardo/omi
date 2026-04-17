@@ -147,9 +147,9 @@ describe("database migrations", () => {
 
     sqlite
       .prepare(
-        "INSERT INTO session_branches (id, session_id, head_entry_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_branches (id, session_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
       )
-      .run("branch_orphan", "session_missing", null, "main", "2026-04-02T00:00:00.000Z", "2026-04-02T00:00:00.000Z");
+      .run("branch_orphan", "session_missing", "main", "2026-04-02T00:00:00.000Z", "2026-04-02T00:00:00.000Z");
     sqlite
       .prepare(
         "INSERT INTO run_checkpoints (id, run_id, session_id, phase, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",

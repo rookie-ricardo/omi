@@ -11,7 +11,6 @@ import type { AppStore } from "@omi/store";
 import type { ImageContent } from "@mariozechner/pi-ai";
 
 import { createId, nowIso } from "@omi/core";
-import { ExtensionRunner } from "@omi/extensions";
 import {
   buildCompactionPlan,
   generateCompactionSummary,
@@ -200,16 +199,10 @@ export class AgentSession {
     // polluting the original branch's history.
     let branchId: string | null = null;
     if (input.historyEntryId) {
-      const targetEntry = historyEntries.find((e) => e.id === input.historyEntryId);
-      const parentBranch = targetEntry?.branchId
-        ? this.options.database.getBranch(targetEntry.branchId)
-        : null;
-
       branchId = createId("branch");
       this.options.database.createBranch({
         id: branchId,
         sessionId: session.id,
-        headEntryId: input.historyEntryId,
         title: `continue-from-${input.historyEntryId.slice(0, 8)}`,
       });
 
