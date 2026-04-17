@@ -184,9 +184,6 @@ importers:
       '@omi/core':
         specifier: workspace:*
         version: link:../core
-      '@omi/extensions':
-        specifier: workspace:*
-        version: link:../extensions
       '@omi/memory':
         specifier: workspace:*
         version: link:../memory
@@ -230,19 +227,6 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
-    devDependencies:
-      tsup:
-        specifier: ^8.4.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
-      vitest:
-        specifier: ^3.1.1
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.15)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)(yaml@2.8.2)
-
-  packages/extensions:
-    dependencies:
-      '@omi/core':
-        specifier: workspace:*
-        version: link:../core
     devDependencies:
       tsup:
         specifier: ^8.4.0

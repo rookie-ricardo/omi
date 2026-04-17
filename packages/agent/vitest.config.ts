@@ -6,7 +6,6 @@ export default defineConfig({
     alias: {
       "@omi/agent/logger": resolve(__dirname, "./src/logger.ts"),
       "@omi/core": resolve(__dirname, "../core/src/index.ts"),
-      "@omi/extensions": resolve(__dirname, "../extensions/src/index.ts"),
       "@omi/memory": resolve(__dirname, "../memory/src/index.ts"),
       "@omi/prompt": resolve(__dirname, "../prompt/src/index.ts"),
       "@omi/provider": resolve(__dirname, "../provider/src/index.ts"),

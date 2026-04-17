@@ -20,7 +20,6 @@
       "@omi/tools": ["packages/tools/src/index.ts"],
       "@omi/store": ["packages/store/src/index.ts"],
       "@omi/memory": ["packages/memory/src/index.ts"],
-      "@omi/extensions": ["packages/extensions/src/index.ts"],
       "@omi/settings": ["packages/settings/src/index.ts"],
       "@omi/prompt": ["packages/prompt/src/index.ts"],
       "@omi/sdk": ["packages/sdk/src/index.ts"]

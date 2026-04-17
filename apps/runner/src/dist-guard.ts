@@ -11,7 +11,6 @@ interface StalePackageIssue {
 const RUNTIME_PACKAGE_NAMES = new Set([
   "@omi/agent",
   "@omi/core",
-  "@omi/extensions",
   "@omi/memory",
   "@omi/prompt",
   "@omi/protocol",
