@@ -21,8 +21,14 @@ import type {
 
 import ThreadLayout from "../ThreadLayout";
 import MarkdownRenderer from "../MarkdownRenderer";
-import ToolActivityGroup from "../chat/ToolActivityGroup";
-import { splitToolCallsByActivity } from "../chat/tool-utils";
+import {
+  ApprovalCard,
+  ProgressTracker,
+  Receipt,
+  ToolCallPanel,
+  buildRunEventDisplayModel,
+  formatDuration as formatToolUiDuration,
+} from "../tool-ui";
 import { deriveThreadTitle, useWorkspaceStore } from "../../store/workspace-store";
 
 const HISTORY_VISIBLE_LIMIT = 3;
@@ -143,7 +149,12 @@ export default function Chat() {
     .filter((message) => message.role === "assistant")
     .map((message) => messageRunIdMap.get(message.id) ?? null)
     .filter((runId): runId is string => Boolean(runId));
-  const latestVisibleRunId = assistantRunIds.at(-1) ?? activeRunId ?? null;
+  const orderedRunIds = useMemo(
+    () => getOrderedRunIds(toolCallsByRun),
+    [toolCallsByRun],
+  );
+  const latestToolRunId = orderedRunIds.at(-1) ?? null;
+  const latestVisibleRunId = assistantRunIds.at(-1) ?? latestToolRunId ?? activeRunId ?? null;
 
   const timelineNodes: ReactNode[] = [];
   const insertedRunIds = new Set<string>();
@@ -161,8 +172,10 @@ export default function Chat() {
             toolCalls={runToolCalls}
             activeToolIds={activeToolIds}
             expanded={expanded}
-            isRunning={false}
+            activeRunId={activeRunId}
             assistantCreatedAt={message.createdAt}
+            isLatestRun={runId === latestToolRunId}
+            runErrorMessage={runId === latestToolRunId ? errorMessage : null}
             onToggle={() =>
               setExpandedRuns((state) => ({
                 ...state,
@@ -184,28 +197,36 @@ export default function Chat() {
     );
   }
 
-  if (activeRunId && !insertedRunIds.has(activeRunId)) {
-    const activeRunTools = toolCallsByRun.get(activeRunId) ?? [];
-    if (activeRunTools.length > 0) {
-      const expanded = expandedRuns[activeRunId] ?? true;
-      timelineNodes.push(
-        <RunActivitySection
-          key={`run-${activeRunId}`}
-          runId={activeRunId}
-          toolCalls={activeRunTools}
-          activeToolIds={activeToolIds}
-          expanded={expanded}
-          isRunning
-          assistantCreatedAt={null}
-          onToggle={() =>
+  for (const runId of orderedRunIds) {
+    if (insertedRunIds.has(runId)) {
+      continue;
+    }
+    const runToolCalls = toolCallsByRun.get(runId) ?? [];
+    if (runToolCalls.length === 0) {
+      continue;
+    }
+    const expandedByDefault = runId === latestVisibleRunId || runId === activeRunId;
+    const expanded = expandedRuns[runId] ?? expandedByDefault;
+    timelineNodes.push(
+      <RunActivitySection
+        key={`run-${runId}`}
+        runId={runId}
+        toolCalls={runToolCalls}
+        activeToolIds={activeToolIds}
+        expanded={expanded}
+        activeRunId={activeRunId}
+        assistantCreatedAt={null}
+        isLatestRun={runId === latestToolRunId}
+        runErrorMessage={runId === latestToolRunId ? errorMessage : null}
+        onToggle={() =>
             setExpandedRuns((state) => ({
               ...state,
-              [activeRunId]: !(state[activeRunId] ?? true),
+              [runId]: !(state[runId] ?? expandedByDefault),
             }))
-          }
-        />,
-      );
-    }
+        }
+      />,
+    );
+    insertedRunIds.add(runId);
   }
 
   const title = selectedSession
@@ -312,25 +333,39 @@ function RunActivitySection({
   toolCalls,
   activeToolIds,
   expanded,
-  isRunning,
+  activeRunId,
   assistantCreatedAt,
+  isLatestRun,
+  runErrorMessage,
   onToggle,
 }: {
   runId: string;
   toolCalls: ToolCall[];
   activeToolIds: Set<string>;
   expanded: boolean;
-  isRunning: boolean;
+  activeRunId: string | null;
   assistantCreatedAt: string | null;
+  isLatestRun: boolean;
+  runErrorMessage: string | null;
   onToggle: () => void;
 }) {
-  const groups = splitToolCallsByActivity(toolCalls).filter((group) => group.kind !== "other");
-  if (groups.length === 0) {
+  if (toolCalls.length === 0) {
     return null;
   }
 
-  const durationText = formatRunDuration(toolCalls, assistantCreatedAt, isRunning);
-  const summaryText = `${isRunning ? "处理中" : "已处理"}${durationText ? ` ${durationText}` : ""}`;
+  const runEvent = buildRunEventDisplayModel({
+    runId,
+    toolCalls,
+    activeToolIds,
+    activeRunId,
+    assistantCreatedAt,
+    runErrorMessage,
+    isLatestRun,
+  });
+  const durationText =
+    typeof runEvent.durationMs === "number" ? formatToolUiDuration(runEvent.durationMs) : null;
+  const summaryText = `${runEvent.title}${durationText ? ` · ${durationText}` : ""}`;
+  const showRunReceipt = runEvent.status === "completed" || runEvent.status === "failed" || runEvent.status === "canceled";
 
   return (
     <div className="space-y-2">
@@ -349,11 +384,33 @@ function RunActivitySection({
       <div className="h-px bg-gray-200 dark:bg-white/10" />
       {expanded ? (
         <div className="space-y-3">
-          {groups.map((group, index) => (
-            <ToolActivityGroup
-              key={`${runId}-${group.kind}-${index}`}
-              toolCalls={group.toolCalls}
-              activeToolIds={activeToolIds}
+          {showRunReceipt ? (
+            <Receipt
+              id={`run-receipt-${runId}`}
+              outcome={
+                runEvent.status === "completed"
+                  ? "success"
+                  : runEvent.status === "failed"
+                    ? "failed"
+                    : "cancelled"
+              }
+              title={runEvent.title}
+              description={runEvent.summary}
+            />
+          ) : null}
+
+          <ProgressTracker
+            id={`run-progress-${runId}`}
+            title={runEvent.title}
+            summary={runEvent.summary}
+            steps={runEvent.steps}
+            elapsedMs={runEvent.durationMs}
+          />
+
+          {runEvent.toolCalls.map((toolCall) => (
+            <ToolCallPanel
+              key={`${runId}-${toolCall.id}`}
+              viewModel={toolCall}
             />
           ))}
         </div>
@@ -506,43 +563,31 @@ function ToolApprovalSection({
     <div className="rounded-xl border border-amber-200/80 dark:border-amber-400/20 bg-amber-50/70 dark:bg-amber-500/10 p-4 space-y-3">
       <div className="text-sm font-medium text-amber-700 dark:text-amber-300">待审批工具调用</div>
       {calls.map((call) => (
-        <div
+        <ApprovalCard
           key={call.id}
-          className="rounded-lg bg-white dark:bg-[#252525] border border-amber-200/80 dark:border-amber-400/20 p-3"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                {call.toolName}
-              </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                {new Date(call.createdAt).toLocaleString("zh-CN")}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="px-3 py-1.5 text-sm rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors"
-                onClick={() => onApprove(call.id)}
-              >
-                批准
-              </button>
-              <button
-                type="button"
-                className="px-3 py-1.5 text-sm rounded-md bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-100 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
-                onClick={() => onReject(call.id)}
-              >
-                拒绝
-              </button>
-            </div>
-          </div>
-          <pre className="mt-3 overflow-x-auto rounded-md bg-gray-50 dark:bg-[#1e1e1e] p-2 text-xs text-gray-700 dark:text-gray-300">
-            {JSON.stringify(call.input, null, 2)}
-          </pre>
-        </div>
+          id={`approval-${call.id}`}
+          title={call.toolName}
+          description={truncateInputPreview(call.input)}
+          metadata={[
+            { key: "时间", value: new Date(call.createdAt).toLocaleString("zh-CN") },
+            { key: "Run", value: call.runId },
+          ]}
+          confirmLabel="批准"
+          cancelLabel="拒绝"
+          onConfirm={() => onApprove(call.id)}
+          onCancel={() => onReject(call.id)}
+        />
       ))}
     </div>
   );
+}
+
+function truncateInputPreview(input: Record<string, unknown>, maxLength = 420): string {
+  const text = JSON.stringify(input, null, 2);
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength)}\n...`;
 }
 
 function GitPanel({
@@ -729,6 +774,19 @@ function groupToolCallsByRun(toolCalls: ToolCall[]): Map<string, ToolCall[]> {
   return map;
 }
 
+function getOrderedRunIds(groupedToolCalls: Map<string, ToolCall[]>): string[] {
+  return Array.from(groupedToolCalls.entries())
+    .sort((left, right) => {
+      const leftFirst = left[1][0];
+      const rightFirst = right[1][0];
+      if (!leftFirst || !rightFirst) {
+        return 0;
+      }
+      return compareCreatedAt(leftFirst, rightFirst);
+    })
+    .map(([runId]) => runId);
+}
+
 function compareCreatedAt<T extends { createdAt: string; id: string }>(left: T, right: T): number {
   const timeDiff =
     new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
@@ -736,45 +794,6 @@ function compareCreatedAt<T extends { createdAt: string; id: string }>(left: T, 
     return timeDiff;
   }
   return left.id.localeCompare(right.id);
-}
-
-function formatRunDuration(
-  toolCalls: ToolCall[],
-  assistantCreatedAt: string | null,
-  running: boolean,
-): string | null {
-  if (toolCalls.length === 0) {
-    return null;
-  }
-
-  const firstToolTime = new Date(toolCalls[0].createdAt).getTime();
-  const lastToolTime = new Date(toolCalls[toolCalls.length - 1].createdAt).getTime();
-  const endTime = assistantCreatedAt
-    ? new Date(assistantCreatedAt).getTime()
-    : running
-      ? Date.now()
-      : lastToolTime;
-
-  if (!Number.isFinite(firstToolTime) || !Number.isFinite(endTime) || endTime <= firstToolTime) {
-    return null;
-  }
-
-  return formatDuration(endTime - firstToolTime);
-}
-
-function formatDuration(durationMs: number): string {
-  const seconds = Math.max(1, Math.round(durationMs / 1000));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainSeconds = seconds % 60;
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${remainSeconds}s`;
-  }
-  return `${remainSeconds}s`;
 }
 
 function formatClock(iso: string): string {
