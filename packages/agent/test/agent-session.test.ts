@@ -545,7 +545,6 @@ describe("agent session", () => {
       resources: makeStaticResources(),
       runtime,
       provider,
-      compactionSummarizer: makeTestCompactionSummarizer(),
     });
 
     const firstRun = agentSession.startRun({
@@ -638,7 +637,6 @@ describe("agent session", () => {
       resources: makeStaticResources(),
       runtime,
       provider,
-      compactionSummarizer: makeTestCompactionSummarizer(),
     });
 
     const firstRun = agentSession.startRun({
@@ -726,7 +724,6 @@ describe("agent session", () => {
       resources: makeStaticResources(),
       runtime,
       provider,
-      compactionSummarizer: makeTestCompactionSummarizer(),
     });
 
     const firstRun = agentSession.startRun({
@@ -796,7 +793,6 @@ describe("agent session", () => {
       resources: makeStaticResources(),
       runtime,
       provider,
-      compactionSummarizer: makeTestCompactionSummarizer(),
     });
 
     const run = agentSession.startRun({

@@ -3,7 +3,6 @@ import type {
   ResolvedSkill,
   Run,
   Session,
-  SkillMatch,
   Task,
   ToolCall,
 } from "@omi/core";
@@ -12,27 +11,25 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 
 import { createId, nowIso } from "@omi/core";
 import {
-  buildCompactionPlan,
-  generateCompactionSummary,
-  type CompactionSummaryGenerator,
-  type CompactionMode,
-} from "@omi/memory";
-import { createModelFromConfig } from "@omi/provider";
-import {
   buildSessionRuntimeMessages,
   buildSessionRuntimeMessageEnvelopes,
-  renderRuntimeMessagesForPrompt,
+  convertRuntimeMessagesToLlm,
   type RuntimeMessage,
   type SessionCompactionSnapshot,
   type SessionRuntimeMessageEnvelope,
-  sessionCompactionSnapshotSchema,
+  type CompactionSummaryDocument,
 } from "@omi/memory";
 import {
   createProviderAdapter,
   type ProviderAdapter,
   type ProviderRunResult,
+  type ProviderToolLifecycleControl,
+  type ProviderToolLifecycleEvent,
 } from "@omi/provider";
 import {
+  createAllTools,
+  listBuiltInToolNames,
+  SAFE_TOOL_NAMES,
   runWithToolRuntimeContext,
   type ToolRuntimeContext,
 } from "@omi/tools";
@@ -42,23 +39,14 @@ import type { SessionRuntime } from "./session-manager";
 import type { SettingsManager } from "@omi/settings";
 import {
   type PermissionEvaluator,
+  type PermissionContext,
   MemoryDenialTracker,
   createPermissionEvaluator,
 } from "./permissions";
 
-// Import QueryEngine for state machine-based execution
-import {
-  QueryEngine,
-  type QueryEngineEvent,
-  type QueryEngineRunInput,
-  type QueryEngineResult,
-  nextSessionStatus as queryNextSessionStatus,
-  nextTaskStatus as queryNextTaskStatus,
-} from "./query-engine";
-import {
-  createResumeLineage,
-  createRetryLineage,
-} from "./recovery";
+// ============================================================================
+// Types
+// ============================================================================
 
 export interface RunnerEventEnvelope {
   type: string;
@@ -75,12 +63,9 @@ export interface AgentSessionOptions {
   resources: ResourceLoader;
   runtime: SessionRuntime;
   provider?: ProviderAdapter;
-  compactionSummarizer?: CompactionSummaryGenerator;
   settingsManager?: SettingsManager;
-  /** Permission evaluator for rule-based access control. */
   evaluator?: PermissionEvaluator;
   permissionMode?: SessionPermissionMode;
-  /** Optional per-run tool runtime context (MCP/SubAgent/Task). */
   toolRuntimeContext?: ToolRuntimeContext;
 }
 
@@ -102,22 +87,22 @@ type FailedRunInput = Pick<
   "session" | "task" | "run" | "prompt" | "historyEntryId"
 >;
 
-function normalizeRunnerPayload(event: QueryEngineEvent): Record<string, unknown> {
-  if ("payload" in event && typeof event.payload === "object" && event.payload !== null) {
-    return event.payload as Record<string, unknown>;
-  }
-  const { type: _type, ...rest } = event as unknown as Record<string, unknown>;
-  return rest;
-}
+// ============================================================================
+// AgentSession
+// ============================================================================
 
 export class AgentSession {
   private readonly provider: ProviderAdapter;
   private processingQueue = false;
   private readonly evaluatorOverride: PermissionEvaluator | null;
   private readonly denialTracker = new MemoryDenialTracker();
-  private activeQueryEngine: QueryEngine | null = null;
   private permissionMode: SessionPermissionMode;
   private workspaceRoot: string;
+
+  /** Active run's abort controller for cancellation. */
+  private activeAbortController: AbortController | null = null;
+  /** Pending tool approval resolvers. */
+  private readonly pendingApprovals = new Map<string, (decision: "approved" | "rejected") => void>();
 
   constructor(private readonly options: AgentSessionOptions) {
     this.provider = options.provider ?? createProviderAdapter();
@@ -126,6 +111,10 @@ export class AgentSession {
     this.workspaceRoot = options.workspaceRoot;
   }
 
+  // ==========================================================================
+  // Public API — Session Configuration
+  // ==========================================================================
+
   setPermissionMode(mode: SessionPermissionMode): void {
     this.permissionMode = mode;
   }
@@ -133,6 +122,10 @@ export class AgentSession {
   setWorkspaceRoot(workspaceRoot: string): void {
     this.workspaceRoot = workspaceRoot;
   }
+
+  // ==========================================================================
+  // Public API — Run Lifecycle
+  // ==========================================================================
 
   startRun(input: {
     prompt: string;
@@ -155,7 +148,7 @@ export class AgentSession {
       terminalReason: null,
     });
     const contextFiles = Array.isArray(input.contextFiles)
-      ? [...new Set(input.contextFiles.map((entry) => entry.trim()).filter((entry) => entry.length > 0))]
+      ? [...new Set(input.contextFiles.map((e) => e.trim()).filter((e) => e.length > 0))]
       : [];
     this.options.runtime.enqueueRun({
       runId: run.id,
@@ -168,11 +161,14 @@ export class AgentSession {
     });
 
     this.processQueue().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.options.emit({
-            type: "run.failed",
-            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
-        });
+      this.options.emit({
+        type: "run.failed",
+        payload: {
+          runId: "",
+          sessionId: this.options.sessionId,
+          error: `Queue processing failed: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
     });
 
     return run;
@@ -188,15 +184,10 @@ export class AgentSession {
   }): Run {
     const session = this.requireSession();
     const historyEntries = this.options.database.listSessionHistoryEntries?.(session.id) ?? [];
-    if (input.historyEntryId && !historyEntries.some((entry) => entry.id === input.historyEntryId)) {
+    if (input.historyEntryId && !historyEntries.some((e) => e.id === input.historyEntryId)) {
       throw new Error(`History entry ${input.historyEntryId} not found for session ${session.id}`);
     }
-    if (input.checkpointSummary !== null && input.checkpointSummary !== undefined && !this.options.database.addSessionHistoryEntry) {
-      throw new Error(`Session history storage is not available for session ${session.id}`);
-    }
 
-    // When continuing from a history entry, create a new branch to avoid
-    // polluting the original branch's history.
     let branchId: string | null = null;
     if (input.historyEntryId) {
       branchId = createId("branch");
@@ -205,9 +196,6 @@ export class AgentSession {
         sessionId: session.id,
         title: `continue-from-${input.historyEntryId.slice(0, 8)}`,
       });
-
-      // Update the active branch in runtime snapshot so future messages
-      // are associated with the new branch.
       this.options.runtime.setActiveBranchId(branchId);
       this.options.database.setActiveBranchId(session.id, branchId);
     }
@@ -238,11 +226,14 @@ export class AgentSession {
     });
 
     this.processQueue().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.options.emit({
-            type: "run.failed",
-            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
-        });
+      this.options.emit({
+        type: "run.failed",
+        payload: {
+          runId: "",
+          sessionId: this.options.sessionId,
+          error: `Queue processing failed: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
     });
 
     return run;
@@ -263,10 +254,7 @@ export class AgentSession {
 
     const task = originalRun.taskId ? this.options.database.getTask(originalRun.taskId) : null;
     const providerConfig = this.resolveProviderConfig();
-    const retryLineage = createRetryLineage(
-      originalRun,
-      this.options.database.getLatestCheckpoint(originalRun.id)?.id ?? null,
-    );
+    const originRunId = originalRun.originRunId ?? originalRun.id;
     const nextRun = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
@@ -275,8 +263,8 @@ export class AgentSession {
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "retry",
-      originRunId: retryLineage.originRunId,
-      resumeFromCheckpoint: retryLineage.resumeFromCheckpoint,
+      originRunId,
+      resumeFromCheckpoint: null,
       terminalReason: null,
     });
 
@@ -290,11 +278,14 @@ export class AgentSession {
     });
 
     this.processQueue().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.options.emit({
-            type: "run.failed",
-            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
-        });
+      this.options.emit({
+        type: "run.failed",
+        payload: {
+          runId: "",
+          sessionId: this.options.sessionId,
+          error: `Queue processing failed: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
     });
     return nextRun;
   }
@@ -314,10 +305,7 @@ export class AgentSession {
 
     const task = originalRun.taskId ? this.options.database.getTask(originalRun.taskId) : null;
     const providerConfig = this.resolveProviderConfig();
-    const resumeLineage = createResumeLineage(
-      originalRun,
-      this.options.database.getLatestCheckpoint(originalRun.id)?.id ?? null,
-    );
+    const originRunId = originalRun.originRunId ?? originalRun.id;
     const resumedRun = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
@@ -326,8 +314,8 @@ export class AgentSession {
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "resume",
-      originRunId: resumeLineage.originRunId,
-      resumeFromCheckpoint: resumeLineage.resumeFromCheckpoint,
+      originRunId,
+      resumeFromCheckpoint: null,
       terminalReason: null,
     });
 
@@ -341,11 +329,14 @@ export class AgentSession {
     });
 
     this.processQueue().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        this.options.emit({
-            type: "run.failed",
-            payload: { runId: "", sessionId: this.options.sessionId, error: `Queue processing failed: ${message}` },
-        });
+      this.options.emit({
+        type: "run.failed",
+        payload: {
+          runId: "",
+          sessionId: this.options.sessionId,
+          error: `Queue processing failed: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      });
     });
     return resumedRun;
   }
@@ -356,39 +347,27 @@ export class AgentSession {
     summary: SessionCompactionSnapshot["summary"];
     compactedAt: string;
   }> {
+    // SDK handles compaction internally. Manual compaction creates a
+    // lightweight snapshot from the current runtime state.
     const session = this.requireSession();
-    const providerConfig = this.resolveProviderConfig();
-
-    this.options.runtime.requestCompaction("manual");
-
-    try {
-      const compacted = await this.compactHistoricalContext({
-        session,
-        providerConfig,
-        mode: "manual",
-        prompt: null,
-        historyEnvelopes: this.buildHistoricalRuntimeMessageEnvelopes(session.id),
-      });
-
-      if (!compacted) {
-        throw new Error("No history available to compact.");
-      }
-
-      this.options.runtime.completeCompaction({
-        summary: compacted.summary,
-        compactedAt: compacted.compactedAt,
-      });
-
-      return {
-        sessionId: session.id,
-        runtime: this.options.runtime.snapshot(),
-        summary: compacted.summary,
-        compactedAt: compacted.compactedAt,
-      };
-    } catch (error) {
-      this.options.runtime.failCompaction(error instanceof Error ? error.message : String(error));
-      throw error;
-    }
+    const compactedAt = nowIso();
+    const runtime = this.options.runtime.snapshot();
+    const summary: CompactionSummaryDocument = runtime.compaction.lastSummary ?? {
+      version: 1,
+      goal: "Session compaction handled by SDK runtime.",
+      constraints: [],
+      progress: { done: [], inProgress: [], blocked: [] },
+      keyDecisions: [],
+      nextSteps: [],
+      criticalContext: [],
+    };
+    this.options.runtime.completeCompaction({ summary, compactedAt });
+    return {
+      sessionId: session.id,
+      runtime: this.options.runtime.snapshot(),
+      summary,
+      compactedAt,
+    };
   }
 
   cancelRun(runId: string): { runId: string; canceled: true } {
@@ -398,76 +377,222 @@ export class AgentSession {
     }
 
     this.provider.cancel(runId);
-    this.activeQueryEngine?.cancel();
+    this.activeAbortController?.abort();
     this.options.database.updateRun(runId, { status: "canceled", terminalReason: "canceled" });
     this.options.runtime.cancelRun(runId);
-    this.persistPartialAssistantMessageFromEvents({
-      sessionId: run.sessionId,
-      runId,
-    });
+    this.persistPartialAssistantMessageFromEvents({ sessionId: run.sessionId, runId });
+    this.rejectAllPendingApprovals();
 
     this.emitAndPersist(runId, run.sessionId, {
       type: "run.canceled",
-      payload: {
-        runId,
-        sessionId: run.sessionId,
-      },
+      payload: { runId, sessionId: run.sessionId },
     });
 
     return { runId, canceled: true };
   }
 
   approveTool(toolCallId: string): { toolCallId: string; decision: "approved" } {
-    this.activeQueryEngine?.approveTool(toolCallId);
+    const resolver = this.pendingApprovals.get(toolCallId);
+    if (resolver) {
+      resolver("approved");
+      this.pendingApprovals.delete(toolCallId);
+    }
+    // Also update runtime state
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.options.runtime.approveTool(runtime.activeRunId, toolCallId);
+    }
     return { toolCallId, decision: "approved" };
   }
 
   rejectTool(toolCallId: string): { toolCallId: string; decision: "rejected" } {
-    this.activeQueryEngine?.rejectTool(toolCallId);
+    const resolver = this.pendingApprovals.get(toolCallId);
+    if (resolver) {
+      resolver("rejected");
+      this.pendingApprovals.delete(toolCallId);
+    }
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.options.runtime.rejectTool(runtime.activeRunId, toolCallId);
+    }
     return { toolCallId, decision: "rejected" };
   }
 
-  private async processQueue(): Promise<void> {
-    if (this.processingQueue) {
-      return;
-    }
+  // ==========================================================================
+  // Session Control
+  // ==========================================================================
 
+  async abort(): Promise<void> {
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.cancelRun(runtime.activeRunId);
+    }
+    while (this.options.runtime.snapshot().activeRunId) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  dispose(): void {
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.cancelRun(runtime.activeRunId);
+    }
+    this.processingQueue = false;
+  }
+
+  // ==========================================================================
+  // Model Management
+  // ==========================================================================
+
+  setModel(modelId: string): void {
+    const currentConfig = this.options.database.getProviderConfig();
+    if (!currentConfig) {
+      throw new Error("No provider config available");
+    }
+    this.options.database.upsertProviderConfig({
+      id: currentConfig.id,
+      name: currentConfig.name,
+      protocol: currentConfig.protocol,
+      baseUrl: currentConfig.baseUrl,
+      apiKey: currentConfig.apiKey,
+      model: modelId,
+      url: currentConfig.url,
+    });
+    this.options.runtime.setSelectedProviderConfig(currentConfig.id);
+  }
+
+  cycleModel(): { modelId: string; provider: string } | undefined {
+    return undefined;
+  }
+
+  // ==========================================================================
+  // Statistics
+  // ==========================================================================
+
+  getSessionStats(): {
+    sessionId: string;
+    userMessages: number;
+    assistantMessages: number;
+    toolCalls: number;
+    totalMessages: number;
+    runs: number;
+  } {
+    const session = this.requireSession();
+    const messages = this.options.database.listMessages(session.id);
+    const runs = this.options.database.listRuns(session.id);
+    const toolCalls = runs.flatMap((run) => this.options.database.listToolCalls(run.id));
+    return {
+      sessionId: session.id,
+      userMessages: messages.filter((m) => m.role === "user").length,
+      assistantMessages: messages.filter((m) => m.role === "assistant").length,
+      toolCalls: toolCalls.length,
+      totalMessages: messages.length,
+      runs: runs.length,
+    };
+  }
+
+  // ==========================================================================
+  // Bash Control
+  // ==========================================================================
+
+  abortBash(): void {
+    const runtime = this.options.runtime.snapshot();
+    if (runtime.activeRunId) {
+      this.cancelRun(runtime.activeRunId);
+    }
+  }
+
+  // ==========================================================================
+  // Prompting
+  // ==========================================================================
+
+  async prompt(
+    text: string,
+    options?: {
+      taskId?: string | null;
+      historyEntryId?: string | null;
+      images?: ImageContent[];
+    },
+  ): Promise<Run> {
+    const providerConfig = this.options.database.getProviderConfig();
+    if (!providerConfig) {
+      throw new Error("No provider config available for this session");
+    }
+    if (options?.historyEntryId) {
+      return this.continueFromHistoryEntry({
+        prompt: text,
+        providerConfig,
+        taskId: options.taskId,
+        historyEntryId: options.historyEntryId,
+      });
+    }
+    return this.startRun({ prompt: text, providerConfig, taskId: options?.taskId });
+  }
+
+  async sendUserMessage(content: string, options?: { taskId?: string | null }): Promise<Run> {
+    return this.prompt(content, options);
+  }
+
+  async sendCustomMessage(
+    message: { customType: string; content: unknown; display?: string; details?: Record<string, unknown> },
+    options?: { triggerRun?: boolean },
+  ): Promise<void> {
+    if (options?.triggerRun) {
+      const contentStr = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+      await this.prompt(contentStr);
+    }
+  }
+
+  async steer(text: string): Promise<void> {
+    this.startRun({ prompt: text, providerConfig: this.resolveProviderConfig() });
+  }
+
+  async followUp(text: string): Promise<void> {
+    this.startRun({ prompt: text, providerConfig: this.resolveProviderConfig() });
+  }
+
+  async fork(historyEntryId: string): Promise<{ newSessionId: string; selectedText: string }> {
+    const session = this.requireSession();
+    const historyEntries = this.options.database.listSessionHistoryEntries?.(session.id) ?? [];
+    const entry = historyEntries.find((e) => e.id === historyEntryId);
+    if (!entry) {
+      throw new Error(`History entry ${historyEntryId} not found`);
+    }
+    const newSession = this.options.database.createSession(`Fork of ${session.title}`);
+    return { newSessionId: newSession.id, selectedText: entry.summary ?? "" };
+  }
+
+  // ==========================================================================
+  // Private — Queue Processing
+  // ==========================================================================
+
+  private async processQueue(): Promise<void> {
+    if (this.processingQueue) return;
     this.processingQueue = true;
+
     try {
       while (true) {
         const queuedRun = this.options.runtime.peekQueuedRun();
-        if (!queuedRun) {
-          return;
-        }
+        if (!queuedRun) return;
         this.options.runtime.dequeueRun(queuedRun.runId);
 
         const run = this.options.database.getRun(queuedRun.runId);
-        if (!run) {
-          continue;
-        }
-
-        if (run.status === "canceled") {
-          continue;
-        }
+        if (!run || run.status === "canceled") continue;
 
         const session = this.requireSession();
         const task = run.taskId ? this.options.database.getTask(run.taskId) : null;
+
         let providerConfig: ProviderConfig;
         try {
           providerConfig = this.resolveQueuedProviderConfig(queuedRun.providerConfigId);
         } catch (error) {
           await this.handleFailedRun(
-            {
-              session,
-              task,
-              run,
-              prompt: queuedRun.prompt,
-              historyEntryId: queuedRun.historyEntryId ?? null,
-            },
+            { session, task, run, prompt: queuedRun.prompt, historyEntryId: queuedRun.historyEntryId ?? null },
             error,
           );
           continue;
         }
+
         await this.executeRun({
           session,
           task,
@@ -485,142 +610,358 @@ export class AgentSession {
     }
   }
 
-  private requireSession(): Session {
-    const session = this.options.database.getSession(this.options.sessionId);
-    if (!session) {
-      throw new Error(`Session ${this.options.sessionId} not found`);
-    }
-    return session;
-  }
-
-  private requireRun(runId: string): Run {
-    const run = this.options.database.getRun(runId);
-    if (!run) {
-      throw new Error(`Run ${runId} not found`);
-    }
-    return run;
-  }
-
-  private resolveProviderConfig(): ProviderConfig {
-    const providerConfig = this.options.database.getProviderConfig();
-    if (!providerConfig) {
-      throw new Error("No provider config available for this session");
-    }
-
-    return providerConfig;
-  }
-
-  private resolveQueuedProviderConfig(providerConfigId: string | null): ProviderConfig {
-    if (providerConfigId) {
-      const selected = this.options.database.getProviderConfig(providerConfigId);
-      if (selected) {
-        return selected;
-      }
-    }
-
-    return this.resolveProviderConfig();
-  }
+  // ==========================================================================
+  // Private — Run Execution (SDK-first: single provider.run() call)
+  // ==========================================================================
 
   private async executeRun(input: ExecuteRunInput): Promise<void> {
-    // Create QueryEngine with all dependencies
-    const queryEngine = new QueryEngine({
-      database: this.options.database,
-      sessionId: this.options.sessionId,
-      workspaceRoot: this.workspaceRoot,
-      emit: (event) =>
-        this.emitAndPersist(input.run.id, input.session.id, {
-          type: event.type,
-          payload: normalizeRunnerPayload(event),
-        }),
-      resources: this.options.resources,
-      runtime: this.options.runtime,
-      provider: this.provider,
-      compactionSummarizer: this.options.compactionSummarizer,
-      settingsManager: this.options.settingsManager,
-      evaluator:
-        this.evaluatorOverride ??
-        createPermissionEvaluator().withDenialTracker(this.denialTracker).build(),
-      denialTracker: this.denialTracker,
-      permissionMode: this.permissionMode,
-    });
-
-    this.activeQueryEngine = queryEngine;
+    const { session, task, run, prompt, contextFiles, providerConfig, historyEntryId } = input;
+    const abortController = new AbortController();
+    this.activeAbortController = abortController;
 
     try {
-      const executeLoop = () =>
-        queryEngine.execute({
-          session: input.session,
-          task: input.task,
-          run: input.run,
-          prompt: input.prompt,
-          contextFiles: input.contextFiles,
-          images: input.images,
-          providerConfig: input.providerConfig,
-          historyEntryId: input.historyEntryId,
-          checkpointSummary: input.checkpointSummary,
-          checkpointDetails: input.checkpointDetails,
+      // 1. Update statuses
+      this.options.database.updateRun(run.id, { status: "running" });
+      this.options.database.updateSession(session.id, {
+        status: nextSessionStatus(session.status, "run_started"),
+      });
+      this.options.runtime.beginRun(run.id, prompt);
+
+      // 2. Emit run.started
+      this.emitAndPersist(run.id, session.id, {
+        type: "run.started",
+        payload: { runId: run.id, sessionId: session.id, prompt },
+      });
+
+      // 3. Persist user message
+      this.ensureUserPromptPersisted({ sessionId: session.id, runId: run.id, prompt, historyEntryId });
+
+      // 4. Load resources and build system prompt
+      await this.options.resources.reload();
+      const resolvedSkill = await this.options.resources.resolveSkillForPrompt(prompt);
+      const systemPrompt = this.options.resources.buildSystemPrompt(resolvedSkill, this.workspaceRoot);
+
+      // 5. Build history messages (RuntimeMessage[] → LLM Message[])
+      const runtimeMessages = this.buildProviderHistoryMessages(session.id, historyEntryId);
+      const historyMessages = convertRuntimeMessagesToLlm(runtimeMessages);
+
+      // 6. Build tools
+      const tools = Object.values(createAllTools(this.workspaceRoot));
+      const enabledTools = listBuiltInToolNames();
+
+      // 7. Build effective prompt (with context files)
+      const effectivePrompt = buildEffectivePrompt(prompt, contextFiles, resolvedSkill);
+
+      // 8. Determine tool execution mode
+      const toolExecutionMode = resolveToolExecutionMode(enabledTools);
+
+      // 9. Call provider — SDK handles the entire agentic loop
+      let assistantText = "";
+
+      const doRun = async () =>
+        this.provider.run({
+          runId: run.id,
+          sessionId: session.id,
+          workspaceRoot: this.workspaceRoot,
+          prompt: effectivePrompt,
+          historyMessages,
+          systemPrompt,
+          providerConfig,
+          tools,
+          enabledTools,
+          toolExecutionMode,
+          signal: abortController.signal,
+          onTextDelta: (delta) => {
+            assistantText += delta;
+            this.emitAndPersist(run.id, session.id, {
+              type: "run.delta",
+              payload: { runId: run.id, sessionId: session.id, delta },
+            });
+          },
+          onToolLifecycle: (event) =>
+            this.handleToolLifecycle(event, run, session, task),
+          onSdkMessage: (message) => {
+            this.emitAndPersist(run.id, session.id, {
+              type: `sdk.${(message as Record<string, unknown>).type ?? "message"}`,
+              payload: { runId: run.id, sessionId: session.id, message: message as Record<string, unknown> },
+            });
+          },
         });
 
       const result = this.options.toolRuntimeContext
-        ? await runWithToolRuntimeContext(this.options.toolRuntimeContext, executeLoop)
-        : await executeLoop();
+        ? await runWithToolRuntimeContext(this.options.toolRuntimeContext, doRun)
+        : await doRun();
 
-      // Handle non-terminal-success cases
-      if (result.terminalReason !== "completed") {
-        await this.handleFailedRun(input, new Error(result.error ?? result.terminalReason));
+      // 10. Persist assistant message
+      if (assistantText.trim()) {
+        const branchId = this.getActiveBranchId(session.id);
+        this.options.database.addMessage({
+          sessionId: session.id,
+          role: "assistant",
+          content: assistantText,
+          branchId,
+          originRunId: run.id,
+        });
+        this.options.database.updateSession(session.id, { latestAssistantMessage: assistantText });
+      }
+
+      // 11. Finalize run
+      const isError = result.error !== null;
+      this.options.database.updateRun(run.id, {
+        status: isError ? "failed" : "completed",
+        terminalReason: isError ? result.error : "completed",
+      });
+      this.options.database.updateSession(session.id, {
+        status: nextSessionStatus(session.status, isError ? "run_failed" : "run_completed"),
+      });
+      this.options.runtime.completeRun(run.id, assistantText);
+
+      // Update task status on completion
+      if (task && !isError) {
+        this.options.database.updateTask(task.id, {
+          status: nextTaskStatus(task.status, "run_completed"),
+        });
+      }
+
+      // 12. Emit completion
+      this.emitAndPersist(run.id, session.id, {
+        type: isError ? "run.failed" : "run.completed",
+        payload: {
+          runId: run.id,
+          sessionId: session.id,
+          ...(isError ? { error: result.error } : {}),
+          usage: result.usage,
+          stopReason: result.stopReason,
+        },
+      });
+
+      // 13. Persist runtime snapshot
+      this.persistRuntimeSnapshot(session.id);
+
+      if (isError) {
+        await this.handleFailedRun(input, new Error(result.error!));
       }
     } catch (error) {
       await this.handleFailedRun(input, error);
     } finally {
-      this.activeQueryEngine = null;
+      this.activeAbortController = null;
+      this.pendingApprovals.clear();
     }
   }
 
-  private async handleFailedRun(input: FailedRunInput, error: unknown): Promise<void> {
-    const runId = input.run.id;
-    const sessionId = input.session.id;
+  // ==========================================================================
+  // Private — Tool Lifecycle (Permission + Approval + Persistence)
+  // ==========================================================================
 
-    const canceled = this.options.database.getRun(runId)?.status === "canceled";
+  private async handleToolLifecycle(
+    event: ProviderToolLifecycleEvent,
+    run: Run,
+    session: Session,
+    task: Task | null,
+  ): Promise<ProviderToolLifecycleControl> {
+    if (event.stage === "requested") {
+      return this.onToolRequested(event, run, session, task);
+    }
+
+    if (event.stage === "approval_requested") {
+      return this.onToolApprovalRequested(event, run, session);
+    }
+
+    if (event.stage === "started") {
+      this.emitAndPersist(run.id, session.id, {
+        type: "tool.started",
+        payload: { runId: run.id, sessionId: session.id, toolCallId: event.toolCallId, toolName: event.toolName },
+      });
+      return {};
+    }
+
+    if (event.stage === "progress") {
+      this.emitAndPersist(run.id, session.id, {
+        type: "tool.progress",
+        payload: { runId: run.id, sessionId: session.id, toolCallId: event.toolCallId, toolName: event.toolName },
+      });
+      return {};
+    }
+
+    if (event.stage === "finished") {
+      this.options.database.updateToolCall(event.toolCallId, {
+        output: event.output ?? null,
+        error: null,
+      });
+      this.emitAndPersist(run.id, session.id, {
+        type: "tool.finished",
+        payload: {
+          runId: run.id,
+          sessionId: session.id,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          output: event.output,
+        },
+      });
+      return {};
+    }
+
+    if (event.stage === "failed") {
+      this.options.database.updateToolCall(event.toolCallId, {
+        output: null,
+        error: event.error ?? "Unknown tool error",
+      });
+      this.emitAndPersist(run.id, session.id, {
+        type: "tool.failed",
+        payload: {
+          runId: run.id,
+          sessionId: session.id,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          error: event.error,
+        },
+      });
+      return {};
+    }
+
+    return {};
+  }
+
+  private onToolRequested(
+    event: ProviderToolLifecycleEvent,
+    run: Run,
+    session: Session,
+    task: Task | null,
+  ): ProviderToolLifecycleControl {
+    // Full-access mode: allow everything
+    if (this.permissionMode === "full-access") {
+      this.persistToolCall(event, run, session, task, "not_required");
+      return { allowExecution: true, requiresApproval: false };
+    }
+
+    // Evaluate permissions
+    const evaluator =
+      this.evaluatorOverride ??
+      createPermissionEvaluator().withDenialTracker(this.denialTracker).build();
+    const context: PermissionContext = {
+      toolName: event.toolName,
+      input: event.input,
+      planMode: false,
+      sessionId: session.id,
+    };
+    const result = evaluator.preflightCheck(context);
+
+    if (result.decision === "deny") {
+      this.persistToolCall(event, run, session, task, "rejected");
+      return {
+        allowExecution: false,
+        error: result.reason ?? `Tool '${event.toolName}' denied by permission policy.`,
+      };
+    }
+
+    if (result.decision === "ask") {
+      this.persistToolCall(event, run, session, task, "pending");
+      return { allowExecution: true, requiresApproval: true };
+    }
+
+    // allow
+    this.persistToolCall(event, run, session, task, "not_required");
+    return { allowExecution: true, requiresApproval: false };
+  }
+
+  private async onToolApprovalRequested(
+    event: ProviderToolLifecycleEvent,
+    run: Run,
+    session: Session,
+  ): Promise<ProviderToolLifecycleControl> {
+    // Block the run and wait for user decision
+    this.options.runtime.blockOnTool(run.id, event.toolCallId);
+    this.options.database.updateSession(session.id, {
+      status: nextSessionStatus(session.status, "tool_blocked"),
+    });
+
+    this.emitAndPersist(run.id, session.id, {
+      type: "tool.approval_requested",
+      payload: {
+        runId: run.id,
+        sessionId: session.id,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+      },
+    });
+
+    // Wait for user decision via approveTool/rejectTool
+    const decision = await new Promise<"approved" | "rejected">((resolve) => {
+      this.pendingApprovals.set(event.toolCallId, resolve);
+    });
+
+    // Update DB and runtime
+    this.options.database.updateToolCall(event.toolCallId, {
+      approvalState: decision,
+    });
+
+    if (decision === "approved") {
+      this.options.database.updateSession(session.id, {
+        status: nextSessionStatus(session.status, "resume"),
+      });
+    }
+
+    return { decision };
+  }
+
+  private persistToolCall(
+    event: ProviderToolLifecycleEvent,
+    run: Run,
+    session: Session,
+    task: Task | null,
+    approvalState: ToolCall["approvalState"],
+  ): void {
+    this.options.database.createToolCall({
+      id: event.toolCallId,
+      runId: run.id,
+      sessionId: session.id,
+      taskId: task?.id ?? null,
+      toolName: event.toolName,
+      approvalState,
+      input: event.input,
+      output: null,
+      error: null,
+    });
+  }
+
+  // ==========================================================================
+  // Private — Failure Handling
+  // ==========================================================================
+
+  private async handleFailedRun(input: FailedRunInput, error: unknown): Promise<void> {
+    const { run, session } = input;
+    const canceled = this.options.database.getRun(run.id)?.status === "canceled";
     const message = error instanceof Error ? error.message : String(error);
 
-    this.options.database.updateRun(runId, {
+    this.options.database.updateRun(run.id, {
       status: canceled ? "canceled" : "failed",
       terminalReason: canceled ? "canceled" : message,
     });
-
-    this.options.database.updateSession(sessionId, {
-      status: nextSessionStatus(input.session.status, canceled ? "run_canceled" : "run_failed"),
+    this.options.database.updateSession(session.id, {
+      status: nextSessionStatus(session.status, canceled ? "run_canceled" : "run_failed"),
     });
+
     this.ensureUserPromptPersisted({
-      sessionId,
-      runId,
+      sessionId: session.id,
+      runId: run.id,
       prompt: input.prompt,
       historyEntryId: input.historyEntryId,
     });
-    this.persistPartialAssistantMessageFromEvents({
-      sessionId,
-      runId,
-    });
+    this.persistPartialAssistantMessageFromEvents({ sessionId: session.id, runId: run.id });
 
-    this.options.runtime.failRun(runId);
+    this.options.runtime.failRun(run.id);
 
-    this.emitAndPersist(runId, sessionId, {
+    this.emitAndPersist(run.id, session.id, {
       type: canceled ? "run.canceled" : "run.failed",
       payload: canceled
-        ? {
-            runId,
-            sessionId,
-          }
-        : {
-            runId,
-            sessionId,
-            error: message,
-          },
+        ? { runId: run.id, sessionId: session.id }
+        : { runId: run.id, sessionId: session.id, error: message },
     });
 
     if (!canceled) {
       this.options.database.createReviewRequest({
-        runId,
+        runId: run.id,
         taskId: input.task?.id ?? null,
         toolCallId: null,
         kind: "final_review",
@@ -631,119 +972,45 @@ export class AgentSession {
     }
   }
 
-  private ensureUserPromptPersisted(input: {
-    sessionId: string;
-    runId: string;
-    prompt: string;
-    historyEntryId: string | null;
-  }): void {
-    if (this.hasRunMessage(input.sessionId, input.runId, "user", input.prompt)) {
-      return;
-    }
+  // ==========================================================================
+  // Private — Helpers
+  // ==========================================================================
 
-    const branchId =
-      this.options.database.getActiveBranchId(input.sessionId) ??
-      this.options.database.listBranches(input.sessionId).at(-1)?.id ??
-      null;
-    this.options.database.addMessage({
-      sessionId: input.sessionId,
-      role: "user",
-      content: input.prompt,
-      parentHistoryEntryId: input.historyEntryId,
-      branchId,
-      originRunId: input.runId,
-    });
+  private requireSession(): Session {
+    const session = this.options.database.getSession(this.options.sessionId);
+    if (!session) throw new Error(`Session ${this.options.sessionId} not found`);
+    return session;
   }
 
-  private persistPartialAssistantMessageFromEvents(input: {
-    sessionId: string;
-    runId: string;
-  }): void {
-    if (this.hasRunMessage(input.sessionId, input.runId, "assistant")) {
-      return;
-    }
-
-    const partialAssistantText = this.collectRunDeltaText(input.runId);
-    if (!partialAssistantText.trim()) {
-      return;
-    }
-
-    const branchId =
-      this.options.database.getActiveBranchId(input.sessionId) ??
-      this.options.database.listBranches(input.sessionId).at(-1)?.id ??
-      null;
-    this.options.database.addMessage({
-      sessionId: input.sessionId,
-      role: "assistant",
-      content: partialAssistantText,
-      branchId,
-      originRunId: input.runId,
-    });
-    this.options.database.updateSession(input.sessionId, {
-      latestAssistantMessage: partialAssistantText,
-    });
+  private requireRun(runId: string): Run {
+    const run = this.options.database.getRun(runId);
+    if (!run) throw new Error(`Run ${runId} not found`);
+    return run;
   }
 
-  private hasRunMessage(
-    sessionId: string,
-    runId: string,
-    role: "user" | "assistant" | "system" | "tool",
-    expectedContent?: string,
-  ): boolean {
-    const runMessageIds = this.listRunMessageIds(sessionId, runId);
-    if (runMessageIds.size === 0) {
-      return false;
-    }
-
-    const messages = this.options.database.listMessages(sessionId);
-    return messages.some((message) => {
-      if (!runMessageIds.has(message.id) || message.role !== role) {
-        return false;
-      }
-      if (typeof expectedContent === "string") {
-        return message.content === expectedContent;
-      }
-      return true;
-    });
+  private resolveProviderConfig(): ProviderConfig {
+    const config = this.options.database.getProviderConfig();
+    if (!config) throw new Error("No provider config available for this session");
+    return config;
   }
 
-  private listRunMessageIds(sessionId: string, runId: string): Set<string> {
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(sessionId) ?? [];
-    return new Set(
-      historyEntries
-        .filter(
-          (entry) =>
-            entry.kind === "message" &&
-            entry.originRunId === runId &&
-            Boolean(entry.messageId),
-        )
-        .map((entry) => entry.messageId as string),
+  private resolveQueuedProviderConfig(providerConfigId: string | null): ProviderConfig {
+    if (providerConfigId) {
+      const selected = this.options.database.getProviderConfig(providerConfigId);
+      if (selected) return selected;
+    }
+    return this.resolveProviderConfig();
+  }
+
+  private getActiveBranchId(sessionId: string): string | null {
+    return (
+      this.options.database.getActiveBranchId(sessionId) ??
+      this.options.database.listBranches(sessionId).at(-1)?.id ??
+      null
     );
   }
 
-  private collectRunDeltaText(runId: string): string {
-    const orderedEvents = [...this.options.database.listEvents(runId)].sort(
-      (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-    );
-    return orderedEvents
-      .filter((event) => event.type === "run.delta")
-      .map((event) => (typeof event.payload.delta === "string" ? event.payload.delta : ""))
-      .join("");
-  }
-
-  private emitAndPersist(runId: string, sessionId: string, envelope: RunnerEventEnvelope): void {
-    this.options.database.addEvent({
-      runId,
-      sessionId,
-      type: envelope.type,
-      payload: envelope.payload,
-    });
-
-    this.options.emit(envelope);
-  }
-
-  private buildHistoricalRuntimeMessages(
+  private buildProviderHistoryMessages(
     sessionId: string,
     branchLeafEntryId: string | null = null,
   ): RuntimeMessage[] {
@@ -757,109 +1024,15 @@ export class AgentSession {
     });
   }
 
-  private buildHistoricalRuntimeMessageEnvelopes(
-    sessionId: string,
-    branchLeafEntryId: string | null = null,
-  ): SessionRuntimeMessageEnvelope[] {
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(sessionId) ?? [];
-    return buildSessionRuntimeMessageEnvelopes({
-      messages: this.options.database.listMessages(sessionId),
-      toolCalls: this.listSessionToolCalls(sessionId),
-      compaction: this.buildRuntimeCompactionSnapshot(),
-      historyEntries,
-      branchLeafEntryId,
-    });
-  }
-
   private listSessionToolCalls(sessionId: string): ToolCall[] {
     const runs = this.options.database.listRuns(sessionId);
     return runs.flatMap((run) => this.options.database.listToolCalls(run.id));
   }
 
-  private async compactHistoricalContext(input: {
-    session: Session;
-    providerConfig: ProviderConfig;
-    mode: CompactionMode;
-    prompt: string | null;
-    historyEnvelopes: SessionRuntimeMessageEnvelope[];
-  }): Promise<SessionCompactionSnapshot | null> {
-    const model = createModelFromConfig(input.providerConfig);
-    const plan = buildCompactionPlan(input.historyEnvelopes, model.contextWindow, input.mode);
-
-    if (!plan) {
-      return null;
-    }
-
-    const summary = await generateCompactionSummary(
-      {
-        sessionId: input.session.id,
-        providerConfig: input.providerConfig,
-        mode: input.mode,
-        tokensBefore: plan.tokensBefore,
-        tokensKept: plan.tokensKept,
-        keepRecentTokens: plan.keepRecentTokens,
-        summaryMessages: plan.summaryMessages,
-        keptMessages: plan.keptMessages,
-      },
-      this.options.compactionSummarizer,
-    );
-
-    const snapshot = sessionCompactionSnapshotSchema.parse({
-      version: 1,
-      summary,
-      compactedAt: nowIso(),
-      firstKeptHistoryEntryId: plan.firstKeptHistoryEntryId,
-      firstKeptTimestamp: plan.firstKeptTimestamp,
-      tokensBefore: plan.tokensBefore,
-      tokensKept: plan.tokensKept,
-    });
-
-    this.options.runtime.completeCompaction({
-      summary: snapshot.summary,
-      compactedAt: snapshot.compactedAt,
-    });
-
-    if (this.options.database.addSessionHistoryEntry) {
-      const branchId =
-        this.options.database.getActiveBranchId(input.session.id) ??
-        this.options.database.listBranches(input.session.id).at(-1)?.id ??
-        null;
-      const parentHistoryEntry =
-        branchId
-          ? this.options.database.getBranchHistory(input.session.id, branchId).at(-1) ?? null
-          : this.options.database.listSessionHistoryEntries?.(input.session.id).at(-1) ?? null;
-      const details = {
-        mode: input.mode,
-        prompt: input.prompt,
-        cutoffIndex: plan.cutoffIndex,
-        tokensBefore: plan.tokensBefore,
-        tokensKept: plan.tokensKept,
-        keepRecentTokens: plan.keepRecentTokens,
-      };
-
-      this.options.database.addSessionHistoryEntry({
-        sessionId: input.session.id,
-        parentId: parentHistoryEntry?.id ?? null,
-        kind: "branch_summary",
-        messageId: null,
-        summary: snapshot.summary.goal,
-        details: normalizeHistoryDetails(details),
-        branchId,
-        lineageDepth: parentHistoryEntry ? parentHistoryEntry.lineageDepth + 1 : 0,
-        originRunId: null,
-      });
-    }
-
-    return snapshot;
-  }
-
   private buildRuntimeCompactionSnapshot(): SessionCompactionSnapshot | null {
     const compaction = this.options.runtime.snapshot().compaction;
     const summary = compaction.lastSummary;
-    if (!summary) {
-      return null;
-    }
-
+    if (!summary) return null;
     return {
       version: 1,
       summary,
@@ -880,284 +1053,93 @@ export class AgentSession {
     });
   }
 
-  // =========================================================================
-  // Session Control Methods
-  // =========================================================================
-
-  /**
-   * Abort the current active run and wait for the agent to become idle.
-   */
-  async abort(): Promise<void> {
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.cancelRun(runtime.activeRunId);
-    }
-    // Wait for any pending runs to complete
-    while (this.options.runtime.snapshot().activeRunId) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-
-  /**
-   * Dispose of the session and clean up resources.
-   * Call this when completely done with the session.
-   */
-  dispose(): void {
-    // Cancel any active run
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.cancelRun(runtime.activeRunId);
-    }
-    this.processingQueue = false;
-  }
-
-  // =========================================================================
-  // Model Management
-  // =========================================================================
-
-  /**
-   * Set the model for future runs.
-   * Updates the provider configuration.
-   */
-  setModel(modelId: string): void {
-    const currentConfig = this.options.database.getProviderConfig();
-    if (!currentConfig) {
-      throw new Error("No provider config available");
-    }
-
-    this.options.database.upsertProviderConfig({
-      id: currentConfig.id,
-      name: currentConfig.name,
-      protocol: currentConfig.protocol,
-      baseUrl: currentConfig.baseUrl,
-      apiKey: currentConfig.apiKey,
-      model: modelId,
-      url: currentConfig.url,
-    });
-
-    this.options.runtime.setSelectedProviderConfig(currentConfig.id);
-  }
-
-  /**
-   * Cycle to the next available model.
-   * Returns the new model info, or undefined if only one model available.
-   */
-  cycleModel(): { modelId: string; provider: string } | undefined {
-    // This would typically cycle through configured models
-    // For now, return undefined as model cycling requires provider support
-    return undefined;
-  }
-
-  // =========================================================================
-  // Session Statistics
-  // =========================================================================
-
-  /**
-   * Get statistics about the current session.
-   */
-  getSessionStats(): {
+  private ensureUserPromptPersisted(input: {
     sessionId: string;
-    userMessages: number;
-    assistantMessages: number;
-    toolCalls: number;
-    totalMessages: number;
-    runs: number;
-  } {
-    const session = this.requireSession();
-    const messages = this.options.database.listMessages(session.id);
-    const runs = this.options.database.listRuns(session.id);
-    const toolCalls = runs.flatMap((run) => this.options.database.listToolCalls(run.id));
-
-    return {
-      sessionId: session.id,
-      userMessages: messages.filter((m) => m.role === "user").length,
-      assistantMessages: messages.filter((m) => m.role === "assistant").length,
-      toolCalls: toolCalls.length,
-      totalMessages: messages.length,
-      runs: runs.length,
-    };
-  }
-
-  // =========================================================================
-  // Bash Execution Control
-  // =========================================================================
-
-  /**
-   * Abort the currently running bash command.
-   */
-  abortBash(): void {
-    // In the omi architecture, bash execution is handled via the provider
-    // This is a placeholder - actual bash abortion would need provider support
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.cancelRun(runtime.activeRunId);
-    }
-  }
-
-  // =========================================================================
-  // Prompting Methods
-  // =========================================================================
-
-  /**
-   * Send a prompt to the agent and wait for completion.
-   * This is the main entry point for user interaction.
-   */
-  async prompt(
-    text: string,
-    options?: {
-      taskId?: string | null;
-      historyEntryId?: string | null;
-      images?: ImageContent[];
-    },
-  ): Promise<Run> {
-    const providerConfig = this.options.database.getProviderConfig();
-    if (!providerConfig) {
-      throw new Error("No provider config available for this session");
-    }
-
-    if (options?.historyEntryId) {
-      return this.continueFromHistoryEntry({
-        prompt: text,
-        providerConfig,
-        taskId: options.taskId,
-        historyEntryId: options.historyEntryId,
-      });
-    }
-
-    return this.startRun({
-      prompt: text,
-      providerConfig,
-      taskId: options?.taskId,
+    runId: string;
+    prompt: string;
+    historyEntryId: string | null;
+  }): void {
+    if (this.hasRunMessage(input.sessionId, input.runId, "user", input.prompt)) return;
+    const branchId = this.getActiveBranchId(input.sessionId);
+    this.options.database.addMessage({
+      sessionId: input.sessionId,
+      role: "user",
+      content: input.prompt,
+      parentHistoryEntryId: input.historyEntryId,
+      branchId,
+      originRunId: input.runId,
     });
   }
 
-  /**
-   * Send a user message to the agent.
-   * Always triggers a new run.
-   */
-  async sendUserMessage(
-    content: string,
-    options?: { taskId?: string | null },
-  ): Promise<Run> {
-    return this.prompt(content, options);
+  private persistPartialAssistantMessageFromEvents(input: { sessionId: string; runId: string }): void {
+    if (this.hasRunMessage(input.sessionId, input.runId, "assistant")) return;
+    const partialText = this.collectRunDeltaText(input.runId);
+    if (!partialText.trim()) return;
+    const branchId = this.getActiveBranchId(input.sessionId);
+    this.options.database.addMessage({
+      sessionId: input.sessionId,
+      role: "assistant",
+      content: partialText,
+      branchId,
+      originRunId: input.runId,
+    });
+    this.options.database.updateSession(input.sessionId, { latestAssistantMessage: partialText });
   }
 
-  /**
-   * Send a custom message to the session.
-   * Custom messages are stored but don't trigger a run unless triggerRun is true.
-   */
-  async sendCustomMessage(
-    message: {
-      customType: string;
-      content: unknown;
-      display?: string;
-      details?: Record<string, unknown>;
-    },
-    options?: { triggerRun?: boolean },
-  ): Promise<void> {
-    // In omi architecture, custom messages are stored as part of the session
-    // For now, if triggerRun is true, we treat it as a regular prompt
-    if (options?.triggerRun) {
-      const contentStr = typeof message.content === "string"
-        ? message.content
-        : JSON.stringify(message.content);
-      await this.prompt(contentStr);
-    }
-    // Otherwise, the custom message would be persisted via the database
-  }
-
-  // =========================================================================
-  // Steering and Follow-up Methods
-  // =========================================================================
-
-  /**
-   * Send a steering message during the current run.
-   * The message is delivered after the current assistant turn finishes
-   * executing its tool calls, before the next LLM call.
-   */
-  async steer(text: string): Promise<void> {
-    if (text.startsWith("/")) {
-      const commandName = text.slice(1).split(" ")[0];
-      const command = this.options.resources.resolveSkillForPrompt?.(commandName);
-      // Extension commands cannot be queued - reject them
-      if (!command && text.startsWith("/")) {
-        throw new Error(`Slash command "${commandName}" cannot be used with steer(). Use prompt() instead.`);
-      }
-    }
-
-    // In the queue-based architecture, steering enqueues a new run
-    // that will be processed after the current tool calls finish
-    this.startRun({
-      prompt: text,
-      providerConfig: this.resolveProviderConfig(),
+  private hasRunMessage(
+    sessionId: string,
+    runId: string,
+    role: "user" | "assistant" | "system" | "tool",
+    expectedContent?: string,
+  ): boolean {
+    const runMessageIds = this.listRunMessageIds(sessionId, runId);
+    if (runMessageIds.size === 0) return false;
+    const messages = this.options.database.listMessages(sessionId);
+    return messages.some((msg) => {
+      if (!runMessageIds.has(msg.id) || msg.role !== role) return false;
+      if (typeof expectedContent === "string") return msg.content === expectedContent;
+      return true;
     });
   }
 
-  /**
-   * Queue a follow-up message to be processed after the current run completes.
-   * Follow-up is delivered only when the agent has no more tool calls or steering messages.
-   */
-  async followUp(text: string): Promise<void> {
-    if (text.startsWith("/")) {
-      const commandName = text.slice(1).split(" ")[0];
-      throw new Error(`Slash command "${commandName}" cannot be used with followUp(). Use prompt() instead.`);
-    }
-
-    // Follow-up enqueues a new run that will execute after the current run completes
-    this.startRun({
-      prompt: text,
-      providerConfig: this.resolveProviderConfig(),
-    });
+  private listRunMessageIds(sessionId: string, runId: string): Set<string> {
+    const historyEntries = this.options.database.listSessionHistoryEntries?.(sessionId) ?? [];
+    return new Set(
+      historyEntries
+        .filter((e) => e.kind === "message" && e.originRunId === runId && Boolean(e.messageId))
+        .map((e) => e.messageId as string),
+    );
   }
 
-  // =========================================================================
-  // Session Forking
-  // =========================================================================
+  private collectRunDeltaText(runId: string): string {
+    return [...this.options.database.listEvents(runId)]
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+      .filter((e) => e.type === "run.delta")
+      .map((e) => (typeof e.payload.delta === "string" ? e.payload.delta : ""))
+      .join("");
+  }
 
-  /**
-   * Fork the session at a specific history entry.
-   * Creates a new branch from that point.
-   */
-  async fork(historyEntryId: string): Promise<{ newSessionId: string; selectedText: string }> {
-    const session = this.requireSession();
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(session.id) ?? [];
+  private emitAndPersist(runId: string, sessionId: string, envelope: RunnerEventEnvelope): void {
+    this.options.database.addEvent({
+      runId,
+      sessionId,
+      type: envelope.type,
+      payload: envelope.payload,
+    });
+    this.options.emit(envelope);
+  }
 
-    const entry = historyEntries.find((e) => e.id === historyEntryId);
-    if (!entry) {
-      throw new Error(`History entry ${historyEntryId} not found`);
+  private rejectAllPendingApprovals(): void {
+    for (const [, resolver] of this.pendingApprovals) {
+      resolver("rejected");
     }
-
-    // Create a new session forked from the current one
-    const newSession = this.options.database.createSession(`Fork of ${session.title}`);
-    const newSessionId = newSession.id;
-
-    // The fork implementation would copy relevant entries to the new session
-    // For now, return the new session ID and empty selected text
-    return {
-      newSessionId,
-      selectedText: entry.summary ?? "",
-    };
+    this.pendingApprovals.clear();
   }
 }
 
-function deriveTaskCandidate(session: Session): {
-  title: string;
-  candidateReason: string;
-} | null {
-  const latest = session.latestUserMessage?.trim();
-  if (!latest) {
-    return null;
-  }
-
-  if (latest.length < 8) {
-    return null;
-  }
-
-  return {
-    title: latest.slice(0, 80),
-    candidateReason: "Derived from latest user prompt",
-  };
-}
+// ============================================================================
+// Standalone Helpers
+// ============================================================================
 
 function resolveRunPrompt(
   run: Run,
@@ -1165,10 +1147,7 @@ function resolveRunPrompt(
   session: Session,
 ): string | null {
   const candidate = run.prompt ?? runtime.lastUserPrompt ?? session.latestUserMessage;
-  if (!candidate) {
-    return null;
-  }
-
+  if (!candidate) return null;
   const trimmed = candidate.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
@@ -1197,20 +1176,32 @@ function nextTaskStatus(current: Task["status"], event: "run_completed"): Task["
   if (event === "run_completed") {
     return current === "active" ? "review" : current;
   }
-
   return current;
 }
 
-function normalizeHistoryDetails(details: unknown): Record<string, unknown> | null {
-  if (details === null || details === undefined) {
-    return null;
+function buildEffectivePrompt(
+  prompt: string,
+  contextFiles: string[],
+  resolvedSkill: ResolvedSkill | null,
+): string {
+  const parts: string[] = [];
+
+  if (resolvedSkill?.injectedPrompt) {
+    parts.push(resolvedSkill.injectedPrompt);
   }
 
-  if (typeof details === "object" && !Array.isArray(details)) {
-    return details as Record<string, unknown>;
+  parts.push(prompt);
+
+  if (contextFiles.length > 0) {
+    parts.push(
+      "\n\nContext files:\n" + contextFiles.map((f) => `- ${f}`).join("\n"),
+    );
   }
 
-  return {
-    value: details,
-  };
+  return parts.join("\n\n");
+}
+
+function resolveToolExecutionMode(enabledTools: string[]): "sequential" | "parallel" {
+  const allSafe = enabledTools.every((name) => SAFE_TOOL_NAMES.has(name));
+  return allSafe ? "parallel" : "sequential";
 }
