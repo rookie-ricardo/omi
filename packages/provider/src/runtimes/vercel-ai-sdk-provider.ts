@@ -10,7 +10,7 @@ import type {
 } from "../providers";
 import type { ModelUsage } from "../types";
 import {
-  buildSingleTurnPrompt,
+  buildModelMessages,
   createAssistantMessage,
   linkAbortSignal,
   mapVercelFinishReasonToModel,
@@ -49,6 +49,7 @@ export class VercelAiSdkProvider implements ProviderAdapter {
       }
       const control = await input.onToolLifecycle({
         ...event,
+        source: event.source ?? "runtime_native",
         runId: input.runId,
         sessionId: input.sessionId,
       });
@@ -165,7 +166,7 @@ export class VercelAiSdkProvider implements ProviderAdapter {
       const textStreamResult = this.deps.streamText({
         model: openaiProvider(input.providerConfig.model),
         system: input.systemPrompt,
-        prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
+        messages: buildModelMessages(input.prompt, input.historyMessages),
         tools: activeTools,
         stopWhen: stepCountIs(20),
         abortSignal: abortController.signal,

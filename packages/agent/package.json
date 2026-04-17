@@ -30,7 +30,7 @@
     "diff": "^8.0.2",
     "strip-ansi": "^7.2.0",
     "yaml": "^2.8.1",
-    "zod": "^3.24.2"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "tsup": "^8.4.0",

@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 type JsonSchema = Record<string, unknown>;
+type JsonLiteral = string | number | boolean | null;
+
+function isJsonLiteral(value: unknown): value is JsonLiteral {
+  return value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
 
 function asObjectSchema(schema: unknown): JsonSchema | null {
   if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
@@ -18,15 +23,20 @@ function parseEnum(schema: JsonSchema): z.ZodTypeAny | null {
     const values = enumValues as string[];
     return z.enum([values[0], ...values.slice(1)]);
   }
-  const literals = enumValues.map((value) => z.literal(value));
-  if (literals.length === 1) {
-    return literals[0];
+  if (!enumValues.every(isJsonLiteral)) {
+    return null;
   }
-  return z.union([literals[0], literals[1], ...literals.slice(2)] as [
-    z.ZodLiteral<unknown>,
-    z.ZodLiteral<unknown>,
-    ...z.ZodLiteral<unknown>[],
-  ]);
+
+  const literals = enumValues.map((value) => z.literal(value));
+  const first = literals[0];
+  if (!first) {
+    return null;
+  }
+  const second = literals[1];
+  if (!second) {
+    return first;
+  }
+  return z.union([first, second, ...literals.slice(2)]);
 }
 
 function toZodSchema(schema: unknown): z.ZodTypeAny {

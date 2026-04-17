@@ -1,4 +1,5 @@
 import BetterSqlite3 from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -52,6 +53,18 @@ import { sortChronologicalRows } from "./sort";
 const PROVIDER_API_KEY_PREFIX = "enc:v1:";
 const PROVIDER_API_KEY_WEAK_KEY = Buffer.from("omi", "utf8");
 const MIGRATIONS_TABLE_NAME = "schema_migrations";
+const BUILT_IN_PROVIDER_CONFIG_IDS: Record<string, string> = {
+  anthropic: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f001",
+  openai: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f002",
+  openrouter: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f003",
+  google: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f004",
+  bedrock: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f005",
+  azure: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f006",
+  mistral: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f007",
+  xai: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f008",
+  groq: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f009",
+  cerebras: "0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f00a",
+};
 
 interface MigrationStatement {
   all: (...args: any[]) => unknown[];
@@ -673,17 +686,18 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
   ): ProviderConfig {
     const now = nowIso();
     const { id: inputId, ...rest } = input;
-    const config = providerConfigSchema.parse({
-      ...rest,
-      id: inputId ?? createId("provider"),
-      createdAt: now,
-      updatedAt: now,
-    });
+    const resolvedId = resolveProviderConfigId(inputId, rest.name);
     const existing = db
       .select()
       .from(providerConfigsTable)
-      .where(eq(providerConfigsTable.id, config.id))
+      .where(eq(providerConfigsTable.id, resolvedId))
       .get();
+    const config = providerConfigSchema.parse({
+      ...rest,
+      id: resolvedId,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
 
     if (existing) {
       db.update(providerConfigsTable)
@@ -1240,6 +1254,19 @@ function serializeProviderConfig(config: ProviderConfig): ProviderConfig {
     protocol: config.protocol,
     apiKey: weakEncryptProviderApiKey(config.apiKey),
   };
+}
+
+function resolveProviderConfigId(inputId: string | undefined, providerName: string): string {
+  if (typeof inputId === "string" && inputId.trim().length > 0) {
+    return inputId;
+  }
+
+  const builtInProviderId = BUILT_IN_PROVIDER_CONFIG_IDS[providerName.trim().toLowerCase()];
+  if (builtInProviderId) {
+    return builtInProviderId;
+  }
+
+  return randomUUID();
 }
 
 function parseStoredProviderConfig(row: unknown): ProviderConfig {

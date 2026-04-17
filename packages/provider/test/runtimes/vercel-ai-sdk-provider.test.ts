@@ -7,7 +7,7 @@ import { VercelAiSdkProvider } from "../../src/runtimes/vercel-ai-sdk-provider";
 function makeConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     id: "provider_1",
-        name: "openai",
+    name: "openai",
     protocol: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
     apiKey: "test-key",
@@ -103,7 +103,16 @@ describe("VercelAiSdkProvider", () => {
     expect(onTextDelta).toHaveBeenCalledTimes(2);
     expect(streamTextSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        prompt: expect.stringContaining("user: previous context"),
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "user",
+            content: "previous context",
+          }),
+          expect.objectContaining({
+            role: "user",
+            content: "list files",
+          }),
+        ]),
       }),
     );
   });

@@ -35,7 +35,7 @@ export const activationConditionSchema = z.object({
   /** Regex patterns for matching prompts */
   promptPatterns: z.array(z.string()).optional(),
   /** Environment variables that must be set */
-  envVars: z.record(z.string()).optional(),
+  envVars: z.record(z.string(), z.string()).optional(),
   /** Git state conditions */
   gitState: z.object({
     branch: z.string().optional(),
@@ -118,7 +118,7 @@ export const skillFrontmatterSchema = z.object({
   /** License information */
   license: z.string().optional(),
   /** Custom metadata */
-  metadata: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
 export type ToolRule = z.infer<typeof toolRuleSchema>;

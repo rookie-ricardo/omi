@@ -7,7 +7,7 @@
 > 核心文件：`src/lib/claude-client.ts`、`src/lib/ai-provider.ts`、`src/lib/provider-catalog.ts`、
 > `src/lib/provider-resolver.ts`、`src/lib/agent-loop.ts`、`src/lib/runtime/`
 
-源码代码路径：/Users/rookie/CodeSpace/CodePilot-main
+源码代码路径：/Users/rookie/CodeSpace/CodePilot
 ---
 
 ## 一、架构总览

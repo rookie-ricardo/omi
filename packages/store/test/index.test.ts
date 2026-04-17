@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyMigrations,
+  createAppDatabase,
   revertLastMigration,
   validateSchemaConsistency,
   weakDecryptStoredProviderApiKey,
@@ -21,6 +22,47 @@ describe("provider config storage", () => {
   it("rejects plaintext api keys", () => {
     expect(() => weakDecryptStoredProviderApiKey("legacy-plain-text-key")).toThrow(
       "Stored provider API key must use enc:v1 encryption.",
+    );
+  });
+
+  it("assigns fixed UUID ids for built-in providers when id is omitted", () => {
+    const store = createAppDatabase(":memory:");
+
+    const openai = store.upsertProviderConfig({
+      name: "openai",
+      protocol: "openai-chat",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-openai",
+      model: "gpt-5.4",
+      url: "",
+    });
+    const anthropic = store.upsertProviderConfig({
+      name: "anthropic",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "sk-anthropic",
+      model: "claude-sonnet-4-6",
+      url: "",
+    });
+
+    expect(openai.id).toBe("0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f002");
+    expect(anthropic.id).toBe("0f3c6d9e-5f30-4c46-9f89-5ec9b3b2f001");
+  });
+
+  it("assigns UUID ids for custom providers when id is omitted", () => {
+    const store = createAppDatabase(":memory:");
+
+    const custom = store.upsertProviderConfig({
+      name: "openai-compatible",
+      protocol: "openai-chat",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-custom",
+      model: "custom-model",
+      url: "",
+    });
+
+    expect(custom.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
   });
 });

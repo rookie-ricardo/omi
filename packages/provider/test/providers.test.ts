@@ -337,6 +337,7 @@ describe("ProviderRunInput 接口", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
+      historyEntryId: "hist-1",
       providerConfig: makeConfig(),
       systemPrompt: "System prompt",
       enabledTools: ["bash", "read"],
@@ -347,6 +348,7 @@ describe("ProviderRunInput 接口", () => {
     expect(input.systemPrompt).toBe("System prompt");
     expect(input.thinkingLevel).toBe("medium");
     expect(input.toolExecutionMode).toBe("parallel");
+    expect(input.historyEntryId).toBe("hist-1");
   });
 
   it("应该接受回调函数", () => {

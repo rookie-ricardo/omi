@@ -21,7 +21,10 @@
   "dependencies": {
     "@omi/agent": "workspace:*",
     "@omi/core": "workspace:*",
-    "@omi/store": "workspace:*"
+    "@omi/prompt": "workspace:*",
+    "@omi/provider": "workspace:*",
+    "@omi/store": "workspace:*",
+    "@omi/tools": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.4.0",

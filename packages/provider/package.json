@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.110",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.112",
     "@mariozechner/pi-ai": "^0.58.4",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@omi/core": "workspace:*",
@@ -29,7 +29,7 @@
     "chalk": "^5.6.2",
     "minimatch": "^10.2.5",
     "minimist": "^1.2.8",
-    "zod": "^3.25.76"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "tsup": "^8.4.0",

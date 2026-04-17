@@ -1,6 +1,7 @@
 import type { AssistantMessage, StopReason } from "@mariozechner/pi-ai";
 import type { Message } from "@mariozechner/pi-ai";
 import type { ProviderConfig } from "@omi/core";
+import type { ModelMessage, ToolResultPart, UserModelMessage } from "ai";
 
 import type { ModelStopReason, ModelUsage } from "../types";
 
@@ -110,44 +111,168 @@ function renderTextLikeContent(content: unknown): string {
   return pieces.join("");
 }
 
-function renderMessageForTranscript(message: Message): string {
+function toModelUserContent(
+  message: Extract<Message, { role: "user" }>,
+): UserModelMessage["content"] {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  const parts = message.content.map((part) => {
+    if (part.type === "text") {
+      return {
+        type: "text" as const,
+        text: part.text,
+      };
+    }
+    return {
+      type: "image" as const,
+      image: part.data,
+      mediaType: part.mimeType,
+    };
+  });
+
+  if (parts.length === 1 && parts[0].type === "text") {
+    return parts[0].text;
+  }
+
+  return parts;
+}
+
+function serializeMessageForFallbackPrompt(message: Message): Record<string, unknown> {
   if (message.role === "user") {
-    const text = renderTextLikeContent(message.content);
-    return text.length > 0 ? `user: ${text}` : "user:";
+    const content = typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : message.content.map((part) => {
+          if (part.type === "text") {
+            return { type: "text", text: part.text };
+          }
+          return { type: "image", mimeType: part.mimeType };
+        });
+    return {
+      role: "user",
+      content,
+    };
   }
 
   if (message.role === "assistant") {
-    const chunks: string[] = [];
-    for (const block of message.content) {
-      if (block.type === "text") {
-        chunks.push(block.text);
-      }
-      if (block.type === "toolCall") {
-        chunks.push(
-          `[tool_call:${block.name} id=${block.id} args=${JSON.stringify(block.arguments ?? {})}]`,
-        );
-      }
-    }
-    return chunks.length > 0 ? `assistant: ${chunks.join("\n")}` : "assistant:";
+    return {
+      role: "assistant",
+      content: message.content.map((part) => {
+        if (part.type === "text") {
+          return { type: "text", text: part.text };
+        }
+        if (part.type === "thinking") {
+          return { type: "thinking", text: part.thinking };
+        }
+        return {
+          type: "tool_call",
+          id: part.id,
+          name: part.name,
+          arguments: part.arguments ?? {},
+        };
+      }),
+    };
   }
 
-  const toolText = renderTextLikeContent(message.content);
-  const toolDetails = typeof message.details === "undefined" ? "" : ` details=${JSON.stringify(message.details)}`;
-  const base = `tool_result:${message.toolName} id=${message.toolCallId} error=${message.isError}`;
-  if (toolText.length > 0) {
-    return `${base} output=${toolText}${toolDetails}`;
-  }
-  return `${base}${toolDetails}`;
+  return {
+    role: "tool_result",
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    isError: message.isError,
+    output: renderTextLikeContent(message.content),
+    details: typeof message.details === "undefined" ? null : message.details,
+  };
 }
 
-export function buildSingleTurnPrompt(prompt: string, historyMessages: Message[]): string {
-  if (historyMessages.length === 0) {
-    return prompt;
+function buildToolResultOutput(message: Extract<Message, { role: "toolResult" }>): ToolResultPart["output"] {
+  const renderedText = renderTextLikeContent(message.content);
+  const isTextOnly = message.content.every((part) => part.type === "text");
+
+  if (isTextOnly && typeof message.details === "undefined" && !message.isError) {
+    return {
+      type: "text",
+      value: renderedText,
+    };
   }
 
-  const transcript = historyMessages.map((message) => renderMessageForTranscript(message)).join("\n\n");
-  if (prompt.trim().length === 0) {
-    return transcript;
+  return {
+    type: "json",
+    value: {
+      outputText: renderedText,
+      hasNonTextContent: !isTextOnly,
+      details: typeof message.details === "undefined" ? null : message.details,
+      isError: message.isError,
+    },
+  };
+}
+
+export function buildModelMessages(prompt: string, historyMessages: Message[]): ModelMessage[] {
+  const messages: ModelMessage[] = [];
+
+  for (const message of historyMessages) {
+    if (message.role === "user") {
+      messages.push({
+        role: "user",
+        content: toModelUserContent(message),
+      });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      messages.push({
+        role: "assistant",
+        content: message.content.map((part) => {
+          if (part.type === "text") {
+            return { type: "text", text: part.text };
+          }
+          if (part.type === "thinking") {
+            return { type: "reasoning", text: part.thinking };
+          }
+          return {
+            type: "tool-call",
+            toolCallId: part.id,
+            toolName: part.name,
+            input: part.arguments ?? {},
+          };
+        }),
+      });
+      continue;
+    }
+
+    messages.push({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          output: buildToolResultOutput(message),
+        },
+      ],
+    });
   }
-  return `${transcript}\n\nuser: ${prompt}`;
+
+  if (prompt.trim().length > 0) {
+    messages.push({
+      role: "user",
+      content: prompt,
+    });
+  }
+
+  return messages;
+}
+
+/**
+ * Claude Agent SDK currently accepts prompt text (or streamed user input) instead of
+ * fully-structured model messages. Keep a deterministic fallback rendering so history
+ * remains machine-readable when we must bridge through text.
+ */
+export function buildSingleTurnPrompt(prompt: string, historyMessages: Message[]): string {
+  const normalizedPrompt = prompt.trim().length > 0 ? prompt : "";
+  return JSON.stringify({
+    format: "omi-history-v1",
+    history: historyMessages.map((message) => serializeMessageForFallbackPrompt(message)),
+    currentUserMessage: normalizedPrompt,
+  });
 }

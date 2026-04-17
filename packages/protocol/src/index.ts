@@ -18,7 +18,7 @@ import {
 export const rpcRequestSchema = z.object({
   id: z.string(),
   method: z.string(),
-  params: z.record(z.unknown()).default({}),
+  params: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const rpcSuccessSchema = z.object({
@@ -99,7 +99,7 @@ export const sessionHistoryContinueParamsSchema = z.object({
   prompt: z.string().min(1),
   taskId: z.string().nullable().default(null),
   checkpointSummary: z.string().nullable().default(null),
-  checkpointDetails: z.record(z.unknown()).nullable().default(null),
+  checkpointDetails: z.record(z.string(), z.unknown()).nullable().default(null),
 });
 
 export const sessionPermissionModeSchema = z.enum(["default", "full-access"]);
@@ -294,7 +294,7 @@ export const runnerCommandSchema = z.enum(Object.keys(commandMap) as [RunnerComm
 
 export const runnerEnvelopeSchema = z.object({
   command: z.string(),
-  payload: z.record(z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const sessionDetailSchema = z.object({

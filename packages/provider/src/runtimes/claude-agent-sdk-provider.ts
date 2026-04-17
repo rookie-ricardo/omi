@@ -4,6 +4,7 @@ import {
   tool as createClaudeMcpTool,
   type Options as ClaudeAgentSdkOptions,
   type SDKMessage as ClaudeAgentSdkMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
@@ -29,6 +30,17 @@ interface ClaudeAgentSdkDeps {
 const DEFAULT_DEPS: ClaudeAgentSdkDeps = {
   query,
 };
+
+const DEFAULT_TOOL_PRESET: NonNullable<ClaudeAgentSdkOptions["tools"]> = {
+  type: "preset",
+  preset: "claude_code",
+};
+
+const DEFAULT_SETTING_SOURCES: NonNullable<ClaudeAgentSdkOptions["settingSources"]> = [
+  "project",
+  "local",
+  "user",
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -89,8 +101,66 @@ function renderToolOutputText(output: unknown): string {
   return JSON.stringify(output ?? "");
 }
 
+function mapClaudeToolName(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (trimmed.length === 0) {
+    return "unknown_tool";
+  }
+  if (trimmed.includes("__")) {
+    return trimmed.toLowerCase();
+  }
+  const snake = trimmed
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[\s-]+/g, "_")
+    .toLowerCase();
+  return snake;
+}
+
+function coerceToolInput(input: unknown, blockedPath: string | undefined): Record<string, unknown> {
+  const normalized = isRecord(input) ? { ...input } : {};
+  if (typeof blockedPath === "string" && blockedPath.length > 0) {
+    const existingPath = normalized.path ?? normalized.filePath ?? normalized.file_path;
+    if (typeof existingPath !== "string" || existingPath.length === 0) {
+      normalized.path = blockedPath;
+    }
+  }
+  return normalized;
+}
+
+function buildSingleUserMessageStream(prompt: string): AsyncIterable<SDKUserMessage> {
+  return (async function* () {
+    yield {
+      type: "user",
+      parent_tool_use_id: null,
+      message: {
+        role: "user",
+        content: prompt,
+      },
+    };
+  })();
+}
+
+function mapThinkingLevelToClaudeEffort(
+  level: ProviderRunInput["thinkingLevel"],
+): NonNullable<ClaudeAgentSdkOptions["effort"]> | undefined {
+  if (level === "minimal" || level === "low") {
+    return "low";
+  }
+  if (level === "medium") {
+    return "medium";
+  }
+  if (level === "high") {
+    return "high";
+  }
+  if (level === "xhigh") {
+    return "max";
+  }
+  return undefined;
+}
+
 export class ClaudeAgentSdkProvider implements ProviderAdapter {
   private readonly abortControllers = new Map<string, AbortController>();
+  private readonly sessionCursors = new Map<string, string>();
 
   constructor(private readonly deps: ClaudeAgentSdkDeps = DEFAULT_DEPS) {}
 
@@ -105,6 +175,9 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     let stopReason: ModelStopReason = "end_turn";
     let error: string | null = null;
     let structuredOutput: unknown = undefined;
+    let providerMeta: Record<string, unknown> | undefined;
+    let observedSessionId: string | null = this.sessionCursors.get(input.sessionId) ?? null;
+    let resultSnapshot: Record<string, unknown> | null = null;
     let toolCallCounter = 0;
     const emitToolLifecycle = async (
       event: Omit<Parameters<NonNullable<ProviderRunInput["onToolLifecycle"]>>[0], "runId" | "sessionId">,
@@ -114,6 +187,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       }
       const control = await input.onToolLifecycle({
         ...event,
+        source: event.source ?? "runtime_native",
         runId: input.runId,
         sessionId: input.sessionId,
       });
@@ -230,6 +304,95 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     });
 
     const requestedOptions = (isRecord(input.claudeOptions) ? input.claudeOptions : {}) as ClaudeAgentSdkOptions;
+    const runtimeManagedToolNames = new Set(runnableTools.map((tool) => tool.name));
+    const userCanUseTool = requestedOptions.canUseTool;
+    if (input.historyEntryId) {
+      this.sessionCursors.delete(input.sessionId);
+    }
+    const hasExplicitSessionCursor = Boolean(
+      requestedOptions.resume || requestedOptions.continue || requestedOptions.sessionId,
+    );
+    const autoResumeSessionId = !hasExplicitSessionCursor && input.historyEntryId == null
+      ? (this.sessionCursors.get(input.sessionId) ?? null)
+      : null;
+
+    const runtimeCanUseTool: NonNullable<ClaudeAgentSdkOptions["canUseTool"]> = async (
+      rawToolName,
+      rawInput,
+      permissionOptions,
+    ) => {
+      if (runtimeManagedToolNames.has(rawToolName)) {
+        if (!userCanUseTool) {
+          return { behavior: "allow" };
+        }
+        return userCanUseTool(rawToolName, rawInput, permissionOptions);
+      }
+
+      const toolName = mapClaudeToolName(rawToolName);
+      const toolCallId = typeof permissionOptions?.toolUseID === "string" && permissionOptions.toolUseID.length > 0
+        ? permissionOptions.toolUseID
+        : `${input.runId}:builtin:${toolName}:${++toolCallCounter}`;
+      const toolInput = coerceToolInput(rawInput, permissionOptions?.blockedPath);
+
+      const requested = await emitToolLifecycle({
+        stage: "requested",
+        source: "provider_builtin",
+        rawToolName,
+        toolCallId,
+        toolName,
+        input: toolInput,
+      });
+      if (typeof requested.allowExecution !== "boolean") {
+        throw new Error(
+          `Tool lifecycle handler must return { allowExecution: boolean } for requested stage (${toolName}).`,
+        );
+      }
+      if (!requested.allowExecution) {
+        return {
+          behavior: "deny" as const,
+          message: requested.error ?? `Tool '${toolName}' denied by runtime policy.`,
+        };
+      }
+      if (typeof requested.requiresApproval !== "boolean") {
+        throw new Error(
+          `Tool lifecycle handler must return { requiresApproval: boolean } when execution is allowed (${toolName}).`,
+        );
+      }
+      if (requested.requiresApproval) {
+        const approval = await emitToolLifecycle({
+          stage: "approval_requested",
+          source: "provider_builtin",
+          rawToolName,
+          toolCallId,
+          toolName,
+          input: toolInput,
+        });
+        if (approval.decision !== "approved" && approval.decision !== "rejected") {
+          throw new Error(
+            `Tool lifecycle handler must return decision for approval_requested stage (${toolName}).`,
+          );
+        }
+        if (approval.decision === "rejected") {
+          return {
+            behavior: "deny" as const,
+            message: approval.error ?? `Tool '${toolName}' rejected by user.`,
+          };
+        }
+      }
+
+      const lifecycleAllow = {
+        behavior: "allow" as const,
+      };
+      if (!userCanUseTool) {
+        return lifecycleAllow;
+      }
+      const userDecision = await userCanUseTool(rawToolName, rawInput, permissionOptions);
+      if (userDecision.behavior === "deny") {
+        return userDecision;
+      }
+      return userDecision;
+    };
+
     const requestedEnv = requestedOptions.env ?? {};
     const env = {
       ...process.env,
@@ -240,28 +403,54 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
           ? input.providerConfig.baseUrl
           : (requestedEnv.ANTHROPIC_BASE_URL ?? process.env.ANTHROPIC_BASE_URL),
     };
+    const inferredEffort = mapThinkingLevelToClaudeEffort(input.thinkingLevel);
     const options: ClaudeAgentSdkOptions = {
       ...requestedOptions,
       cwd: input.workspaceRoot,
       model: input.providerConfig.model,
       systemPrompt: input.systemPrompt ?? requestedOptions.systemPrompt,
       maxTurns: requestedOptions.maxTurns ?? 20,
-      tools: requestedOptions.tools ?? [],
+      tools: requestedOptions.tools ?? DEFAULT_TOOL_PRESET,
+      settingSources: requestedOptions.settingSources ?? DEFAULT_SETTING_SOURCES,
+      includePartialMessages: requestedOptions.includePartialMessages ?? true,
+      promptSuggestions: requestedOptions.promptSuggestions ?? true,
+      agentProgressSummaries: requestedOptions.agentProgressSummaries ?? true,
+      includeHookEvents: requestedOptions.includeHookEvents ?? false,
+      ...(typeof requestedOptions.effort === "undefined" && inferredEffort
+        ? { effort: inferredEffort }
+        : {}),
+      ...(input.thinkingLevel === "off" &&
+          typeof requestedOptions.thinking === "undefined" &&
+          typeof requestedOptions.maxThinkingTokens === "undefined"
+        ? { thinking: { type: "disabled" as const } }
+        : {}),
       mcpServers: {
         ...(requestedOptions.mcpServers ?? {}),
         omi: mcpServer,
       },
+      canUseTool: runtimeCanUseTool,
       abortController,
       env,
     };
+    if (autoResumeSessionId) {
+      options.resume = autoResumeSessionId;
+    }
+
+    const usingNativeSessionPrompt = Boolean(options.resume || options.continue || options.sessionId);
+    const promptText = usingNativeSessionPrompt
+      ? input.prompt
+      : buildSingleTurnPrompt(input.prompt, input.historyMessages);
 
     const queryStream = this.deps.query({
-      prompt: buildSingleTurnPrompt(input.prompt, input.historyMessages),
+      prompt: buildSingleUserMessageStream(promptText),
       options,
     });
 
     try {
       for await (const message of queryStream) {
+        if (typeof (message as { session_id?: unknown }).session_id === "string") {
+          observedSessionId = (message as { session_id: string }).session_id;
+        }
         try {
           await input.onSdkMessage?.(message as ClaudeAgentSdkMessage);
         } catch {
@@ -288,6 +477,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
         }
 
         if (message.type === "result") {
+          resultSnapshot = message as unknown as Record<string, unknown>;
           usage = parseResultUsage(message.usage);
           if (typeof message.stop_reason === "string" || message.stop_reason === null) {
             stopReason = mapClaudeStopReasonToModel(message.stop_reason);
@@ -321,6 +511,25 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       await mcpServer.instance.close();
     }
 
+    if (observedSessionId && observedSessionId.length > 0) {
+      this.sessionCursors.set(input.sessionId, observedSessionId);
+    }
+
+    providerMeta = {
+      runtime: "claude-agent-sdk",
+      sessionId: observedSessionId,
+      resumeUsed: typeof options.resume === "string" ? options.resume : null,
+      promptMode: usingNativeSessionPrompt ? "native_session" : "fallback_envelope",
+      resultSubtype: typeof resultSnapshot?.subtype === "string" ? resultSnapshot.subtype : null,
+      numTurns: typeof resultSnapshot?.num_turns === "number" ? resultSnapshot.num_turns : null,
+      totalCostUsd: typeof resultSnapshot?.total_cost_usd === "number" ? resultSnapshot.total_cost_usd : null,
+      terminalReason: typeof resultSnapshot?.terminal_reason === "string" ? resultSnapshot.terminal_reason : null,
+      modelUsage: isRecord(resultSnapshot?.modelUsage) ? resultSnapshot.modelUsage : null,
+      permissionDenials: Array.isArray(resultSnapshot?.permission_denials) ? resultSnapshot.permission_denials : null,
+      deferredToolUse: isRecord(resultSnapshot?.deferred_tool_use) ? resultSnapshot.deferred_tool_use : null,
+      fastModeState: isRecord(resultSnapshot?.fast_mode_state) ? resultSnapshot.fast_mode_state : null,
+    };
+
     if (assistantText.length === 0 && fallbackAssistantText.length > 0) {
       assistantText = fallbackAssistantText;
     }
@@ -339,6 +548,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       usage,
       error,
       structuredOutput,
+      providerMeta,
     };
   }
 

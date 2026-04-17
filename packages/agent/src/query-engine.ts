@@ -93,8 +93,6 @@ export interface QueryEngineDeps {
   contextPipelineConfig?: Partial<ContextPipelineConfig>;
   /** Cost tracker for token/USD budget enforcement. */
   costTracker?: CostTracker;
-  /** Hook registry for lifecycle event interception. */
-  hookRegistry?: import("@omi/extensions").HookRegistry;
 }
 
 import {
@@ -210,7 +208,6 @@ export class QueryEngine {
   private recoveryEngine: RecoveryEngine | null = null;
   private readonly planStateManager = getPlanStateManager();
   private readonly costTracker: CostTracker | null;
-  private readonly hookRegistry: import("@omi/extensions").HookRegistry | null;
   private abortController: AbortController | null = null;
   private readonly pendingApprovals = new Map<string, { runId: string; resolve: (decision: "approved" | "rejected") => void }>();
   private readonly bufferedApprovalDecisions = new Map<string, "approved" | "rejected">();
@@ -224,7 +221,6 @@ export class QueryEngine {
       .withDenialTracker(this.denialTracker)
       .build();
     this.costTracker = deps.costTracker ?? null;
-    this.hookRegistry = deps.hookRegistry ?? null;
   }
 
   snapshot(): QueryLoopSnapshot {
@@ -664,10 +660,12 @@ export class QueryEngine {
       workspaceRoot: this.deps.workspaceRoot,
       prompt: effectivePrompt,
       historyMessages: llmMessages,
+      historyEntryId: input.historyEntryId,
       systemPrompt,
       providerConfig,
       enabledTools: resolvedToolNames,
       tools: tools.filter(t => resolvedToolNames.includes(t.name)),
+      thinkingLevel: this.resolveThinkingLevel(),
       toolExecutionMode: resolveToolExecutionMode(
         resolvedSkill?.enabledToolNames as ToolName[] | undefined,
       ),
@@ -709,6 +707,18 @@ export class QueryEngine {
       });
     }
 
+    if (result.providerMeta && typeof result.providerMeta === "object") {
+      this.emitEvent({
+        type: "run.provider_meta",
+        payload: {
+          runId: input.run.id,
+          sessionId: input.session.id,
+          provider: providerConfig.name,
+          meta: result.providerMeta,
+        },
+      });
+    }
+
     // Check if run was canceled in DB during the call
     if (this.deps.database.getRun(input.run.id)?.status === "canceled") {
       throw new Error("Run was canceled");
@@ -726,6 +736,21 @@ export class QueryEngine {
       return undefined;
     }
     return options;
+  }
+
+  private resolveThinkingLevel(): Parameters<ProviderAdapter["run"]>[0]["thinkingLevel"] {
+    const configured = this.deps.settingsManager?.getDefaultThinkingLevel?.();
+    if (
+      configured === "off" ||
+      configured === "minimal" ||
+      configured === "low" ||
+      configured === "medium" ||
+      configured === "high" ||
+      configured === "xhigh"
+    ) {
+      return configured;
+    }
+    return undefined;
   }
 
   private async handleProviderSdkMessage(params: {
@@ -755,9 +780,65 @@ export class QueryEngine {
       return;
     }
 
+    if (messageType === "result") {
+      this.emitEvent({
+        type: "run.sdk_result",
+        payload: {
+          runId,
+          sessionId,
+          subtype,
+          stopReason: typeof message.stop_reason === "string" ? message.stop_reason : null,
+          terminalReason: typeof message.terminal_reason === "string" ? message.terminal_reason : null,
+          numTurns: typeof message.num_turns === "number" ? message.num_turns : null,
+          totalCostUsd: typeof message.total_cost_usd === "number" ? message.total_cost_usd : null,
+          deferredToolUse: "deferred_tool_use" in message
+            ? (message as Record<string, unknown>).deferred_tool_use
+            : null,
+          raw: message,
+        },
+      });
+      return;
+    }
+
     if (messageType === "rate_limit_event") {
       this.emitEvent({
         type: "run.rate_limit",
+        payload: {
+          runId,
+          sessionId,
+          raw: message,
+        },
+      });
+      return;
+    }
+
+    if (messageType === "tool_progress") {
+      this.emitEvent({
+        type: "run.tool_progress",
+        payload: {
+          runId,
+          sessionId,
+          raw: message,
+        },
+      });
+      return;
+    }
+
+    if (messageType === "tool_use_summary") {
+      this.emitEvent({
+        type: "run.tool_use_summary",
+        payload: {
+          runId,
+          sessionId,
+          raw: message,
+        },
+      });
+      return;
+    }
+
+    if (messageType === "stream_event") {
+      this.emitEvent({
+        type: "run.sdk_stream_event",
         payload: {
           runId,
           sessionId,
@@ -781,9 +862,42 @@ export class QueryEngine {
       return;
     }
 
-    if (messageType === "system" && subtype && HOOK_MESSAGE_SUBTYPES.has(subtype)) {
+    if (messageType === "system" && subtype) {
+      if (HOOK_MESSAGE_SUBTYPES.has(subtype)) {
+        this.emitEvent({
+          type: "run.hook",
+          payload: {
+            runId,
+            sessionId,
+            subtype,
+            raw: message,
+          },
+        });
+        return;
+      }
+
+      const systemEventBySubtype: Record<string, string> = {
+        init: "run.sdk_init",
+        status: "run.sdk_status",
+        compact_boundary: "run.sdk_compact_boundary",
+        local_command_output: "run.local_command_output",
+        plugin_install: "run.plugin_install",
+        task_started: "run.task_started",
+        task_progress: "run.task_progress",
+        task_updated: "run.task_updated",
+        task_notification: "run.task_notification",
+        session_state_changed: "run.session_state_changed",
+        notification: "run.notification",
+        files_persisted: "run.files_persisted",
+        memory_recall: "run.memory_recall",
+        elicitation_complete: "run.elicitation_complete",
+      };
+      const mappedEvent = systemEventBySubtype[subtype];
+      if (!mappedEvent) {
+        return;
+      }
       this.emitEvent({
-        type: "run.hook",
+        type: mappedEvent,
         payload: {
           runId,
           sessionId,
@@ -791,6 +905,7 @@ export class QueryEngine {
           raw: message,
         },
       });
+      return;
     }
   }
 
@@ -859,35 +974,14 @@ export class QueryEngine {
     const toolCallId = event.toolCallId;
     const toolName = event.toolName;
     const toolInput = event.input;
+    const providerBuiltInTool = event.source === "provider_builtin";
 
     const toolDef = tools.find((tool) => tool.name === toolName);
-    if (!toolDef) {
+    if (!toolDef && !providerBuiltInTool) {
       return {
         allowExecution: false,
         error: `Tool '${toolName}' is not enabled for this run.`,
       };
-    }
-
-    if (this.hookRegistry?.hasHooks("PreToolUse")) {
-      const hookOutputs = await this.hookRegistry.execute("PreToolUse", {
-        event: "PreToolUse",
-        toolName,
-        toolInput,
-        sessionId,
-        cwd: this.deps.workspaceRoot,
-      });
-      const { shouldBlock, getBlockReason } = await import("@omi/extensions");
-      if (shouldBlock(hookOutputs)) {
-        const reason = getBlockReason(hookOutputs) ?? `Tool '${toolName}' blocked by PreToolUse hook.`;
-        this.emitEvent({
-          type: "run.tool_denied",
-          payload: { runId, sessionId, toolName, reason, source: "hook" },
-        });
-        return {
-          allowExecution: false,
-          error: reason,
-        };
-      }
     }
 
     const planMode = this.isPlanMode();
@@ -957,7 +1051,16 @@ export class QueryEngine {
 
     this.emitEvent({
       type: "run.tool_requested",
-      payload: { runId, sessionId, toolCallId, toolName, requiresApproval: needsApproval, input: toolInput },
+      payload: {
+        runId,
+        sessionId,
+        toolCallId,
+        toolName,
+        rawToolName: event.rawToolName ?? toolName,
+        source: event.source ?? "runtime_native",
+        requiresApproval: needsApproval,
+        input: toolInput,
+      },
     });
 
     await extensionRunner.emit({
@@ -1044,19 +1147,6 @@ export class QueryEngine {
       type: "run.tool_finished",
       payload: { runId, sessionId, toolCallId, toolName, output: toolOutput, isError },
     });
-
-    if (this.hookRegistry?.hasHooks("PostToolUse") || this.hookRegistry?.hasHooks("PostToolUseFailure")) {
-      const hookEvent = isError ? "PostToolUseFailure" : "PostToolUse";
-      void this.hookRegistry.execute(hookEvent as import("@omi/extensions").HookEvent, {
-        event: hookEvent,
-        toolName,
-        toolOutput,
-        toolUseId: toolCallId,
-        sessionId,
-        cwd: this.deps.workspaceRoot,
-        error: isError ? (event.error ?? JSON.stringify(toolOutput)) : undefined,
-      });
-    }
 
     if (!isError && typeof toolOutput === "object" && toolOutput !== null) {
       const details =

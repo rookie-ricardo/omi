@@ -23,6 +23,11 @@ export interface ProviderRunInput {
   workspaceRoot: string;
   prompt: string;
   historyMessages: Message[];
+  /**
+   * Optional history cursor used by branching/continuation flows.
+   * Runtimes can use this to decide whether native session resume is safe.
+   */
+  historyEntryId?: string | null;
   systemPrompt?: string;
   providerConfig: ProviderConfig;
   enabledTools?: ToolName[];
@@ -69,6 +74,14 @@ export interface ProviderToolLifecycleEvent {
   toolCallId: string;
   toolName: string;
   input: Record<string, unknown>;
+  /**
+   * Tool source category for runtimes that mix wrapped tools and provider-native tools.
+   */
+  source?: "runtime_native" | "provider_builtin";
+  /**
+   * Original provider tool name when normalized toolName is used internally.
+   */
+  rawToolName?: string;
   output?: unknown;
   error?: string;
 }
@@ -87,6 +100,7 @@ export interface ProviderRunResult {
   usage: ModelUsage;
   error: string | null;
   structuredOutput?: unknown;
+  providerMeta?: Record<string, unknown>;
 }
 
 // Standard thinking levels

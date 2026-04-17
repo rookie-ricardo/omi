@@ -94,7 +94,7 @@ export const toolCallSchema = z.object({
   taskId: z.string().nullable(),
   toolName: z.string(),
   approvalState: z.enum(["pending", "approved", "rejected", "not_required"]),
-  input: z.record(z.any()),
+  input: z.record(z.string(), z.any()),
   output: z.unknown().nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
@@ -136,7 +136,7 @@ export const sessionHistoryEntrySchema = z.object({
   kind: sessionHistoryEntryKindSchema,
   messageId: z.string().nullable().default(null),
   summary: z.string().nullable().default(null),
-  details: z.record(z.any()).nullable().default(null),
+  details: z.record(z.string(), z.any()).nullable().default(null),
   branchId: z.string().nullable().default(null),
   lineageDepth: z.number().default(0),
   originRunId: z.string().nullable().default(null),
@@ -149,7 +149,7 @@ export const eventRecordSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
   type: z.string(),
-  payload: z.record(z.any()),
+  payload: z.record(z.string(), z.any()),
   createdAt: z.string(),
 });
 
@@ -166,7 +166,7 @@ export const skillDescriptorSchema = z.object({
   description: z.string(),
   license: z.string().nullable().default(null),
   compatibility: z.string().nullable().default(null),
-  metadata: z.record(z.string()).default({}),
+  metadata: z.record(z.string(), z.string()).default({}),
   allowedTools: z.array(z.string()).default([]),
   body: z.string(),
   source: skillSourceSchema,
@@ -246,7 +246,7 @@ export const runCheckpointSchema = z.object({
   runId: z.string(),
   sessionId: z.string(),
   phase: runCheckpointPhaseSchema,
-  payload: z.record(z.any()).default({}),
+  payload: z.record(z.string(), z.any()).default({}),
   createdAt: z.string(),
 });
 
