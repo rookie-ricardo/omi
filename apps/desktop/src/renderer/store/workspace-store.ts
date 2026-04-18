@@ -1353,7 +1353,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       }
     }
 
-    if (event.type === "run.tool_finished" && targetSessionId) {
+    if ((event.type === "run.tool_finished" || event.type === "run.tool_failed") && targetSessionId) {
       const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
       if (toolCallId) {
         set((state) => ({

@@ -5,6 +5,7 @@ import type {
   Session,
   Task,
   ToolCall,
+  RunnerEventEnvelope,
 } from "@omi/core";
 import type { AppStore } from "@omi/store";
 import type { ImageContent } from "@mariozechner/pi-ai";
@@ -28,11 +29,14 @@ import {
 } from "@omi/provider";
 import {
   createAllTools,
+  createDiscoverSkillsTool,
   listBuiltInToolNames,
   SAFE_TOOL_NAMES,
   runWithToolRuntimeContext,
   type ToolRuntimeContext,
 } from "@omi/tools";
+
+import { searchSkills } from "./skills/discovery";
 
 import type { ResourceLoader } from "./resource-loader";
 import type { SessionRuntime } from "./session-manager";
@@ -47,11 +51,6 @@ import {
 // ============================================================================
 // Types
 // ============================================================================
-
-export interface RunnerEventEnvelope {
-  type: string;
-  payload: Record<string, unknown>;
-}
 
 export type SessionPermissionMode = "default" | "full-access";
 
@@ -654,7 +653,24 @@ export class AgentSession {
 
       // 6. Build tools
       const tools = Object.values(createAllTools(this.workspaceRoot));
-      const enabledTools = listBuiltInToolNames();
+      const workspaceRoot = this.workspaceRoot;
+      tools.push(
+        createDiscoverSkillsTool({
+          workspaceRootFactory: () => workspaceRoot,
+          searchSkills: async (root, query) => {
+            const matches = await searchSkills(root, query);
+            return matches.map((m) => ({
+              name: m.name,
+              description: m.description,
+              compatibility: m.compatibility ?? null,
+              allowedTools: m.allowedTools,
+              body: m.body,
+              score: m.score,
+            }));
+          },
+        }),
+      );
+      const enabledTools = [...listBuiltInToolNames(), "discover_skills"];
 
       // 7. Build effective prompt (with context files)
       const effectivePrompt = buildEffectivePrompt(prompt, contextFiles, resolvedSkill);
@@ -732,16 +748,17 @@ export class AgentSession {
       }
 
       // 12. Emit completion
-      this.emitAndPersist(run.id, session.id, {
-        type: isError ? "run.failed" : "run.completed",
-        payload: {
-          runId: run.id,
-          sessionId: session.id,
-          ...(isError ? { error: result.error } : {}),
-          usage: result.usage,
-          stopReason: result.stopReason,
-        },
-      });
+      if (isError) {
+        this.emitAndPersist(run.id, session.id, {
+          type: "run.failed",
+          payload: { runId: run.id, sessionId: session.id, error: result.error! },
+        });
+      } else {
+        this.emitAndPersist(run.id, session.id, {
+          type: "run.completed",
+          payload: { runId: run.id, sessionId: session.id, usage: result.usage, stopReason: result.stopReason },
+        });
+      }
 
       // 13. Persist runtime snapshot
       this.persistRuntimeSnapshot(session.id);
@@ -822,7 +839,7 @@ export class AgentSession {
           sessionId: session.id,
           toolCallId: event.toolCallId,
           toolName: event.toolName,
-          error: event.error,
+          error: event.error ?? "Unknown tool error",
         },
       });
       return {};
@@ -1006,12 +1023,17 @@ export class AgentSession {
 
     this.options.runtime.failRun(run.id);
 
-    this.emitAndPersist(run.id, session.id, {
-      type: canceled ? "run.canceled" : "run.failed",
-      payload: canceled
-        ? { runId: run.id, sessionId: session.id }
-        : { runId: run.id, sessionId: session.id, error: message },
-    });
+    if (canceled) {
+      this.emitAndPersist(run.id, session.id, {
+        type: "run.canceled",
+        payload: { runId: run.id, sessionId: session.id },
+      });
+    } else {
+      this.emitAndPersist(run.id, session.id, {
+        type: "run.failed",
+        payload: { runId: run.id, sessionId: session.id, error: message },
+      });
+    }
 
     if (!canceled) {
       this.options.database.createReviewRequest({
