@@ -13,7 +13,6 @@ const RUNTIME_PACKAGE_NAMES = new Set([
   "@omi/core",
   "@omi/memory",
   "@omi/prompt",
-  "@omi/protocol",
   "@omi/provider",
   "@omi/settings",
   "@omi/store",

@@ -6,8 +6,8 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "pnpm run dev:bootstrap && pnpm run dev:watch",
-    "dev:bootstrap": "pnpm --filter @omi/core build && pnpm --filter @omi/protocol build && pnpm --filter @omi/store build && pnpm --filter @omi/provider build && pnpm --filter @omi/memory build && pnpm --filter @omi/prompt build && pnpm --filter @omi/settings build && pnpm --filter @omi/agent build",
-    "dev:watch": "pnpm turbo run dev --concurrency=20 --filter=@omi/core --filter=@omi/protocol --filter=@omi/store --filter=@omi/provider --filter=@omi/tools --filter=@omi/memory --filter=@omi/prompt --filter=@omi/settings --filter=@omi/agent --filter=@omi/desktop",
+    "dev:bootstrap": "pnpm --filter @omi/core build && pnpm --filter @omi/store build && pnpm --filter @omi/provider build && pnpm --filter @omi/memory build && pnpm --filter @omi/prompt build && pnpm --filter @omi/settings build && pnpm --filter @omi/agent build",
+    "dev:watch": "pnpm turbo run dev --concurrency=20 --filter=@omi/core --filter=@omi/store --filter=@omi/provider --filter=@omi/tools --filter=@omi/memory --filter=@omi/prompt --filter=@omi/settings --filter=@omi/agent --filter=@omi/desktop",
     "format": "biome check . --write",
     "ws15:gate": "tsx scripts/ws15-gate.ts",
     "ws15:matrix": "tsx scripts/ws15-gate.ts --matrix-only",

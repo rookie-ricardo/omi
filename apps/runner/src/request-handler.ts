@@ -1,15 +1,7 @@
 import type { AppOrchestrator } from "@omi/agent";
-import type { RunCheckpoint } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
-import type { RpcRequest, RunnerCommandName, RunState } from "@omi/core";
+import type { RpcRequest, RunnerCommandName } from "@omi/core";
 import { parseCommand } from "@omi/core";
-
-interface RunnerPrivateHost {
-  database: {
-    getRun(runId: string): { id: string; sessionId: string } | null;
-    listCheckpoints(runId: string): RunCheckpoint[];
-  };
-}
 
 type RunnerRequestOrchestrator = Pick<
   AppOrchestrator,
@@ -18,11 +10,9 @@ type RunnerRequestOrchestrator = Pick<
   | "listSessions"
   | "getSessionDetail"
   | "getSessionRuntimeState"
-  | "listSessionHistory"
   | "getGitStatus"
   | "getGitDiff"
   | "startRun"
-  | "continueFromHistoryEntry"
   | "cancelRun"
   | "approveTool"
   | "rejectTool"
@@ -68,14 +58,11 @@ export const SUPPORTED_COMMANDS: RunnerCommandName[] = [
   "session.get",
   "session.title.update",
   "session.runtime.get",
-  "session.history.list",
-  "session.history.continue",
   "session.workspace.set",
   "session.permission.set",
   "session.model.switch",
   "run.start",
   "run.cancel",
-  "run.state.get",
   "run.events.subscribe",
   "run.events.unsubscribe",
   "tool.approve",
@@ -126,17 +113,6 @@ async function executeCommand(
         runtime: orchestrator.getSessionRuntimeState(sessionId),
       };
     }
-    case "session.history.list":
-      return orchestrator.listSessionHistory(String(params.sessionId));
-    case "session.history.continue":
-      return orchestrator.continueFromHistoryEntry({
-        sessionId: String(params.sessionId),
-        historyEntryId: params.historyEntryId ? String(params.historyEntryId) : null,
-        taskId: params.taskId ? String(params.taskId) : null,
-        prompt: String(params.prompt),
-        checkpointSummary: params.checkpointSummary ? String(params.checkpointSummary) : null,
-        checkpointDetails: params.checkpointDetails ?? null,
-      });
     case "session.workspace.set":
       return orchestrator.setSessionWorkspaceRoot(
         String(params.sessionId),
@@ -145,7 +121,7 @@ async function executeCommand(
     case "session.permission.set":
       return orchestrator.setSessionPermissionMode(
         String(params.sessionId),
-        String(params.mode) as "default" | "full-access",
+        String(params.mode) as "default" | "yolo",
       );
     case "session.model.switch":
       return orchestrator.switchModel(String(params.sessionId), String(params.providerConfigId));
@@ -161,8 +137,6 @@ async function executeCommand(
       });
     case "run.cancel":
       return orchestrator.cancelRun(String(params.runId));
-    case "run.state.get":
-      return getRunState(orchestrator, String(params.runId));
     case "run.events.subscribe":
       return subscribeRunEvents(
         String(params.runId),
@@ -204,23 +178,6 @@ async function executeCommand(
     default:
       throw new RunnerCommandError("UNSUPPORTED_COMMAND", `Unsupported command: ${method}`);
   }
-}
-
-function getRunnerHost(orchestrator: RunnerRequestOrchestrator): RunnerPrivateHost {
-  return orchestrator as unknown as RunnerPrivateHost;
-}
-
-function getRunState(orchestrator: RunnerRequestOrchestrator, runId: string): RunState {
-  const host = getRunnerHost(orchestrator);
-  const run = host.database.getRun(runId);
-  if (!run) {
-    throw new RunnerCommandError("NOT_FOUND", `Run ${runId} not found`);
-  }
-
-  return {
-    run: run as RunState["run"],
-    checkpoints: host.database.listCheckpoints(runId),
-  };
 }
 
 function subscribeRunEvents(runId: string, events: string[]): {
