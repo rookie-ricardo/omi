@@ -100,9 +100,7 @@ name: Refactor Helper
 description: Assists with code refactoring
 when_to_use: When you need to refactor code
 allowed_tools:
-  - read
-  - edit
-  - bash
+  - skill
 ---
 Use refactoring patterns and best practices.`,
       );
@@ -115,7 +113,8 @@ Use refactoring patterns and best practices.`,
 
       expect(resolved).not.toBeNull();
       expect(resolved?.skill.name).toBe("Refactor Helper");
-      expect(resolved?.enabledToolNames).toContain("read");
+      // Only OMI-registered tools (skill) pass the isBuiltInTool filter
+      expect(resolved?.enabledToolNames).toContain("skill");
     });
 
     it("should return null when no matching skill", async () => {
@@ -138,9 +137,9 @@ Use refactoring patterns and best practices.`,
 name: Tool Skill
 description: Tests tool filtering
 allowed_tools:
-  - read
+  - skill
   - nonexistent_tool
-  - bash
+  - read
 ---
 Body.`,
       );
@@ -152,9 +151,11 @@ Body.`,
       );
 
       expect(resolved).not.toBeNull();
-      expect(resolved?.enabledToolNames).toContain("read");
-      expect(resolved?.enabledToolNames).toContain("bash");
+      // Only "skill" is a recognized OMI built-in tool
+      expect(resolved?.enabledToolNames).toContain("skill");
       expect(resolved?.enabledToolNames).not.toContain("nonexistent_tool");
+      // "read" is an SDK tool, not in OMI registry, so it's filtered out
+      expect(resolved?.enabledToolNames).not.toContain("read");
       expect(resolved?.diagnostics.length).toBeGreaterThan(0);
     });
   });

@@ -22,13 +22,13 @@ describe("skills", () => {
       join(homeRoot, ".claude", "skills", "review"),
       "Repo Review",
       "Review repositories carefully.",
-      "allowed_tools:\n  - read\n  - grep",
+      "allowed_tools:\n  - skill\n  - grep",
     );
     writeSkill(
       join(workspaceRoot, ".agent", "skills", "review"),
       "Repo Review",
       "Review this workspace with stronger instructions.",
-      "allowed_tools:\n  - read\n  - bash",
+      "allowed_tools:\n  - skill\n  - bash",
     );
 
     const skills = await listSkills(workspaceRoot);
@@ -38,9 +38,9 @@ describe("skills", () => {
     const userSkill = skills.find((skill) => skill.source.scope === "user");
 
     expect(workspaceSkill?.source.client).toBe("agent");
-    expect(workspaceSkill?.allowedTools).toEqual(["read", "bash"]);
+    expect(workspaceSkill?.allowedTools).toEqual(["skill", "bash"]);
     expect(userSkill?.source.client).toBe("claude");
-    expect(userSkill?.allowedTools).toEqual(["read", "grep"]);
+    expect(userSkill?.allowedTools).toEqual(["skill", "grep"]);
   });
 
   it("searches and resolves the best matching skill without blocking", async () => {
@@ -52,7 +52,7 @@ describe("skills", () => {
       join(workspaceRoot, ".agent", "skills", "git-inspector"),
       "Git Inspector",
       "Inspect git changes and diff previews.",
-      "allowed_tools:\n  - read\n  - bash",
+      "allowed_tools:\n  - skill",
     );
 
     const matches = await searchSkills(workspaceRoot, "show me git diff");
@@ -60,7 +60,8 @@ describe("skills", () => {
 
     const resolved = await resolveSkillForPrompt(workspaceRoot, "show me git diff");
     expect(resolved?.skill.name).toBe("Git Inspector");
-    expect(resolved?.enabledToolNames).toEqual(["read", "bash"]);
+    // Only OMI-registered tools pass the filter
+    expect(resolved?.enabledToolNames).toEqual(["skill"]);
     expect(resolved?.diagnostics).toEqual([]);
   });
 
@@ -73,15 +74,16 @@ describe("skills", () => {
       join(workspaceRoot, ".agent", "skills", "repo-review"),
       "Repo Review",
       "Review the repository with precision.",
-      "allowed_tools:\n  - read\n  - rogue_tool\n  - bash",
+      "allowed_tools:\n  - skill\n  - rogue_tool",
     );
 
     const resolved = await resolveSkillForPrompt(workspaceRoot, "review this repo");
-    expect(resolved?.enabledToolNames).toEqual(["read", "bash"]);
+    // Only "skill" is recognized as OMI built-in; "rogue_tool" is filtered out
+    expect(resolved?.enabledToolNames).toEqual(["skill"]);
     expect(resolved?.diagnostics).toEqual([
       "Ignored unsupported skill tools: rogue_tool",
     ]);
-    expect(resolved?.injectedPrompt).toContain("Suggested tools from skill: read, bash");
+    expect(resolved?.injectedPrompt).toContain("Suggested tools from skill: skill");
     expect(resolved?.injectedPrompt).not.toContain("rogue_tool");
   });
 });

@@ -12,15 +12,7 @@ describe("tool surface contract", () => {
     const tools = createAllTools(root);
 
     expect(Object.keys(tools).sort()).toEqual([
-      "bash",
-      "edit",
-      "glob",
-      "grep",
-      "ls",
-      "notebook_edit",
-      "read",
-      "tool.search",
-      "write",
+      "skill",
     ]);
   });
 
@@ -28,6 +20,10 @@ describe("tool surface contract", () => {
     const root = mkdtempSync(join(tmpdir(), "omi-tools-"));
     const tools = createAllTools(root);
 
+    expect(tools["bash"]).toBeUndefined();
+    expect(tools["edit"]).toBeUndefined();
+    expect(tools["read"]).toBeUndefined();
+    expect(tools["write"]).toBeUndefined();
     expect(tools["mcp.resource.list"]).toBeUndefined();
     expect(tools["subagent.spawn"]).toBeUndefined();
     expect(tools["task.create"]).toBeUndefined();

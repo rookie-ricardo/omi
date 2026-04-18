@@ -93,16 +93,23 @@ describe("PlanStateManager", () => {
   it("enforces read-only tool execution in plan mode", () => {
     const context = planMode.enterPlanMode();
 
-    expect(isReadOnlyTool("read")).toBe(true);
-    expect(isReadOnlyTool("ls")).toBe(true);
-    expect(isReadOnlyTool("grep")).toBe(true);
-    expect(isReadOnlyTool("glob")).toBe(true);
+    // Standard tools (read, ls, grep, glob, edit, write, bash) are now
+    // provided by the SDK's claude_code preset. OMI's READ_TOOLS only
+    // contains OMI-registered read-only tools (currently just "skill").
+    // Plan mode enforcement for SDK tools is handled by the SDK runtime.
+    expect(isReadOnlyTool("skill")).toBe(true);
+    expect(isReadOnlyTool("read")).toBe(false);
+    expect(isReadOnlyTool("ls")).toBe(false);
+    expect(isReadOnlyTool("grep")).toBe(false);
+    expect(isReadOnlyTool("glob")).toBe(false);
     expect(isReadOnlyTool("edit")).toBe(false);
     expect(isReadOnlyTool("write")).toBe(false);
     expect(isReadOnlyTool("bash")).toBe(false);
 
-    expect(canExecuteTool("read", "plan")).toBe(true);
-    expect(canExecuteTool("grep", context)).toBe(true);
+    expect(canExecuteTool("skill", "plan")).toBe(true);
+    expect(canExecuteTool("skill", context)).toBe(true);
+    // SDK tools are not tracked in OMI's READ_TOOLS, so canExecuteTool returns false
+    expect(canExecuteTool("read", "plan")).toBe(false);
     expect(canExecuteTool("edit", "plan")).toBe(false);
     expect(canExecuteTool("write", context)).toBe(false);
     expect(canExecuteTool("bash", context)).toBe(false);

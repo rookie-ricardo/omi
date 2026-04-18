@@ -103,6 +103,8 @@ export class AgentSession {
   private activeAbortController: AbortController | null = null;
   /** Pending tool approval resolvers. */
   private readonly pendingApprovals = new Map<string, (decision: "approved" | "rejected") => void>();
+  /** Pre-decisions made before the approval promise was created (handles race conditions). */
+  private readonly preDecisions = new Map<string, "approved" | "rejected">();
 
   constructor(private readonly options: AgentSessionOptions) {
     this.provider = options.provider ?? createProviderAdapter();
@@ -396,6 +398,8 @@ export class AgentSession {
     if (resolver) {
       resolver("approved");
       this.pendingApprovals.delete(toolCallId);
+    } else {
+      this.preDecisions.set(toolCallId, "approved");
     }
     // Also update runtime state
     const runtime = this.options.runtime.snapshot();
@@ -410,10 +414,13 @@ export class AgentSession {
     if (resolver) {
       resolver("rejected");
       this.pendingApprovals.delete(toolCallId);
+    } else {
+      this.preDecisions.set(toolCallId, "rejected");
     }
     const runtime = this.options.runtime.snapshot();
     if (runtime.activeRunId) {
       this.options.runtime.rejectTool(runtime.activeRunId, toolCallId);
+      this.cancelRun(runtime.activeRunId);
     }
     return { toolCallId, decision: "rejected" };
   }
@@ -633,17 +640,54 @@ export class AgentSession {
         payload: { runId: run.id, sessionId: session.id, prompt },
       });
 
-      // 3. Persist user message
-      this.ensureUserPromptPersisted({ sessionId: session.id, runId: run.id, prompt, historyEntryId });
+      // 2b. Write branch checkpoint if continuing from a history entry (BEFORE building history)
+      let effectiveHistoryLeafId = historyEntryId;
+      if (input.historyEntryId && input.checkpointSummary) {
+        const branchId = this.getActiveBranchId(session.id);
+        const parentEntry = this.options.database.getHistoryEntry(input.historyEntryId);
+        const checkpointEntry = this.options.database.addSessionHistoryEntry?.({
+          sessionId: session.id,
+          parentId: input.historyEntryId,
+          kind: "branch_summary",
+          messageId: null,
+          summary: input.checkpointSummary,
+          details: input.checkpointDetails ?? null,
+          branchId,
+          lineageDepth: (parentEntry?.lineageDepth ?? -1) + 1,
+          originRunId: run.id,
+        });
+        // Use the checkpoint as the leaf so its summary appears in the lineage
+        if (checkpointEntry) {
+          effectiveHistoryLeafId = checkpointEntry.id;
+        }
+      }
 
-      // 4. Load resources and build system prompt
+      // 3. Load resources and build system prompt
       await this.options.resources.reload();
       const resolvedSkill = await this.options.resources.resolveSkillForPrompt(prompt);
       const systemPrompt = this.options.resources.buildSystemPrompt(resolvedSkill, this.workspaceRoot);
 
-      // 5. Build history messages (RuntimeMessage[] → LLM Message[])
-      const runtimeMessages = this.buildProviderHistoryMessages(session.id, historyEntryId);
+      // Emit skills resolved
+      if (resolvedSkill) {
+        this.emitAndPersist(run.id, session.id, {
+          type: "run.skills_resolved",
+          payload: {
+            runId: run.id,
+            sessionId: session.id,
+            skillName: resolvedSkill.skill.name,
+            enabledToolNames: resolvedSkill.enabledToolNames,
+          },
+        });
+      }
+
+      // 4. Build history messages BEFORE persisting current prompt
+      // (ensures current run's prompt is not included in history)
+      const runtimeMessages = this.buildProviderHistoryMessages(session.id, effectiveHistoryLeafId);
       const historyMessages = convertRuntimeMessagesToLlm(runtimeMessages);
+
+      // 5. Persist user message and update session latestUserMessage
+      this.ensureUserPromptPersisted({ sessionId: session.id, runId: run.id, prompt, historyEntryId });
+      this.options.database.updateSession(session.id, { latestUserMessage: prompt });
 
       // 6. Build tools
       const tools = Object.values(createAllTools(this.workspaceRoot));
@@ -692,17 +736,18 @@ export class AgentSession {
         ? await runWithToolRuntimeContext(this.options.toolRuntimeContext, doRun)
         : await doRun();
 
-      // 10. Persist assistant message
-      if (assistantText.trim()) {
+      // 10. Resolve final assistant text (prefer streamed deltas, fall back to result)
+      const finalAssistantText = assistantText.trim() ? assistantText : (result.assistantText ?? "");
+      if (finalAssistantText.trim()) {
         const branchId = this.getActiveBranchId(session.id);
         this.options.database.addMessage({
           sessionId: session.id,
           role: "assistant",
-          content: assistantText,
+          content: finalAssistantText,
           branchId,
           originRunId: run.id,
         });
-        this.options.database.updateSession(session.id, { latestAssistantMessage: assistantText });
+        this.options.database.updateSession(session.id, { latestAssistantMessage: finalAssistantText });
       }
 
       // 11. Finalize run
@@ -714,7 +759,7 @@ export class AgentSession {
       this.options.database.updateSession(session.id, {
         status: nextSessionStatus(session.status, isError ? "run_failed" : "run_completed"),
       });
-      this.options.runtime.completeRun(run.id, assistantText);
+      this.options.runtime.completeRun(run.id, finalAssistantText);
 
       // Update task status on completion
       if (task && !isError) {
@@ -746,6 +791,7 @@ export class AgentSession {
     } finally {
       this.activeAbortController = null;
       this.pendingApprovals.clear();
+      this.preDecisions.clear();
     }
   }
 
@@ -769,7 +815,7 @@ export class AgentSession {
 
     if (event.stage === "started") {
       this.emitAndPersist(run.id, session.id, {
-        type: "tool.started",
+        type: "run.tool_started",
         payload: { runId: run.id, sessionId: session.id, toolCallId: event.toolCallId, toolName: event.toolName },
       });
       return {};
@@ -777,7 +823,7 @@ export class AgentSession {
 
     if (event.stage === "progress") {
       this.emitAndPersist(run.id, session.id, {
-        type: "tool.progress",
+        type: "run.tool_progress",
         payload: { runId: run.id, sessionId: session.id, toolCallId: event.toolCallId, toolName: event.toolName },
       });
       return {};
@@ -789,7 +835,7 @@ export class AgentSession {
         error: null,
       });
       this.emitAndPersist(run.id, session.id, {
-        type: "tool.finished",
+        type: "run.tool_finished",
         payload: {
           runId: run.id,
           sessionId: session.id,
@@ -807,7 +853,7 @@ export class AgentSession {
         error: event.error ?? "Unknown tool error",
       });
       this.emitAndPersist(run.id, session.id, {
-        type: "tool.failed",
+        type: "run.tool_failed",
         payload: {
           runId: run.id,
           sessionId: session.id,
@@ -831,6 +877,14 @@ export class AgentSession {
     // Full-access mode: allow everything
     if (this.permissionMode === "full-access") {
       this.persistToolCall(event, run, session, task, "not_required");
+      this.emitAndPersist(run.id, session.id, {
+        type: "run.tool_requested",
+        payload: {
+          runId: run.id, sessionId: session.id,
+          toolCallId: event.toolCallId, toolName: event.toolName,
+          input: event.input, requiresApproval: false,
+        },
+      });
       return { allowExecution: true, requiresApproval: false };
     }
 
@@ -856,11 +910,27 @@ export class AgentSession {
 
     if (result.decision === "ask") {
       this.persistToolCall(event, run, session, task, "pending");
+      this.emitAndPersist(run.id, session.id, {
+        type: "run.tool_requested",
+        payload: {
+          runId: run.id, sessionId: session.id,
+          toolCallId: event.toolCallId, toolName: event.toolName,
+          input: event.input, requiresApproval: true,
+        },
+      });
       return { allowExecution: true, requiresApproval: true };
     }
 
     // allow
     this.persistToolCall(event, run, session, task, "not_required");
+    this.emitAndPersist(run.id, session.id, {
+      type: "run.tool_requested",
+      payload: {
+        runId: run.id, sessionId: session.id,
+        toolCallId: event.toolCallId, toolName: event.toolName,
+        input: event.input, requiresApproval: false,
+      },
+    });
     return { allowExecution: true, requiresApproval: false };
   }
 
@@ -876,7 +946,7 @@ export class AgentSession {
     });
 
     this.emitAndPersist(run.id, session.id, {
-      type: "tool.approval_requested",
+      type: "run.blocked",
       payload: {
         runId: run.id,
         sessionId: session.id,
@@ -886,14 +956,35 @@ export class AgentSession {
       },
     });
 
-    // Wait for user decision via approveTool/rejectTool
-    const decision = await new Promise<"approved" | "rejected">((resolve) => {
-      this.pendingApprovals.set(event.toolCallId, resolve);
-    });
+    // Check for pre-decisions (approval/rejection that arrived before the promise was created)
+    const preDecision = this.preDecisions.get(event.toolCallId);
+    const decision = preDecision
+      ? (this.preDecisions.delete(event.toolCallId), preDecision)
+      : await new Promise<"approved" | "rejected">((resolve) => {
+          this.pendingApprovals.set(event.toolCallId, resolve);
+        });
 
     // Update DB and runtime
     this.options.database.updateToolCall(event.toolCallId, {
       approvalState: decision,
+    });
+
+    // Update runtime state (clears blockedToolCallId and pendingApprovalToolCallIds)
+    if (decision === "approved") {
+      this.options.runtime.approveTool(run.id, event.toolCallId);
+    } else {
+      this.options.runtime.rejectTool(run.id, event.toolCallId);
+    }
+
+    this.emitAndPersist(run.id, session.id, {
+      type: "run.tool_decided",
+      payload: {
+        runId: run.id,
+        sessionId: session.id,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        decision,
+      },
     });
 
     if (decision === "approved") {

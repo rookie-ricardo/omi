@@ -338,17 +338,17 @@ describe("permissions/rules", () => {
   // Tool Sets
   // ============================================================================
   describe("WRITE_TOOLS and READ_TOOLS", () => {
-    it("WRITE_TOOLS 应该包含写操作工具", () => {
-      expect(WRITE_TOOLS.has("bash")).toBe(true);
-      expect(WRITE_TOOLS.has("edit")).toBe(true);
-      expect(WRITE_TOOLS.has("write")).toBe(true);
+    // Standard tools (bash, read, edit, write, ls, grep, glob, notebook_edit)
+    // are now provided by the SDK's claude_code preset, not by OMI's tool registry.
+    // OMI's built-in tools only include "skill" (read-only).
+
+    it("WRITE_TOOLS 应该为空（标准写工具已迁移到 SDK preset）", () => {
+      expect(WRITE_TOOLS.size).toBe(0);
     });
 
-    it("READ_TOOLS 应该包含只读工具", () => {
-      expect(READ_TOOLS.has("read")).toBe(true);
-      expect(READ_TOOLS.has("ls")).toBe(true);
-      expect(READ_TOOLS.has("grep")).toBe(true);
-      expect(READ_TOOLS.has("glob")).toBe(true);
+    it("READ_TOOLS 应该只包含 OMI 注册的只读工具", () => {
+      expect(READ_TOOLS.has("skill")).toBe(true);
+      expect(READ_TOOLS.size).toBe(1);
     });
 
     it("WRITE_TOOLS 和 READ_TOOLS 应该互斥", () => {

@@ -189,23 +189,24 @@ function createMemoryDatabase(): AppStore {
 
 describe("Tool & Permission baseline", () => {
   it("built-in tools have correct approval policy", () => {
-    expect(requiresApproval("bash")).toBe(true);
-    expect(requiresApproval("edit")).toBe(true);
-    expect(requiresApproval("write")).toBe(true);
+    // Standard tools are now provided by the SDK's claude_code preset.
+    // Only OMI-registered tools (skill) are tracked here.
+    expect(requiresApproval("skill")).toBe(false);
+    // SDK tools are not in the OMI registry, so requiresApproval returns false (unknown tool)
+    expect(requiresApproval("bash")).toBe(false);
     expect(requiresApproval("read")).toBe(false);
-    expect(requiresApproval("ls")).toBe(false);
-    expect(requiresApproval("grep")).toBe(false);
-    expect(requiresApproval("glob")).toBe(false);
   });
 
-  it("all built-in tools are recognized", () => {
-    expect(isBuiltInTool("read")).toBe(true);
-    expect(isBuiltInTool("bash")).toBe(true);
-    expect(isBuiltInTool("edit")).toBe(true);
-    expect(isBuiltInTool("write")).toBe(true);
-    expect(isBuiltInTool("ls")).toBe(true);
-    expect(isBuiltInTool("grep")).toBe(true);
-    expect(isBuiltInTool("glob")).toBe(true);
+  it("only OMI-registered built-in tools are recognized", () => {
+    expect(isBuiltInTool("skill")).toBe(true);
+    // Standard tools are provided by the SDK, not registered in OMI's tool registry
+    expect(isBuiltInTool("read")).toBe(false);
+    expect(isBuiltInTool("bash")).toBe(false);
+    expect(isBuiltInTool("edit")).toBe(false);
+    expect(isBuiltInTool("write")).toBe(false);
+    expect(isBuiltInTool("ls")).toBe(false);
+    expect(isBuiltInTool("grep")).toBe(false);
+    expect(isBuiltInTool("glob")).toBe(false);
     expect(isBuiltInTool("unknown")).toBe(false);
   });
 
@@ -308,19 +309,11 @@ describe("Tool & Permission baseline", () => {
     expect(db.getRun(run.id)?.status).toBe("canceled");
   });
 
-  it("createAllTools returns the WS-06 built-in tool surface", () => {
+  it("createAllTools returns only OMI-specific built-in tools", () => {
     const tools = createAllTools(process.cwd());
     const names = Object.keys(tools).sort();
-    expect(names).toEqual([
-      "bash",
-      "edit",
-      "glob",
-      "grep",
-      "ls",
-      "notebook_edit",
-      "read",
-      "tool.search",
-      "write",
-    ]);
+    // Standard tools are now provided by the SDK's claude_code preset.
+    // OMI only registers "skill" as a built-in tool.
+    expect(names).toEqual(["skill"]);
   });
 });

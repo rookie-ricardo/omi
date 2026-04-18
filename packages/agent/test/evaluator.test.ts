@@ -214,7 +214,7 @@ describe("permissions/evaluator", () => {
     });
 
     describe("evaluate - Plan Mode", () => {
-      it("应该阻止 plan mode 下的写操作", () => {
+      it("应该对 SDK 提供的工具透传 allow（plan mode 由 SDK 处理）", () => {
         evaluator = new PermissionEvaluator({ enforcePlanMode: true });
 
         const result = evaluator.evaluate(createContext({
@@ -222,8 +222,7 @@ describe("permissions/evaluator", () => {
           planMode: true,
         }));
 
-        expect(result.decision).toBe("deny");
-        expect(result.matchedRule?.id).toBe("plan-mode:write-blocked");
+        expect(result.decision).toBe("allow");
       });
 
       it("应该允许 plan mode 下的只读操作", () => {
@@ -307,7 +306,7 @@ describe("permissions/evaluator", () => {
         expect(result.reason).toContain("requires approval");
       });
 
-      it("plan mode 下写工具应该被阻止", () => {
+      it("plan mode 下 SDK 写工具不再由 OMI evaluator 阻止", () => {
         evaluator = new PermissionEvaluator({ enforcePlanMode: true });
 
         const result = evaluator.preflightCheck(createContext({
@@ -315,8 +314,7 @@ describe("permissions/evaluator", () => {
           planMode: true,
         }));
 
-        expect(result.decision).toBe("deny");
-        expect(result.reason).toContain("not allowed in plan mode");
+        expect(result.decision).toBe("allow");
       });
     });
 

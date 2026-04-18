@@ -214,7 +214,12 @@ describe("permissions/evaluator", () => {
     });
 
     describe("evaluate - Plan Mode", () => {
-      it("应该阻止 plan mode 下的写操作", () => {
+      // Note: Standard tools (bash, edit, write, etc.) are now provided by the
+      // SDK's claude_code preset. WRITE_TOOLS only tracks OMI-registered write tools,
+      // which is currently empty. Plan mode enforcement for SDK-provided tools
+      // is handled by the SDK runtime, not by the OMI permission evaluator.
+
+      it("应该对 SDK 提供的工具透传 allow（plan mode 由 SDK 处理）", () => {
         evaluator = new PermissionEvaluator({ enforcePlanMode: true });
 
         const result = evaluator.evaluate(createContext({
@@ -222,8 +227,8 @@ describe("permissions/evaluator", () => {
           planMode: true,
         }));
 
-        expect(result.decision).toBe("deny");
-        expect(result.matchedRule?.id).toBe("plan-mode:write-blocked");
+        // bash is not in WRITE_TOOLS (it's an SDK tool), so plan mode evaluator passes through
+        expect(result.decision).toBe("allow");
       });
 
       it("应该允许 plan mode 下的只读操作", () => {
@@ -307,7 +312,7 @@ describe("permissions/evaluator", () => {
         expect(result.reason).toContain("requires approval");
       });
 
-      it("plan mode 下写工具应该被阻止", () => {
+      it("plan mode 下 SDK 写工具不再由 OMI evaluator 阻止", () => {
         evaluator = new PermissionEvaluator({ enforcePlanMode: true });
 
         const result = evaluator.preflightCheck(createContext({
@@ -315,8 +320,8 @@ describe("permissions/evaluator", () => {
           planMode: true,
         }));
 
-        expect(result.decision).toBe("deny");
-        expect(result.reason).toContain("not allowed in plan mode");
+        // bash is not in WRITE_TOOLS (SDK tool), so preflight passes through to normal evaluation
+        expect(result.decision).toBe("allow");
       });
     });
 

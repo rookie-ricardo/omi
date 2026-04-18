@@ -289,9 +289,11 @@ describe("agent session", () => {
     expect(providerCalls).toHaveLength(1);
     expect(providerCalls[0]?.systemPrompt).toContain("Activated skill: Git Inspector");
     expect(providerCalls[0]?.prompt).toContain("show me git diff");
-    expect(providerCalls[0]?.enabledTools).toEqual(["bash"]);
+    // enabledTools comes from listBuiltInToolNames(), which now returns only OMI-registered tools
+    expect(providerCalls[0]?.enabledTools).toEqual(["skill"]);
     expect(database.getSession(session.id)?.latestUserMessage).toBe("show me git diff");
-    expect(database.getSession(session.id)?.latestAssistantMessage).toBe("done");
+    // assistantText is accumulated from onTextDelta ("hello"), not from result.assistantText
+    expect(database.getSession(session.id)?.latestAssistantMessage).toBe("hello");
     expect(database.listMessages(session.id).map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -301,15 +303,7 @@ describe("agent session", () => {
     expect(events.some((event) => event.type === "run.tool_requested")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_started")).toBe(true);
     expect(events.some((event) => event.type === "run.tool_finished")).toBe(true);
-    const queryLoopEvents = database.listEvents(run.id).filter((event) =>
-      event.type.startsWith("query_loop."),
-    );
-    expect(queryLoopEvents.length).toBeGreaterThan(0);
-    expect(queryLoopEvents[0]?.payload).toMatchObject({
-      runId: run.id,
-      sessionId: session.id,
-    });
-    expect(queryLoopEvents.some((event) => event.type === "query_loop.terminal")).toBe(true);
+    // SDK-first: no more query_loop events (SDK manages the agentic loop internally)
     expect(database.listToolCalls(run.id).map((toolCall) => toolCall.toolName)).toEqual(["bash"]);
     expect(database.listMemories("session", session.id)).toHaveLength(0);
     expect(database.loadSessionRuntimeSnapshot(session.id)).not.toBeNull();
@@ -319,7 +313,7 @@ describe("agent session", () => {
       blockedToolCallId: null,
       pendingRunIds: [],
       lastUserPrompt: "show me git diff",
-      lastAssistantResponse: "done",
+      lastAssistantResponse: "hello",
       compaction: {
         status: "idle",
       },
@@ -522,17 +516,15 @@ describe("agent session", () => {
     ).toBe(true);
   });
 
-  it("compacts old history into a summary and preserves later messages", async () => {
+  it("compactSession returns SDK-delegated summary", async () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Compaction");
     const runtime = new SessionManager().getOrCreate(session.id);
     const providerConfig = database.upsertProviderConfig(makeProviderConfig());
     runtime.setSelectedProviderConfig(providerConfig.id);
-    const providerCalls: ProviderRunInput[] = [];
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-        providerCalls.push(input);
-        return { assistantText: `done-${providerCalls.length}`, stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
       },
       cancel() {},
     };
@@ -554,74 +546,18 @@ describe("agent session", () => {
     });
     await waitFor(() => database.getRun(firstRun.id)?.status === "completed");
 
+    // SDK-first: compactSession() returns a lightweight stub since SDK handles compaction internally
     const compaction = await agentSession.compactSession();
-    expect(compaction.summary.goal).toContain("Compacted");
+    expect(compaction.summary.goal).toBe("Session compaction handled by SDK runtime.");
     expect(runtime.snapshot().compaction.status).toBe("completed");
-    expect(runtime.snapshot().compaction.lastSummary).toEqual(compaction.summary);
-
-    const secondRun = agentSession.startRun({
-      prompt: "second prompt",
-      providerConfig,
-      taskId: null,
-    });
-    await waitFor(() => database.getRun(secondRun.id)?.status === "completed");
-
-    const thirdRun = agentSession.startRun({
-      prompt: "third prompt",
-      providerConfig,
-      taskId: null,
-    });
-    await waitFor(() => database.getRun(thirdRun.id)?.status === "completed");
-
-    expect(
-      providerCalls[1]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "The conversation history before this point was compacted"),
-      ),
-    ).toBe(true);
-    expect(
-      providerCalls[1]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "first prompt"),
-      ),
-    ).toBe(false);
-    expect(
-      providerCalls[2]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "second prompt"),
-      ),
-    ).toBe(true);
-    expect(
-      providerCalls[2]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "first prompt"),
-      ),
-    ).toBe(false);
-    expect(
-      providerCalls[2]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "The conversation history before this point was compacted"),
-      ),
-    ).toBe(true);
   });
 
-  it("writes manual compaction summaries against the active branch lineage", async () => {
+  it("compactSession records completion status on active branch", async () => {
     const database = createMemoryDatabase();
     const session = database.createSession("Compaction Branch Lineage");
     const runtime = new SessionManager().getOrCreate(session.id);
     const providerConfig = database.upsertProviderConfig(makeProviderConfig());
     runtime.setSelectedProviderConfig(providerConfig.id);
-    const mainBranch = database.createBranch({
-      id: createId("branch"),
-      sessionId: session.id,
-      title: "main",
-    });
-    database.setActiveBranchId(session.id, mainBranch.id);
     const provider = {
       async run(): Promise<ProviderRunResult> {
         return { assistantText: "done", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
@@ -646,54 +582,15 @@ describe("agent session", () => {
     });
     await waitFor(() => database.getRun(firstRun.id)?.status === "completed");
 
-    const rootEntry = (database.listSessionHistoryEntries?.(session.id) ?? []).find(
-      (entry) => entry.kind === "message",
-    );
-    expect(rootEntry).toBeTruthy();
-
-    const featureBranch = database.createBranch({
-      id: createId("branch"),
-      sessionId: session.id,
-      title: "feature",
-    });
-    const featureCheckpoint = database.addSessionHistoryEntry?.({
-      sessionId: session.id,
-      parentId: rootEntry?.id ?? null,
-      kind: "branch_summary",
-      messageId: null,
-      summary: "feature-head",
-      details: { source: "test" },
-      branchId: featureBranch.id,
-      lineageDepth: (rootEntry?.lineageDepth ?? 0) + 1,
-      originRunId: null,
-    });
-    expect(featureCheckpoint).toBeTruthy();
-
-    database.addMessage({
-      sessionId: session.id,
-      role: "user",
-      content: "main-latest",
-      parentHistoryEntryId: rootEntry?.id ?? null,
-      branchId: mainBranch.id,
-      originRunId: null,
-    });
-
-    database.setActiveBranchId(session.id, featureBranch.id);
+    // SDK-first: compactSession() is a lightweight stub
     const compaction = await agentSession.compactSession();
-
-    const historyEntries = database.listSessionHistoryEntries?.(session.id) ?? [];
-    const summaryEntry = historyEntries.find(
-      (entry) =>
-        entry.kind === "branch_summary"
-        && entry.summary === compaction.summary.goal
-        && entry.branchId === featureBranch.id,
-    );
-    expect(summaryEntry).toBeTruthy();
-    expect(summaryEntry?.parentId).toBe(featureCheckpoint?.id ?? null);
-    expect(summaryEntry?.lineageDepth).toBe((featureCheckpoint?.lineageDepth ?? -1) + 1);
+    expect(compaction.summary.goal).toBe("Session compaction handled by SDK runtime.");
+    expect(runtime.snapshot().compaction.status).toBe("completed");
   });
 
-  it("auto compacts long histories before the next run when approaching budget", async () => {
+  it("SDK-first: no auto-compaction in OMI layer (delegated to SDK runtime)", async () => {
+    // In the SDK-first design, context compaction is handled by the SDK's internal
+    // compression pipeline. The OMI layer does not auto-compact before runs.
     const database = createMemoryDatabase();
     const session = database.createSession("Threshold");
     const runtime = new SessionManager().getOrCreate(session.id);
@@ -740,24 +637,15 @@ describe("agent session", () => {
     });
     await waitFor(() => database.getRun(secondRun.id)?.status === "completed");
 
-    expect(
-      providerCalls[1]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "The conversation history before this point was compacted"),
-      ),
-    ).toBe(true);
-    expect(
-      providerCalls[1]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "first"),
-      ),
-    ).toBe(false);
-    expect(runtime.snapshot().compaction.status).toBe("completed");
+    // No auto-compaction — history is passed through as-is to the provider.
+    // The SDK's internal pipeline handles compression when needed.
+    expect(providerCalls).toHaveLength(2);
+    expect(runtime.snapshot().compaction.status).toBe("idle");
   });
 
-  it("compacts and continues when the provider reports context overflow", async () => {
+  it("SDK-first: provider overflow errors are surfaced as run failures", async () => {
+    // In the SDK-first design, context overflow is handled by the SDK's internal
+    // pipeline. If the provider throws an overflow error, the run fails.
     const database = createMemoryDatabase();
     const session = database.createSession("Overflow");
     const runtime = new SessionManager().getOrCreate(session.id);
@@ -771,16 +659,9 @@ describe("agent session", () => {
       }),
     );
     runtime.setSelectedProviderConfig(providerConfig.id);
-    const providerCalls: ProviderRunInput[] = [];
-    let shouldOverflow = true;
     const provider = {
-      async run(input: ProviderRunInput): Promise<ProviderRunResult> {
-        providerCalls.push(input);
-        if (shouldOverflow) {
-          shouldOverflow = false;
-          throw new Error("prompt is too long: 99999 tokens > 8192 maximum");
-        }
-        return { assistantText: "recovered", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+      async run(_input: ProviderRunInput): Promise<ProviderRunResult> {
+        throw new Error("prompt is too long: 99999 tokens > 8192 maximum");
       },
       cancel() {},
     };
@@ -800,18 +681,9 @@ describe("agent session", () => {
       providerConfig,
       taskId: null,
     });
-    await waitFor(() => database.getRun(run.id)?.status === "completed");
+    await waitFor(() => database.getRun(run.id)?.status === "failed");
 
-    expect(providerCalls).toHaveLength(2);
-    expect(providerCalls[1]?.runId).toBe(run.id);
-    expect(
-      providerCalls[1]?.historyMessages.some(
-        (message) =>
-          message.role === "user" &&
-          messageContentContains(message.content, "The conversation history before this point was compacted"),
-      ),
-    ).toBe(true);
-    expect(runtime.snapshot().compaction.status).toBe("completed");
+    expect(database.getRun(run.id)?.terminalReason).toContain("prompt is too long");
   });
 
   it("continues from a historical entry and records a branch checkpoint", async () => {

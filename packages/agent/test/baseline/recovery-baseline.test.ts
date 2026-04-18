@@ -303,7 +303,9 @@ describe("Recovery baseline", () => {
     expect(result.canceled).toBe(true);
   });
 
-  it("auto-retry with exponential backoff on retryable error", async () => {
+  it("SDK-first: retryable errors result in run failure (SDK handles recovery internally)", async () => {
+    // In the SDK-first design, auto-retry with backoff is handled by the SDK runtime.
+    // The OMI layer does not retry; it surfaces the error as a run failure.
     const db = createMemoryDatabase();
     const session = db.createSession("AutoRetry");
     const runtime = new SessionManager().getOrCreate(session.id);
@@ -311,14 +313,11 @@ describe("Recovery baseline", () => {
     runtime.setSelectedProviderConfig(providerConfig.id);
     const calls: ProviderRunInput[] = [];
     const events: RunnerEventEnvelope[] = [];
-    let callCount = 0;
 
     const provider = {
       async run(input: ProviderRunInput): Promise<ProviderRunResult> {
         calls.push(input);
-        callCount++;
-        if (callCount <= 1) throw new Error("503 Service Unavailable");
-        return { assistantText: "recovered", stopReason: "end_turn" as const, usage: { inputTokens: 0, outputTokens: 0 }, error: null };
+        throw new Error("503 Service Unavailable");
       },
       cancel() {}, approveTool() {}, rejectTool() {},
     };
@@ -329,10 +328,10 @@ describe("Recovery baseline", () => {
     });
 
     const run = agentSession.startRun({ prompt: "auto-retry", providerConfig, taskId: null });
-    await waitFor(() => db.getRun(run.id)?.status === "completed", 10000);
+    await waitFor(() => db.getRun(run.id)?.status === "failed", 10000);
 
-    expect(calls.length).toBe(2);
-    expect(events.some((e) => e.type === "auto_retry_start")).toBe(true);
-    expect(events.some((e) => e.type === "auto_retry_end")).toBe(true);
+    expect(calls.length).toBe(1);
+    expect(db.getRun(run.id)?.terminalReason).toContain("503 Service Unavailable");
+    expect(events.some((e) => e.type === "run.failed")).toBe(true);
   });
 });
