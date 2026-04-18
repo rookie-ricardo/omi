@@ -149,6 +149,7 @@ export class PiAgentProvider implements ProviderAdapter {
         },
         toolExecution: input.toolExecutionMode ?? "parallel",
         convertToLlm: input.convertToLlm,
+        transformContext: input.transformContext,
       });
 
       this.agents.set(input.runId, agent);

@@ -44,6 +44,11 @@ export interface ProviderRunInput {
   thinkingLevel?: ThinkingLevel;
   toolExecutionMode?: "sequential" | "parallel";
   convertToLlm?: (messages: Message[]) => Message[];
+  /**
+   * Context compression hook (pi-agent-core only).
+   * Called before each LLM request to prune or compress the message history.
+   */
+  transformContext?: (messages: Message[], signal?: AbortSignal) => Promise<Message[]>;
   onTextDelta?: (delta: string) => void;
   /**
    * Claude Agent SDK specific options.
