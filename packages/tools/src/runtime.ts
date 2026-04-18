@@ -1,11 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createId, nowIso, type Task } from "@omi/core";
-import type { McpRegistry } from "@omi/provider";
 
 import type { SearchSkillsFn } from "./skill-tools";
 
 export interface ToolRuntimeContext {
-  mcpRegistry?: McpRegistry | null;
   taskRuntime?: TaskToolRuntime | null;
   searchSkills?: SearchSkillsFn | null;
 }
@@ -21,20 +19,6 @@ export function runWithToolRuntimeContext<T>(
 
 export function getCurrentToolRuntimeContext(): ToolRuntimeContext | null {
   return runtimeContextStorage.getStore() ?? null;
-}
-
-// ============================================================================
-// MCP Registry Runtime
-// ============================================================================
-
-let globalMcpRegistry: McpRegistry | null = null;
-
-export function getMcpRegistryRuntime(): McpRegistry | null {
-  return getCurrentToolRuntimeContext()?.mcpRegistry ?? globalMcpRegistry;
-}
-
-export function setMcpRegistryRuntime(registry: McpRegistry | null): void {
-  globalMcpRegistry = registry;
 }
 
 // ============================================================================

@@ -286,7 +286,7 @@ describe("PiAiProvider", () => {
     };
   });
 
-  // 工具审批已迁移到 QueryEngine 层，不再由 Provider 处理
+  // 工具审批由 AgentSession 层管理，不再由 Provider 处理
 
   describe("取消运行", () => {
     it("应该能够取消活动运行", () => {
@@ -309,7 +309,7 @@ describe("PiAiProvider", () => {
       expect(typeof provider.cancel).toBe("function");
     });
 
-    // approveTool/rejectTool 已迁移到 QueryEngine 层
+    // approveTool/rejectTool 由 AgentSession 层管理
   });
 });
 
@@ -335,7 +335,6 @@ describe("ProviderRunInput 接口", () => {
       workspaceRoot: "/workspace",
       prompt: "test",
       historyMessages: [],
-      historyEntryId: "hist-1",
       providerConfig: makeConfig(),
       systemPrompt: "System prompt",
       enabledTools: ["bash", "read"],
@@ -346,7 +345,6 @@ describe("ProviderRunInput 接口", () => {
     expect(input.systemPrompt).toBe("System prompt");
     expect(input.thinkingLevel).toBe("medium");
     expect(input.toolExecutionMode).toBe("parallel");
-    expect(input.historyEntryId).toBe("hist-1");
   });
 
   it("应该接受回调函数", () => {

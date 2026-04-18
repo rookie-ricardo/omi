@@ -23,11 +23,6 @@ export interface ProviderRunInput {
   workspaceRoot: string;
   prompt: string;
   historyMessages: Message[];
-  /**
-   * Optional history cursor used by branching/continuation flows.
-   * Runtimes can use this to decide whether native session resume is safe.
-   */
-  historyEntryId?: string | null;
   systemPrompt?: string;
   providerConfig: ProviderConfig;
   enabledTools?: ToolName[];
@@ -61,6 +56,17 @@ export interface ProviderRunInput {
    * rate limit, auth status, hook events, etc.) to upper orchestration layers.
    */
   onSdkMessage?: (message: ClaudeAgentSdkMessage) => void | Promise<void>;
+  /**
+   * Sub-agent definitions (Claude Agent SDK only).
+   * Each agent gets its own context, tools, and optional model override.
+   */
+  agents?: Record<string, {
+    description: string;
+    prompt: string;
+    tools?: string[];
+    model?: "sonnet" | "opus" | "haiku" | "inherit";
+    mcpServers?: Array<string | Record<string, unknown>>;
+  }>;
   signal?: AbortSignal;
 }
 

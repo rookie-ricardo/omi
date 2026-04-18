@@ -24,8 +24,6 @@ export * from "./skill-tools";
 export {
   runWithToolRuntimeContext,
   getCurrentToolRuntimeContext,
-  getMcpRegistryRuntime,
-  setMcpRegistryRuntime,
   getTaskToolRuntime,
   setTaskToolRuntime,
   resetTaskToolRuntime,

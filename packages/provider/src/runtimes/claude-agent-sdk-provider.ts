@@ -305,13 +305,10 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     const requestedOptions = (isRecord(input.claudeOptions) ? input.claudeOptions : {}) as ClaudeAgentSdkOptions;
     const runtimeManagedToolNames = new Set(runnableTools.map((tool) => tool.name));
     const userCanUseTool = requestedOptions.canUseTool;
-    if (input.historyEntryId) {
-      this.sessionCursors.delete(input.sessionId);
-    }
     const hasExplicitSessionCursor = Boolean(
       requestedOptions.resume || requestedOptions.continue || requestedOptions.sessionId,
     );
-    const autoResumeSessionId = !hasExplicitSessionCursor && input.historyEntryId == null
+    const autoResumeSessionId = !hasExplicitSessionCursor
       ? (this.sessionCursors.get(input.sessionId) ?? null)
       : null;
 
@@ -430,6 +427,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       canUseTool: runtimeCanUseTool,
       abortController,
       env,
+      ...(input.agents ? { agents: input.agents as ClaudeAgentSdkOptions["agents"] } : {}),
     };
     if (autoResumeSessionId) {
       options.resume = autoResumeSessionId;
