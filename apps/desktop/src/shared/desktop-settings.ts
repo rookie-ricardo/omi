@@ -1,5 +1,5 @@
 export type DesktopReasoningLevel = "低" | "中" | "高" | "超高";
-export type DesktopPermissionMode = "default" | "full-access";
+export type DesktopPermissionMode = "default" | "yolo";
 
 export interface DesktopUiFolder {
   id: string;
@@ -86,7 +86,7 @@ function ensurePermissionModeRecord(input: unknown): Record<string, DesktopPermi
   const raw = ensureRecordString(input);
   const result: Record<string, DesktopPermissionMode> = {};
   for (const [key, value] of Object.entries(raw)) {
-    if (value === "default" || value === "full-access") {
+    if (value === "default" || value === "yolo") {
       result[key] = value;
     }
   }

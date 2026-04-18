@@ -3,8 +3,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import type { BrowserWindow as ElectronBrowserWindow, BrowserWindowConstructorOptions } from "electron";
 
-import { BrowserWindow, Menu, app, ipcMain, dialog, shell, type BrowserWindowConstructorOptions } from "electron";
+const electronModule = await import("electron");
+const electron = (electronModule as typeof import("electron") & { default?: typeof import("electron") }).default ?? electronModule;
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = electron;
 
 import { type commandMap } from "@omi/core";
 import {
@@ -15,7 +18,7 @@ import {
   normalizeDesktopSettings,
 } from "../shared/desktop-settings";
 
-let mainWindow: BrowserWindow | null = null;
+let mainWindow: ElectronBrowserWindow | null = null;
 let runner: ChildProcess | null = null;
 let desktopSettingsCache: DesktopSettings | null = null;
 let windowStatePersistTimer: ReturnType<typeof setTimeout> | null = null;

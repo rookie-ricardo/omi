@@ -1,7 +1,13 @@
 export { default as ApprovalCard } from "./ApprovalCard";
+export { default as BlockedToolCard } from "./BlockedToolCard";
 export { default as CodeDiff } from "./CodeDiff";
+export { default as DecisionEventCard } from "./DecisionEventCard";
 export { default as ProgressTracker } from "./ProgressTracker";
 export { default as Receipt } from "./Receipt";
+export { default as RunEventPanel } from "./RunEventPanel";
+export { default as SkillEventPanel } from "./SkillEventPanel";
 export { default as Terminal } from "./Terminal";
+export { default as TerminalEventCard } from "./TerminalEventCard";
 export { default as ToolCallPanel } from "./ToolCallPanel";
+export * from "./event-models";
 export * from "./models";

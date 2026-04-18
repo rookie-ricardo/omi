@@ -442,7 +442,7 @@ export function normalizeToolCallViewModel(
 
   const vm: NormalizedToolCallViewModel = {
     id: toolCall.id,
-    runId: toolCall.runId,
+    runId: toolCall.messageId,
     toolName: toolCall.toolName,
     kind,
     status,

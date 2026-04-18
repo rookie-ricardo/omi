@@ -1,12 +1,9 @@
 import type { OpenDialogOptions, OpenDialogReturnValue } from "electron";
 
-import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/core";
+import type { RunnerCommandName, RunnerCommandParamsByName, RunnerEventEnvelope } from "@omi/core";
 import type { DesktopSettings, DesktopSettingsPatch } from "../../shared/desktop-settings";
 
-export interface RunnerEventEnvelope {
-  type: string;
-  payload: Record<string, unknown>;
-}
+export type { RunnerEventEnvelope } from "@omi/core";
 
 export interface RunnerGateway {
   invoke<TResult = unknown, TName extends RunnerCommandName = RunnerCommandName>(

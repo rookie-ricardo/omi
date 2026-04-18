@@ -7,7 +7,6 @@ import type {
   GitRepoState,
   ProviderConfig,
   Session,
-  SessionHistoryEntry,
   SessionMessage,
   Task,
   ToolCall,
@@ -16,7 +15,6 @@ import type {
   ModelListResult,
   RunnerCommandName,
   RunnerCommandParamsByName,
-  SessionHistoryListResult,
   SessionRuntimeGetResult,
   ToolListResult,
   ToolPendingListResult,
@@ -83,7 +81,6 @@ interface WorkspaceStoreData {
   sessions: Session[];
   selectedSessionId: string | null;
   sessionDetailsById: Record<string, SessionDetailResponse>;
-  sessionHistoryById: Record<string, SessionHistoryEntry[]>;
   sessionRuntimeById: Record<string, SessionRuntimeGetResult["runtime"]>;
   pendingToolCallsBySession: Record<string, ToolCall[]>;
   toolCallsBySession: Record<string, ToolCall[]>;
@@ -186,7 +183,6 @@ function createInitialData(): WorkspaceStoreData {
     sessions: [],
     selectedSessionId: null,
     sessionDetailsById: {},
-    sessionHistoryById: {},
     sessionRuntimeById: {},
     pendingToolCallsBySession: {},
     toolCallsBySession: {},
@@ -381,12 +377,9 @@ function ensurePermissionModes(
   sessions: Session[],
   modes: Record<string, PermissionMode>,
 ): Record<string, PermissionMode> {
-  const sessionIds = new Set(sessions.map((session) => session.id));
   const nextModes: Record<string, PermissionMode> = {};
-  for (const [sessionId, mode] of Object.entries(modes)) {
-    if (sessionIds.has(sessionId)) {
-      nextModes[sessionId] = mode;
-    }
+  for (const session of sessions) {
+    nextModes[session.id] = modes[session.id] ?? session.permissionMode ?? "default";
   }
   return nextModes;
 }
@@ -624,9 +617,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const optimisticMessage: SessionMessage = {
       id: `optimistic-${Date.now()}`,
       sessionId,
+      taskId: null,
+      parentMessageId: null,
       role: "user",
+      messageType: "text",
       content: prompt,
+      model: null,
+      tokens: 0,
+      totalTokens: 0,
+      compressedFromMessageId: null,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     set((state) => {
@@ -644,7 +645,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
               session: state.sessions.find((s) => s.id === sessionId) ?? {
                 id: sessionId,
                 title: "",
-                status: "running" as const,
+                providerConfigId: null,
+                model: null,
+                permissionMode: pendingPermissionMode,
+                thinkLevel: "medium",
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
                 latestUserMessage: prompt,
@@ -731,11 +735,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   async refreshSession(sessionId) {
-    const [detail, history, runtime, pendingTools, allTools] = await Promise.all([
+    const [detail, runtime, pendingTools, allTools] = await Promise.all([
       invokeRunner<SessionDetailResponse, "session.get">("session.get", { sessionId }),
-      invokeRunner<SessionHistoryListResult, "session.history.list">("session.history.list", {
-        sessionId,
-      }),
       invokeRunner<SessionRuntimeGetResult, "session.runtime.get">("session.runtime.get", {
         sessionId,
       }),
@@ -758,10 +759,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         sessionDetailsById: {
           ...state.sessionDetailsById,
           [sessionId]: detail,
-        },
-        sessionHistoryById: {
-          ...state.sessionHistoryById,
-          [sessionId]: history.historyEntries,
         },
         sessionRuntimeById: {
           ...state.sessionRuntimeById,
@@ -1373,7 +1370,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       });
     }
 
-    if (event.type === "run.skills_resolved" && sessionId) {
+    if ((event.type === "run.skills_resolved" || event.type === "run.skill_selected") && sessionId) {
       const skillName = typeof event.payload.skillName === "string" ? event.payload.skillName : "";
       const enabledToolNames = Array.isArray(event.payload.enabledToolNames)
         ? (event.payload.enabledToolNames as string[])
@@ -1401,9 +1398,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
               ...(state.pendingToolCallsBySession[targetSessionId] ?? []),
               {
                 id: toolCallId,
-                runId,
+                messageId: toolCallId,
                 sessionId: targetSessionId,
-                taskId: null,
                 toolName,
                 approvalState: "pending" as const,
                 input: (event.payload.input as Record<string, unknown>) ?? {},

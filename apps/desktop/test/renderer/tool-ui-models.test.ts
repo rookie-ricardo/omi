@@ -10,9 +10,8 @@ import {
 function createToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
   return {
     id: overrides.id ?? "tool_1",
-    runId: overrides.runId ?? "run_1",
+    messageId: overrides.messageId ?? "msg_1",
     sessionId: overrides.sessionId ?? "session_1",
-    taskId: overrides.taskId ?? null,
     toolName: overrides.toolName ?? "bash",
     approvalState: overrides.approvalState ?? "not_required",
     input: overrides.input ?? {},
@@ -125,7 +124,7 @@ describe("tool-ui models", () => {
   it("builds failed run display model when latest run has runtime error", () => {
     const toolCall = createToolCall({
       id: "tool_7",
-      runId: "run_failed",
+      messageId: "run_failed",
       toolName: "bash",
       output: { content: [{ type: "text", text: "partial" }] },
     });
@@ -148,8 +147,8 @@ describe("tool-ui models", () => {
     const runModel = buildRunEventDisplayModel({
       runId: "run_canceled",
       toolCalls: [
-        createToolCall({ id: "tool_8", runId: "run_canceled", approvalState: "rejected" }),
-        createToolCall({ id: "tool_9", runId: "run_canceled", approvalState: "rejected" }),
+        createToolCall({ id: "tool_8", messageId: "run_canceled", approvalState: "rejected" }),
+        createToolCall({ id: "tool_9", messageId: "run_canceled", approvalState: "rejected" }),
       ],
       activeToolIds: new Set<string>(),
       activeRunId: null,
@@ -167,7 +166,7 @@ describe("tool-ui models", () => {
       toolCalls: [
         createToolCall({
           id: "tool_10",
-          runId: "run_interrupted",
+          messageId: "run_interrupted",
           approvalState: "not_required",
           output: null,
           error: null,

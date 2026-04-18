@@ -14,7 +14,6 @@ import {
 import type {
   GitChangedFile,
   GitDiffPreview,
-  SessionHistoryEntry,
   SessionMessage,
   ToolCall,
 } from "@omi/core";
@@ -23,11 +22,17 @@ import ThreadLayout from "../ThreadLayout";
 import MarkdownRenderer from "../MarkdownRenderer";
 import {
   ApprovalCard,
-  ProgressTracker,
+  BlockedToolCard,
+  DecisionEventCard,
   Receipt,
+  RunEventPanel,
+  SkillEventPanel,
+  TerminalEventCard,
   ToolCallPanel,
   buildRunEventDisplayModel,
+  buildSkillEventViewModel,
   formatDuration as formatToolUiDuration,
+  normalizeToolCallViewModel,
 } from "../tool-ui";
 import { deriveThreadTitle, useWorkspaceStore } from "../../store/workspace-store";
 
@@ -38,7 +43,6 @@ export default function Chat() {
   const selectedSessionId = useWorkspaceStore((state) => state.selectedSessionId);
   const sessions = useWorkspaceStore((state) => state.sessions);
   const sessionDetailsById = useWorkspaceStore((state) => state.sessionDetailsById);
-  const sessionHistoryById = useWorkspaceStore((state) => state.sessionHistoryById);
   const sessionRuntimeById = useWorkspaceStore((state) => state.sessionRuntimeById);
   const firstUserMessageBySession = useWorkspaceStore((state) => state.firstUserMessageBySession);
   const renamedSessionIds = useWorkspaceStore((state) => state.renamedSessionIds);
@@ -59,29 +63,55 @@ export default function Chat() {
     : null;
   const sessionDetail = selectedSessionId ? sessionDetailsById[selectedSessionId] : undefined;
   const messages = sessionDetail?.messages ?? [];
-  const sessionHistory = selectedSessionId ? sessionHistoryById[selectedSessionId] ?? [] : [];
   const runtime = selectedSessionId ? sessionRuntimeById[selectedSessionId] : undefined;
   const pendingToolCalls = selectedSessionId ? pendingToolCallsBySession[selectedSessionId] ?? [] : [];
+  const blockedTool = selectedSessionId ? useWorkspaceStore((state) => state.blockedToolBySession[selectedSessionId] ?? null) : null;
   const streamingContent = selectedSessionId ? streamingBySession[selectedSessionId]?.content ?? "" : "";
   const isStreaming = Boolean(selectedSessionId && streamingBySession[selectedSessionId]);
   const errorMessage = selectedSessionId ? errorBySession[selectedSessionId] ?? null : null;
+  const resolvedSkill = useWorkspaceStore((state) =>
+    selectedSessionId ? state.resolvedSkillBySession[selectedSessionId] ?? null : null,
+  );
   const toolCalls = selectedSessionId ? toolCallsBySession[selectedSessionId] ?? [] : [];
   const activeTools = selectedSessionId ? activeToolsBySession[selectedSessionId] ?? [] : [];
   const activeToolIds = new Set(activeTools.map((tool) => tool.toolCallId));
   const activeRunId =
     runtime?.activeRunId ?? (selectedSessionId ? streamingBySession[selectedSessionId]?.runId ?? null : null);
+  const latestPendingTool = pendingToolCalls[0] ?? null;
+  const skillEventViewModel = useMemo(
+    () =>
+      resolvedSkill
+        ? buildSkillEventViewModel({
+            id: `${selectedSessionId ?? "session"}-skill`,
+            skillName: resolvedSkill.skillName,
+            score: 0,
+            source: "claude-agent-sdk",
+            enabledToolNames: resolvedSkill.enabledToolNames,
+            diagnostics: [],
+          })
+        : null,
+    [resolvedSkill, selectedSessionId],
+  );
+  const runStatusBadge = useMemo(() => {
+    if (errorMessage) {
+      return { label: "运行失败", tone: "text-red-600 dark:text-red-300" };
+    }
+    if (blockedTool) {
+      return { label: "待审批", tone: "text-orange-600 dark:text-orange-300" };
+    }
+    if (isStreaming) {
+      return { label: "运行中", tone: "text-blue-600 dark:text-blue-300" };
+    }
+    return { label: "空闲", tone: "text-gray-500 dark:text-gray-400" };
+  }, [blockedTool, errorMessage, isStreaming]);
 
   const orderedMessages = useMemo(
-    () => orderMessages(messages, sessionHistory),
-    [messages, sessionHistory],
-  );
-  const messageRunIdMap = useMemo(
-    () => buildMessageRunIdMap(sessionHistory),
-    [sessionHistory],
+    () => orderMessages(messages),
+    [messages],
   );
   const toolCallsByRun = useMemo(
-    () => groupToolCallsByRun(toolCalls),
-    [toolCalls],
+    () => groupToolCallsByRootMessage(toolCalls, messages),
+    [messages, toolCalls],
   );
   const latestAssistantMessageId = useMemo(() => {
     for (let index = orderedMessages.length - 1; index >= 0; index -= 1) {
@@ -147,7 +177,7 @@ export default function Chat() {
 
   const assistantRunIds = visibleMessages
     .filter((message) => message.role === "assistant")
-    .map((message) => messageRunIdMap.get(message.id) ?? null)
+    .map((message) => getMessageGroupId(message))
     .filter((runId): runId is string => Boolean(runId));
   const orderedRunIds = useMemo(
     () => getOrderedRunIds(toolCallsByRun),
@@ -160,7 +190,7 @@ export default function Chat() {
   const insertedRunIds = new Set<string>();
 
   for (const message of visibleMessages) {
-    const runId = messageRunIdMap.get(message.id) ?? null;
+    const runId = message.role === "assistant" ? getMessageGroupId(message) : null;
     if (message.role === "assistant" && runId && !insertedRunIds.has(runId)) {
       const runToolCalls = toolCallsByRun.get(runId) ?? [];
       if (runToolCalls.length > 0) {
@@ -289,6 +319,28 @@ export default function Chat() {
                 </div>
               ) : null}
 
+              <div className={`flex items-center gap-2 text-xs ${runStatusBadge.tone}`}>
+                <span className="inline-flex items-center gap-1 rounded-full border border-current px-2 py-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                  {runStatusBadge.label}
+                </span>
+                {latestPendingTool ? (
+                  <span>
+                    待处理工具：{latestPendingTool.toolName}
+                  </span>
+                ) : null}
+              </div>
+
+              {skillEventViewModel ? <SkillEventPanel viewModel={skillEventViewModel} /> : null}
+
+              {blockedTool ? (
+                <BlockedToolCard
+                  toolCallId={blockedTool.toolCallId}
+                  toolName={blockedTool.toolName}
+                  input={blockedTool.input}
+                />
+              ) : null}
+
               {timelineNodes}
 
               {isStreaming && !streamingContent ? <ThinkingIndicator /> : null}
@@ -384,6 +436,14 @@ function RunActivitySection({
       <div className="h-px bg-gray-200 dark:bg-white/10" />
       {expanded ? (
         <div className="space-y-3">
+          <RunEventPanel viewModel={runEvent} />
+
+          {runEvent.status !== "started" ? (
+            <div className="text-xs text-gray-400 dark:text-gray-500">
+              该运行的事件已经归档到工具时间线中。
+            </div>
+          ) : null}
+
           {showRunReceipt ? (
             <Receipt
               id={`run-receipt-${runId}`}
@@ -398,14 +458,6 @@ function RunActivitySection({
               description={runEvent.summary}
             />
           ) : null}
-
-          <ProgressTracker
-            id={`run-progress-${runId}`}
-            title={runEvent.title}
-            summary={runEvent.summary}
-            steps={runEvent.steps}
-            elapsedMs={runEvent.durationMs}
-          />
 
           {runEvent.toolCalls.map((toolCall) => (
             <ToolCallPanel
@@ -570,7 +622,7 @@ function ToolApprovalSection({
           description={truncateInputPreview(call.input)}
           metadata={[
             { key: "时间", value: new Date(call.createdAt).toLocaleString("zh-CN") },
-            { key: "Run", value: call.runId },
+            { key: "消息", value: call.messageId ?? "-" },
           ]}
           confirmLabel="批准"
           cancelLabel="拒绝"
@@ -723,48 +775,27 @@ function statusColor(status: GitChangedFile["status"]): string {
   }
 }
 
-function buildMessageRunIdMap(historyEntries: SessionHistoryEntry[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const entry of historyEntries) {
-    if (entry.kind !== "message" || !entry.messageId || !entry.originRunId) {
-      continue;
-    }
-    map.set(entry.messageId, entry.originRunId);
-  }
-  return map;
+function getMessageGroupId(message: SessionMessage): string | null {
+  return message.parentMessageId ?? message.id;
 }
 
-function orderMessages(messages: SessionMessage[], historyEntries: SessionHistoryEntry[]): SessionMessage[] {
-  const sortedHistory = [...historyEntries].sort(compareCreatedAt);
-  const messageById = new Map(messages.map((message) => [message.id, message]));
-  const seenMessageIds = new Set<string>();
-  const ordered: SessionMessage[] = [];
-
-  for (const entry of sortedHistory) {
-    if (entry.kind !== "message" || !entry.messageId) {
-      continue;
-    }
-    const message = messageById.get(entry.messageId);
-    if (!message || seenMessageIds.has(message.id)) {
-      continue;
-    }
-    seenMessageIds.add(message.id);
-    ordered.push(message);
-  }
-
-  const remaining = messages
-    .filter((message) => !seenMessageIds.has(message.id))
+function orderMessages(messages: SessionMessage[]): SessionMessage[] {
+  return messages
+    .filter((message) => message.role !== "tool")
     .sort(compareCreatedAt);
-
-  return [...ordered, ...remaining];
 }
 
-function groupToolCallsByRun(toolCalls: ToolCall[]): Map<string, ToolCall[]> {
+function groupToolCallsByRootMessage(
+  toolCalls: ToolCall[],
+  messages: SessionMessage[],
+): Map<string, ToolCall[]> {
   const map = new Map<string, ToolCall[]>();
   const sorted = [...toolCalls].sort(compareCreatedAt);
+  const messageById = new Map(messages.map((message) => [message.id, message]));
 
   for (const toolCall of sorted) {
-    const runId = toolCall.runId;
+    const toolMessage = toolCall.messageId ? messageById.get(toolCall.messageId) : null;
+    const runId = toolMessage?.parentMessageId ?? toolMessage?.id ?? toolCall.messageId ?? toolCall.id;
     if (!map.has(runId)) {
       map.set(runId, []);
     }

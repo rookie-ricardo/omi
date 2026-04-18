@@ -39,11 +39,11 @@ export default function ThreadLayout({
   rightPanel,
   onSendSuccess,
 }: ThreadLayoutProps) {
+  const sessions = useWorkspaceStore((state) => state.sessions);
   const composerInput = useWorkspaceStore((state) => state.composerInput);
   const selectedFiles = useWorkspaceStore((state) => state.selectedFiles);
   const selectedSessionId = useWorkspaceStore((state) => state.selectedSessionId);
   const modelCatalog = useWorkspaceStore((state) => state.modelCatalog);
-  const sessionRuntimeById = useWorkspaceStore((state) => state.sessionRuntimeById);
   const gitState = useWorkspaceStore((state) => state.gitState);
   const pendingToolCallsBySession = useWorkspaceStore(
     (state) => state.pendingToolCallsBySession,
@@ -79,16 +79,14 @@ export default function ThreadLayout({
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
 
   const providerConfigs = modelCatalog?.providerConfigs ?? [];
-  const currentRuntime = selectedSessionId
-    ? sessionRuntimeById[selectedSessionId]
-    : undefined;
+  const selectedSession = selectedSessionId
+    ? sessions.find((session) => session.id === selectedSessionId) ?? null
+    : null;
   const selectedProviderId =
-    currentRuntime?.selectedProviderConfigId ?? providerConfigs[0]?.id ?? "";
+    selectedSession?.providerConfigId ?? providerConfigs[0]?.id ?? "";
   const selectedProvider =
     providerConfigs.find((config) => config.id === selectedProviderId) ?? providerConfigs[0];
-  const selectedModelLabel = selectedProvider
-    ? selectedProvider.model
-    : "未配置模型";
+  const selectedModelLabel = selectedSession?.model ?? selectedProvider?.model ?? "未配置模型";
 
   const pendingApprovalCount =
     selectedSessionId && pendingToolCallsBySession[selectedSessionId]
@@ -104,7 +102,7 @@ export default function ThreadLayout({
   const permissionMode = selectedSessionId
     ? permissionModeBySession[selectedSessionId] ?? "default"
     : newThreadPermissionMode;
-  const permissionLabel = permissionMode === "full-access" ? "完全访问权限" : "默认权限";
+  const permissionLabel = permissionMode === "yolo" ? "完全访问权限" : "默认权限";
   const isStreaming = Boolean(
     selectedSessionId && streamingBySession[selectedSessionId],
   );
@@ -505,7 +503,7 @@ export default function ThreadLayout({
                     <button
                       type="button"
                       className={`flex items-center gap-1 transition-colors font-medium ${
-                        permissionMode === "full-access"
+                        permissionMode === "yolo"
                           ? "text-orange-500 dark:text-orange-400 hover:text-orange-600 dark:hover:text-orange-300"
                           : "text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
                       }`}
@@ -514,7 +512,7 @@ export default function ThreadLayout({
                         setBranchMenuOpen(false);
                       }}
                     >
-                      {permissionMode === "full-access" ? (
+                      {permissionMode === "yolo" ? (
                         <AlertCircle size={14} />
                       ) : (
                         <Shield size={14} />
@@ -544,7 +542,7 @@ export default function ThreadLayout({
                           type="button"
                           className="w-full px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-white/5 flex items-center justify-between transition-colors"
                           onClick={() => {
-                            setPermissionMode("full-access");
+                            setPermissionMode("yolo");
                             setPermissionMenuOpen(false);
                           }}
                         >
@@ -552,7 +550,7 @@ export default function ThreadLayout({
                             <ShieldAlert size={14} className="text-orange-500 dark:text-orange-400" />
                             完全访问权限
                           </span>
-                          {permissionMode === "full-access" ? (
+                          {permissionMode === "yolo" ? (
                             <Check size={14} className="text-blue-500 dark:text-blue-400" />
                           ) : null}
                         </button>

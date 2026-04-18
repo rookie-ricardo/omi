@@ -4,8 +4,7 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["apps/desktop/src/renderer/*"],
-      "@omi/core": ["packages/core/src/index.ts"],
-      "@omi/protocol": ["packages/protocol/src/index.ts"]
+      "@omi/core": ["packages/core/src/index.ts"]
     },
     "types": [
       "node"
