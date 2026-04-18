@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { GitRepoState, ProviderConfig, Session, SessionMessage, Task, ToolCall } from "@omi/core";
-import type { ModelListResult } from "@omi/protocol";
+import type { ModelListResult } from "@omi/core";
 import type { DesktopSettings, DesktopSettingsPatch } from "../../src/shared/desktop-settings";
 import { mergeDesktopSettings } from "../../src/shared/desktop-settings";
 

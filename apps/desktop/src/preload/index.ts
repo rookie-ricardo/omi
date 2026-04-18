@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { IpcRendererEvent, OpenDialogOptions } from "electron";
 
-import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/protocol";
+import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/core";
 import type { DesktopSettings, DesktopSettingsPatch } from "../shared/desktop-settings";
 
 contextBridge.exposeInMainWorld("omi", {

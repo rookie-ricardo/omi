@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { BrowserWindow, Menu, app, ipcMain, dialog, shell, type BrowserWindowConstructorOptions } from "electron";
 
-import { type commandMap } from "@omi/protocol";
+import { type commandMap } from "@omi/core";
 import {
   type DesktopSettings,
   type DesktopSettingsPatch,

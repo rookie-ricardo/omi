@@ -20,7 +20,7 @@ import type {
   SessionRuntimeGetResult,
   ToolListResult,
   ToolPendingListResult,
-} from "@omi/protocol";
+} from "@omi/core";
 import type { DesktopPermissionMode, DesktopUiState } from "../../shared/desktop-settings";
 
 import { getRunnerGateway, type RunnerEventEnvelope } from "../lib/runner-gateway";

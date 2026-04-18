@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@omi/core": "workspace:*",
-    "@omi/protocol": "workspace:*",
     "@omi/runner": "workspace:*",
     "@paper-design/shaders-react": "^0.0.72",
     "@radix-ui/react-dialog": "^1.1.14",

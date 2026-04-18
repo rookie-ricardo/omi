@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { AppOrchestrator, type LogEntry, type LogLevel, getLogger, setGlobalLoggerConfig } from "@omi/agent";
 import { createAppDatabase } from "@omi/store";
 import { createId } from "@omi/core";
-import { type RpcRequest, rpcRequestSchema } from "@omi/protocol";
+import { type RpcRequest, rpcRequestSchema } from "@omi/core";
 
 import { normalizeResult } from "./protocol";
 import { collectRunEventDeliveries, handleRunnerRequest, RunnerCommandError } from "./request-handler";

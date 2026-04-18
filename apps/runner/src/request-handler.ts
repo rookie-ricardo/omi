@@ -1,8 +1,8 @@
 import type { AppOrchestrator } from "@omi/agent";
 import type { RunCheckpoint } from "@omi/core";
 import { createId, nowIso } from "@omi/core";
-import type { RpcRequest, RunnerCommandName, RunState } from "@omi/protocol";
-import { parseCommand } from "@omi/protocol";
+import type { RpcRequest, RunnerCommandName, RunState } from "@omi/core";
+import { parseCommand } from "@omi/core";
 
 interface RunnerPrivateHost {
   database: {

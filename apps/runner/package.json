@@ -13,7 +13,6 @@
     "@omi/agent": "workspace:*",
     "@omi/memory": "workspace:*",
     "@omi/store": "workspace:*",
-    "@omi/protocol": "workspace:*",
     "@omi/core": "workspace:*"
   },
   "devDependencies": {

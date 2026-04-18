@@ -2,7 +2,7 @@
 
 import type { OpenDialogOptions, OpenDialogReturnValue } from "electron";
 
-import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/protocol";
+import type { RunnerCommandName, RunnerCommandParamsByName } from "@omi/core";
 import type { DesktopSettings, DesktopSettingsPatch } from "../shared/desktop-settings";
 
 interface RunnerEventEnvelope {

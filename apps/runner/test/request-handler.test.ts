@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SessionRuntimeState } from "@omi/agent";
 import type { Run } from "@omi/core";
-import { commandMap, parseResult } from "@omi/protocol";
+import { commandMap, parseResult } from "@omi/core";
 
 import {
   collectRunEventDeliveries,

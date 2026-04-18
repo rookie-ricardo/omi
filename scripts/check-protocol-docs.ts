@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { commandMap } from "../packages/protocol/src/index";
+import { commandMap } from "../packages/core/src/index";
 
 const docPath = resolve(process.cwd(), "docs/claude-first-runtime-architecture.md");
 const doc = readFileSync(docPath, "utf8");

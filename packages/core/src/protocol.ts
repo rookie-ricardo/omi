@@ -13,7 +13,7 @@ import {
   sessionRuntimeSnapshotSchema,
   taskSchema,
   toolCallSchema,
-} from "@omi/core";
+} from "./domain";
 
 export const rpcRequestSchema = z.object({
   id: z.string(),

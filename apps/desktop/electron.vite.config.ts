@@ -12,7 +12,6 @@ export default defineConfig({
     },
     resolve: {
       alias: {
-        "@omi/protocol": resolve(__dirname, "../../packages/protocol/src/index.ts"),
         "@omi/core": resolve(__dirname, "../../packages/core/src/index.ts"),
       },
     },
@@ -24,7 +23,6 @@ export default defineConfig({
     },
     resolve: {
       alias: {
-        "@omi/protocol": resolve(__dirname, "../../packages/protocol/src/index.ts"),
         "@omi/core": resolve(__dirname, "../../packages/core/src/index.ts"),
       },
     },
@@ -36,7 +34,6 @@ export default defineConfig({
         "@/ui/theme": resolve(__dirname, "src/renderer/ui/theme/index.ts"),
         "@/ui": resolve(__dirname, "src/renderer/ui/index.ts"),
         "@/tokens": resolve(__dirname, "src/renderer/tokens/index.ts"),
-        "@omi/protocol": resolve(__dirname, "../../packages/protocol/src/index.ts"),
         "@omi/core": resolve(__dirname, "../../packages/core/src/index.ts"),
       },
     },

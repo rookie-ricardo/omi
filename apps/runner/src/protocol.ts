@@ -1,4 +1,4 @@
-import { type RunnerResultName, parseResult, resultSchemas } from "@omi/protocol";
+import { type RunnerResultName, parseResult, resultSchemas } from "@omi/core";
 
 export function normalizeResult(method: string, result: unknown): unknown {
   if (method in resultSchemas) {
