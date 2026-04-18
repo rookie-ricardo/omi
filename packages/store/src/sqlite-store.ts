@@ -48,13 +48,6 @@ export function createAppDatabase(databasePath = resolveDatabasePath()): AppStor
   const db = drizzle(sqlite);
 
   sqlite.exec(`
-    DROP TABLE IF EXISTS events;
-    DROP TABLE IF EXISTS review_requests;
-    DROP TABLE IF EXISTS session_runtime;
-    DROP TABLE IF EXISTS session_history_entries;
-    DROP TABLE IF EXISTS session_branches;
-    DROP TABLE IF EXISTS run_checkpoints;
-
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
