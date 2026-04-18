@@ -10,7 +10,7 @@ import { createModelFromConfig } from "./model-registry";
 import type { ModelStopReason, ModelUsage, ToolName } from "./types";
 import { resolveProviderRuntime } from "./runtimes/resolver";
 import { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
-import { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";
+import { PiAgentProvider } from "./runtimes/pi-agent-provider";
 
 export interface ProviderAdapter {
   run(input: ProviderRunInput): Promise<ProviderRunResult>;
@@ -129,32 +129,32 @@ export function buildAgentInitialState(input: ProviderRunInput) {
 
 export interface ProviderRouterOptions {
   claudeProvider?: ProviderAdapter;
-  vercelProvider?: ProviderAdapter;
+  piAgentProvider?: ProviderAdapter;
 }
 
 /**
  * PiAiProvider - runtime router facade.
  *
- * Routes anthropic providers to Claude runtime and others to Vercel runtime.
+ * Routes anthropic providers to Claude Agent SDK and others to pi-agent-core.
  * Tool execution is handled by runtime-native SDK agent loops.
  */
 export class PiAiProvider implements ProviderAdapter {
   private readonly claudeProvider: ProviderAdapter;
-  private readonly vercelProvider: ProviderAdapter;
+  private readonly piAgentProvider: ProviderAdapter;
 
   constructor(options: ProviderRouterOptions = {}) {
     this.claudeProvider = options.claudeProvider ?? new ClaudeAgentSdkProvider();
-    this.vercelProvider = options.vercelProvider ?? new VercelAiSdkProvider();
+    this.piAgentProvider = options.piAgentProvider ?? new PiAgentProvider();
   }
 
   async run(input: ProviderRunInput): Promise<ProviderRunResult> {
     const runtime = resolveProviderRuntime(input.providerConfig);
-    const targetProvider = runtime === "claude-agent-sdk" ? this.claudeProvider : this.vercelProvider;
+    const targetProvider = runtime === "claude-agent-sdk" ? this.claudeProvider : this.piAgentProvider;
     return targetProvider.run(input);
   }
 
   cancel(runId: string): void {
-    for (const provider of new Set([this.claudeProvider, this.vercelProvider])) {
+    for (const provider of new Set([this.claudeProvider, this.piAgentProvider])) {
       provider.cancel(runId);
     }
   }
@@ -167,4 +167,4 @@ export function createProviderAdapter(options: ProviderRouterOptions = {}): Prov
 export type { ModelUsage, ModelStopReason, ToolPreflightDecision, ModelErrorClass } from "./types";
 export { resolveProviderRuntime, type ProviderRuntime } from "./runtimes/resolver";
 export { ClaudeAgentSdkProvider } from "./runtimes/claude-agent-sdk-provider";
-export { VercelAiSdkProvider } from "./runtimes/vercel-ai-sdk-provider";
+export { PiAgentProvider } from "./runtimes/pi-agent-provider";

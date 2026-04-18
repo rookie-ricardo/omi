@@ -1,5 +1,4 @@
 import type { Message } from "@mariozechner/pi-ai";
-import type { ModelMessage, ToolResultPart, UserModelMessage } from "ai";
 
 import type { ModelStopReason } from "../types";
 
@@ -21,14 +20,6 @@ export function linkAbortSignal(
   };
   source.addEventListener("abort", onAbort, { once: true });
   return () => source.removeEventListener("abort", onAbort);
-}
-
-export function mapVercelFinishReasonToModel(reason: string | undefined): ModelStopReason {
-  if (reason === "tool-calls") return "error";
-  if (reason === "length") return "max_tokens";
-  if (reason === "content-filter") return "content_filter";
-  if (reason === "error") return "error";
-  return "end_turn";
 }
 
 export function mapClaudeStopReasonToModel(reason: string | null | undefined): ModelStopReason {
@@ -62,34 +53,6 @@ function renderTextLikeContent(content: unknown): string {
     return [];
   });
   return pieces.join("");
-}
-
-function toModelUserContent(
-  message: Extract<Message, { role: "user" }>,
-): UserModelMessage["content"] {
-  if (typeof message.content === "string") {
-    return message.content;
-  }
-
-  const parts = message.content.map((part) => {
-    if (part.type === "text") {
-      return {
-        type: "text" as const,
-        text: part.text,
-      };
-    }
-    return {
-      type: "image" as const,
-      image: part.data,
-      mediaType: part.mimeType,
-    };
-  });
-
-  if (parts.length === 1 && parts[0].type === "text") {
-    return parts[0].text;
-  }
-
-  return parts;
 }
 
 function serializeMessageForFallbackPrompt(message: Message): Record<string, unknown> {
@@ -136,84 +99,6 @@ function serializeMessageForFallbackPrompt(message: Message): Record<string, unk
     output: renderTextLikeContent(message.content),
     details: typeof message.details === "undefined" ? null : message.details,
   };
-}
-
-function buildToolResultOutput(message: Extract<Message, { role: "toolResult" }>): ToolResultPart["output"] {
-  const renderedText = renderTextLikeContent(message.content);
-  const isTextOnly = message.content.every((part) => part.type === "text");
-
-  if (isTextOnly && typeof message.details === "undefined" && !message.isError) {
-    return {
-      type: "text",
-      value: renderedText,
-    };
-  }
-
-  return {
-    type: "json",
-    value: {
-      outputText: renderedText,
-      hasNonTextContent: !isTextOnly,
-      details: typeof message.details === "undefined" ? null : message.details,
-      isError: message.isError,
-    },
-  };
-}
-
-export function buildModelMessages(prompt: string, historyMessages: Message[]): ModelMessage[] {
-  const messages: ModelMessage[] = [];
-
-  for (const message of historyMessages) {
-    if (message.role === "user") {
-      messages.push({
-        role: "user",
-        content: toModelUserContent(message),
-      });
-      continue;
-    }
-
-    if (message.role === "assistant") {
-      messages.push({
-        role: "assistant",
-        content: message.content.map((part) => {
-          if (part.type === "text") {
-            return { type: "text", text: part.text };
-          }
-          if (part.type === "thinking") {
-            return { type: "reasoning", text: part.thinking };
-          }
-          return {
-            type: "tool-call",
-            toolCallId: part.id,
-            toolName: part.name,
-            input: part.arguments ?? {},
-          };
-        }),
-      });
-      continue;
-    }
-
-    messages.push({
-      role: "tool",
-      content: [
-        {
-          type: "tool-result",
-          toolCallId: message.toolCallId,
-          toolName: message.toolName,
-          output: buildToolResultOutput(message),
-        },
-      ],
-    });
-  }
-
-  if (prompt.trim().length > 0) {
-    messages.push({
-      role: "user",
-      content: prompt,
-    });
-  }
-
-  return messages;
 }
 
 /**

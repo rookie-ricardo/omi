@@ -79,7 +79,7 @@ describe("providers", () => {
     expect(resolveProviderRuntime(makeConfig({ name: "anthropic-compatible" }))).toBe("claude-agent-sdk");
   });
 
-  it("routes non-anthropic provider configs to vercel runtime", () => {
+  it("routes non-anthropic provider configs to pi-agent-core runtime", () => {
     expect(
       resolveProviderRuntime(
         makeConfig({
@@ -88,7 +88,7 @@ describe("providers", () => {
           model: "gpt-4.1-mini",
         }),
       ),
-    ).toBe("vercel-ai-sdk");
+    ).toBe("pi-agent-core");
   });
 
   it("routes provider run calls through runtime-specific adapters", async () => {
@@ -101,9 +101,9 @@ describe("providers", () => {
       })),
       cancel: vi.fn(),
     };
-    const vercelRuntime: ProviderAdapter = {
+    const piAgentRuntime: ProviderAdapter = {
       run: vi.fn(async () => ({
-        assistantText: "vercel",
+        assistantText: "pi-agent",
         stopReason: "end_turn" as const,
         usage: { inputTokens: 2, outputTokens: 2 },
         error: null,
@@ -112,7 +112,7 @@ describe("providers", () => {
     };
     const provider = createProviderAdapter({
       claudeProvider: claudeRuntime,
-      vercelProvider: vercelRuntime,
+      piAgentProvider: piAgentRuntime,
     });
 
     const anthropicResult = await provider.run({
@@ -133,9 +133,9 @@ describe("providers", () => {
     });
 
     expect(anthropicResult.assistantText).toBe("claude");
-    expect(openaiResult.assistantText).toBe("vercel");
+    expect(openaiResult.assistantText).toBe("pi-agent");
     expect(claudeRuntime.run).toHaveBeenCalledTimes(1);
-    expect(vercelRuntime.run).toHaveBeenCalledTimes(1);
+    expect(piAgentRuntime.run).toHaveBeenCalledTimes(1);
   });
 });
 
