@@ -13,27 +13,9 @@ import {
   setGlobalRegistry,
   type ToolRegistry,
 } from "./registry";
-import { createReadTool, readSchema } from "./read";
-import { createBashTool, bashSchema } from "./bash";
-import { createEditTool, editSchema } from "./edit";
-import { createWriteTool, writeSchema } from "./write";
-import { createLsTool, lsSchema } from "./ls";
-import { createGrepTool, grepSchema } from "./grep";
-import { createFindTool, findSchema } from "./find";
+import { createSkillTool, skillSchema } from "./skill";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type BuiltInToolFactory = (cwd: string) => OmiTool<any>;
-
-const READ_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash"];
-const WRITE_AUDIT_FIELDS: ToolDefinition["auditFields"] = ["executionId", "invokedAt", "inputHash", "retryCount"];
-
-function renameTool<T extends OmiTool>(tool: T, name: string): T {
-  return {
-    ...tool,
-    name,
-    label: name,
-  } as T;
-}
 
 function defineTool(
   name: string,
@@ -59,36 +41,7 @@ function defineTool(
     idempotencyPolicy: options.idempotencyPolicy,
     enabledByDefault: options.enabledByDefault ?? true,
     errorCodes: options.errorCodes,
-    auditFields: options.auditFields ?? [...READ_AUDIT_FIELDS],
-  };
-}
-
-const toolSearchSchema = Type.Object({
-  query: Type.String({ description: "Search query for tool name or description" }),
-});
-
-interface ToolSearchInput {
-  query: string;
-}
-
-function createToolSearchTool(): OmiTool {
-  return {
-    name: "tool.search",
-    label: "tool.search",
-    description: "Search available built-in tools by name or description.",
-    parameters: toolSearchSchema,
-    execute: async (_toolCallId: string, params: unknown) => {
-      const { query } = params as ToolSearchInput;
-      const matches = findTools(query);
-      const text = matches.length > 0
-        ? matches.map((definition) => `- ${definition.name}: ${definition.description}`).join("\n")
-        : "No tools matched";
-
-      return {
-        content: [{ type: "text" as const, text }],
-        details: { query, matches },
-      };
-    },
+    auditFields: options.auditFields ?? ["executionId", "invokedAt", "inputHash"],
   };
 }
 
@@ -97,186 +50,25 @@ interface BuiltInEntry {
   factory: BuiltInToolFactory;
 }
 
+/**
+ * OMI-specific tools only. Standard coding tools (Read, Write, Edit, Bash,
+ * Grep, Glob, LS, NotebookEdit) are provided by the SDK's claude_code preset.
+ */
 const ENTRIES: BuiltInEntry[] = [
   {
     definition: defineTool(
-      "read",
-      "Read the contents of a file.",
-      readSchema,
-      {
-        isReadOnly: true,
-        isConcurrencySafe: true,
-        riskLevel: "none",
-        idempotencyPolicy: "safe",
-        errorCodes: [
-          TOOL_ERROR_CODES.FILE_NOT_FOUND,
-          TOOL_ERROR_CODES.DIRECTORY_NOT_FOUND,
-          TOOL_ERROR_CODES.INVALID_PATH,
-          TOOL_ERROR_CODES.PERMISSION_DENIED,
-          TOOL_ERROR_CODES.FILE_TOO_LARGE,
-        ],
-      },
-    ),
-    factory: (cwd) => createReadTool(cwd),
-  },
-  {
-    definition: defineTool(
-      "ls",
-      "List files and directories.",
-      lsSchema,
-      {
-        isReadOnly: true,
-        isConcurrencySafe: true,
-        riskLevel: "none",
-        idempotencyPolicy: "safe",
-        errorCodes: [
-          TOOL_ERROR_CODES.DIRECTORY_NOT_FOUND,
-          TOOL_ERROR_CODES.INVALID_PATH,
-        ],
-      },
-    ),
-    factory: (cwd) => createLsTool(cwd),
-  },
-  {
-    definition: defineTool(
-      "grep",
-      "Search file contents for a pattern.",
-      grepSchema,
+      "skill",
+      "Execute a skill within the main conversation.",
+      skillSchema,
       {
         isReadOnly: true,
         isConcurrencySafe: true,
         riskLevel: "low",
         idempotencyPolicy: "safe",
-        errorCodes: [
-          TOOL_ERROR_CODES.SEARCH_ERROR,
-          TOOL_ERROR_CODES.FILE_NOT_FOUND,
-          TOOL_ERROR_CODES.INVALID_INPUT,
-          TOOL_ERROR_CODES.PERMISSION_DENIED,
-          TOOL_ERROR_CODES.OUTPUT_TRUNCATED,
-        ],
-      },
-    ),
-    factory: (cwd) => createGrepTool(cwd),
-  },
-  {
-    definition: defineTool(
-      "glob",
-      "Search for files by glob pattern.",
-      findSchema,
-      {
-        isReadOnly: true,
-        isConcurrencySafe: true,
-        riskLevel: "none",
-        idempotencyPolicy: "safe",
-        errorCodes: [
-          TOOL_ERROR_CODES.SEARCH_ERROR,
-          TOOL_ERROR_CODES.FILE_NOT_FOUND,
-          TOOL_ERROR_CODES.INVALID_INPUT,
-          TOOL_ERROR_CODES.OUTPUT_TRUNCATED,
-        ],
-      },
-    ),
-    factory: (cwd) => renameTool(createFindTool(cwd), "glob"),
-  },
-  {
-    definition: defineTool(
-      "bash",
-      "Execute a shell command in the working directory.",
-      bashSchema,
-      {
-        isReadOnly: false,
-        isConcurrencySafe: false,
-        riskLevel: "high",
-        idempotencyPolicy: "none",
-        errorCodes: [
-          TOOL_ERROR_CODES.COMMAND_FAILED,
-          TOOL_ERROR_CODES.COMMAND_TIMEOUT,
-          TOOL_ERROR_CODES.PROCESS_KILLED,
-          TOOL_ERROR_CODES.INVALID_COMMAND,
-          TOOL_ERROR_CODES.PERMISSION_DENIED,
-        ],
-        auditFields: [...WRITE_AUDIT_FIELDS],
-      },
-    ),
-    factory: (cwd) => createBashTool(cwd),
-  },
-  {
-    definition: defineTool(
-      "edit",
-      "Edit a file by replacing exact text.",
-      editSchema,
-      {
-        isReadOnly: false,
-        isConcurrencySafe: false,
-        riskLevel: "high",
-        idempotencyPolicy: "conflict",
-        errorCodes: [
-          TOOL_ERROR_CODES.FILE_NOT_FOUND,
-          TOOL_ERROR_CODES.INVALID_PATH,
-          TOOL_ERROR_CODES.PERMISSION_DENIED,
-          TOOL_ERROR_CODES.INVALID_INPUT,
-        ],
-        auditFields: [...WRITE_AUDIT_FIELDS],
-      },
-    ),
-    factory: (cwd) => createEditTool(cwd),
-  },
-  {
-    definition: defineTool(
-      "notebook_edit",
-      "Edit notebook or JSON-like content with explicit notebook tool name.",
-      editSchema,
-      {
-        isReadOnly: false,
-        isConcurrencySafe: false,
-        riskLevel: "high",
-        idempotencyPolicy: "conflict",
-        errorCodes: [
-          TOOL_ERROR_CODES.FILE_NOT_FOUND,
-          TOOL_ERROR_CODES.INVALID_PATH,
-          TOOL_ERROR_CODES.PERMISSION_DENIED,
-          TOOL_ERROR_CODES.INVALID_INPUT,
-        ],
-        auditFields: [...WRITE_AUDIT_FIELDS],
-      },
-    ),
-    factory: (cwd) => renameTool(createEditTool(cwd), "notebook_edit"),
-  },
-  {
-    definition: defineTool(
-      "write",
-      "Write content to a file.",
-      writeSchema,
-      {
-        isReadOnly: false,
-        isConcurrencySafe: false,
-        riskLevel: "high",
-        idempotencyPolicy: "conflict",
-        errorCodes: [
-          TOOL_ERROR_CODES.FILE_ALREADY_EXISTS,
-          TOOL_ERROR_CODES.INVALID_PATH,
-          TOOL_ERROR_CODES.PERMISSION_DENIED,
-          TOOL_ERROR_CODES.DIRECTORY_NOT_FOUND,
-        ],
-        auditFields: [...WRITE_AUDIT_FIELDS],
-      },
-    ),
-    factory: (cwd) => createWriteTool(cwd),
-  },
-  {
-    definition: defineTool(
-      "tool.search",
-      "Search available built-in tools.",
-      toolSearchSchema,
-      {
-        isReadOnly: true,
-        isConcurrencySafe: true,
-        riskLevel: "none",
-        idempotencyPolicy: "safe",
         errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
       },
     ),
-    factory: () => createToolSearchTool(),
+    factory: () => createSkillTool(),
   },
 ];
 
