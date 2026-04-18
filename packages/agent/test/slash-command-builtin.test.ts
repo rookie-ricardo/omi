@@ -36,7 +36,7 @@ function createMockSession(): AgentSession {
 			summary: { goal: "Test compaction" },
 			removedEntries: [],
 		})),
-		fork: vi.fn(async (historyEntryId) => ({
+		fork: vi.fn(async (messageId) => ({
 			newSessionId: "forked-session-456",
 			selectedText: "Selected text",
 		})),

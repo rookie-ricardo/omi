@@ -13,26 +13,26 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { createId, nowIso } from "@omi/core";
 import {
   buildSessionRuntimeMessages,
-  buildSessionRuntimeMessageEnvelopes,
   convertRuntimeMessagesToLlm,
-  type RuntimeMessage,
   type SessionCompactionSnapshot,
-  type SessionRuntimeMessageEnvelope,
   type CompactionSummaryDocument,
+  listRetainedSessionMessages,
+  listRetainedToolCalls,
 } from "@omi/memory";
 import {
   createProviderAdapter,
   type ProviderAdapter,
-  type ProviderRunResult,
   type ProviderToolLifecycleControl,
   type ProviderToolLifecycleEvent,
 } from "@omi/provider";
 import {
   createAllTools,
   createDiscoverSkillsTool,
+  createSkillTool,
   listBuiltInToolNames,
   SAFE_TOOL_NAMES,
   runWithToolRuntimeContext,
+  setSkillExecutorRuntime,
   type ToolRuntimeContext,
 } from "@omi/tools";
 
@@ -48,11 +48,7 @@ import {
   createPermissionEvaluator,
 } from "./permissions";
 
-// ============================================================================
-// Types
-// ============================================================================
-
-export type SessionPermissionMode = "default" | "full-access";
+export type SessionPermissionMode = "default" | "yolo";
 
 export interface AgentSessionOptions {
   database: AppStore;
@@ -74,21 +70,16 @@ interface ExecuteRunInput {
   run: Run;
   prompt: string;
   contextFiles: string[];
-  images?: ImageContent[];
   providerConfig: ProviderConfig;
-  historyEntryId: string | null;
-  checkpointSummary: string | null;
-  checkpointDetails: unknown | null;
+  rootMessageId: string;
 }
 
-type FailedRunInput = Pick<
-  ExecuteRunInput,
-  "session" | "task" | "run" | "prompt" | "historyEntryId"
->;
+type FailedRunInput = Pick<ExecuteRunInput, "session" | "task" | "run" | "prompt" | "rootMessageId">;
 
-// ============================================================================
-// AgentSession
-// ============================================================================
+interface RunMessageContext {
+  rootMessageId: string;
+  taskId: string | null;
+}
 
 export class AgentSession {
   private readonly provider: ProviderAdapter;
@@ -98,12 +89,11 @@ export class AgentSession {
   private permissionMode: SessionPermissionMode;
   private workspaceRoot: string;
 
-  /** Active run's abort controller for cancellation. */
   private activeAbortController: AbortController | null = null;
-  /** Pending tool approval resolvers. */
   private readonly pendingApprovals = new Map<string, (decision: "approved" | "rejected") => void>();
-  /** Pre-decisions made before the approval promise was created (handles race conditions). */
   private readonly preDecisions = new Map<string, "approved" | "rejected">();
+  private readonly runContexts = new Map<string, RunMessageContext>();
+  private readonly assistantBuffers = new Map<string, string>();
 
   constructor(private readonly options: AgentSessionOptions) {
     this.provider = options.provider ?? createProviderAdapter();
@@ -111,10 +101,6 @@ export class AgentSession {
     this.permissionMode = options.permissionMode ?? "default";
     this.workspaceRoot = options.workspaceRoot;
   }
-
-  // ==========================================================================
-  // Public API — Session Configuration
-  // ==========================================================================
 
   setPermissionMode(mode: SessionPermissionMode): void {
     this.permissionMode = mode;
@@ -124,10 +110,6 @@ export class AgentSession {
     this.workspaceRoot = workspaceRoot;
   }
 
-  // ==========================================================================
-  // Public API — Run Lifecycle
-  // ==========================================================================
-
   startRun(input: {
     prompt: string;
     contextFiles?: string[];
@@ -136,31 +118,42 @@ export class AgentSession {
   }): Run {
     const session = this.requireSession();
     const task = input.taskId ? this.options.database.getTask(input.taskId) : null;
+    const rootMessage = this.createRootUserMessage({
+      session,
+      taskId: task?.id ?? null,
+      prompt: input.prompt,
+      parentMessageId: null,
+      model: input.providerConfig.model,
+    });
     const run = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: input.providerConfig.name,
+      providerConfigId: input.providerConfig.id,
+      model: input.providerConfig.model,
       prompt: input.prompt,
       sourceRunId: null,
       recoveryMode: "start",
       originRunId: null,
-      resumeFromCheckpoint: null,
       terminalReason: null,
+      provider: input.providerConfig.name,
+      resumeFromCheckpoint: null,
+    } as Run);
+    this.runContexts.set(run.id, {
+      rootMessageId: rootMessage.id,
+      taskId: task?.id ?? null,
     });
-    const contextFiles = Array.isArray(input.contextFiles)
-      ? [...new Set(input.contextFiles.map((e) => e.trim()).filter((e) => e.length > 0))]
-      : [];
     this.options.runtime.enqueueRun({
       runId: run.id,
       prompt: input.prompt,
-      ...(contextFiles.length > 0 ? { contextFiles } : {}),
+      contextFiles: normalizeContextFiles(input.contextFiles),
       taskId: task?.id ?? null,
       providerConfigId: input.providerConfig.id,
       sourceRunId: null,
       mode: "start",
+      parentMessageId: rootMessage.id,
     });
-
+    this.persistSessionSelection(input.providerConfig);
     this.processQueue().catch((error) => {
       this.options.emit({
         type: "run.failed",
@@ -171,72 +164,6 @@ export class AgentSession {
         },
       });
     });
-
-    return run;
-  }
-
-  continueFromHistoryEntry(input: {
-    prompt: string;
-    providerConfig: ProviderConfig;
-    taskId?: string | null;
-    historyEntryId?: string | null;
-    checkpointSummary?: string | null;
-    checkpointDetails?: unknown | null;
-  }): Run {
-    const session = this.requireSession();
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(session.id) ?? [];
-    if (input.historyEntryId && !historyEntries.some((e) => e.id === input.historyEntryId)) {
-      throw new Error(`History entry ${input.historyEntryId} not found for session ${session.id}`);
-    }
-
-    let branchId: string | null = null;
-    if (input.historyEntryId) {
-      branchId = createId("branch");
-      this.options.database.createBranch({
-        id: branchId,
-        sessionId: session.id,
-        title: `continue-from-${input.historyEntryId.slice(0, 8)}`,
-      });
-      this.options.runtime.setActiveBranchId(branchId);
-      this.options.database.setActiveBranchId(session.id, branchId);
-    }
-
-    const task = input.taskId ? this.options.database.getTask(input.taskId) : null;
-    const run = this.options.database.createRun({
-      sessionId: session.id,
-      taskId: task?.id ?? null,
-      status: "queued",
-      provider: input.providerConfig.name,
-      prompt: input.prompt,
-      sourceRunId: null,
-      recoveryMode: "start",
-      originRunId: null,
-      resumeFromCheckpoint: null,
-      terminalReason: null,
-    });
-    this.options.runtime.enqueueRun({
-      runId: run.id,
-      prompt: input.prompt,
-      taskId: task?.id ?? null,
-      providerConfigId: input.providerConfig.id,
-      sourceRunId: null,
-      mode: "start",
-      historyEntryId: input.historyEntryId ?? null,
-      checkpointSummary: input.checkpointSummary ?? null,
-      checkpointDetails: input.checkpointDetails ?? null,
-    });
-
-    this.processQueue().catch((error) => {
-      this.options.emit({
-        type: "run.failed",
-        payload: {
-          runId: "",
-          sessionId: this.options.sessionId,
-          error: `Queue processing failed: ${error instanceof Error ? error.message : String(error)}`,
-        },
-      });
-    });
-
     return run;
   }
 
@@ -246,29 +173,39 @@ export class AgentSession {
       throw new Error(`Run ${runId} is not retryable`);
     }
 
-    const runtime = this.options.runtime.snapshot();
     const session = this.requireSession();
-    const prompt = resolveRunPrompt(originalRun, runtime, session);
+    const prompt = resolveRunPrompt(originalRun, this.options.runtime.snapshot(), session);
     if (!prompt) {
       throw new Error(`Cannot retry run ${runId} without a prompt`);
     }
 
     const task = originalRun.taskId ? this.options.database.getTask(originalRun.taskId) : null;
     const providerConfig = this.resolveProviderConfig();
-    const originRunId = originalRun.originRunId ?? originalRun.id;
+    const rootMessage = this.createRootUserMessage({
+      session,
+      taskId: task?.id ?? null,
+      prompt,
+      parentMessageId: null,
+      model: providerConfig.model,
+    });
     const nextRun = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: providerConfig.name,
+      providerConfigId: providerConfig.id,
+      model: providerConfig.model,
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "retry",
-      originRunId,
-      resumeFromCheckpoint: null,
+      originRunId: originalRun.originRunId ?? originalRun.id,
       terminalReason: null,
+      provider: providerConfig.name,
+      resumeFromCheckpoint: null,
+    } as Run);
+    this.runContexts.set(nextRun.id, {
+      rootMessageId: rootMessage.id,
+      taskId: task?.id ?? null,
     });
-
     this.options.runtime.enqueueRun({
       runId: nextRun.id,
       prompt,
@@ -276,8 +213,8 @@ export class AgentSession {
       providerConfigId: providerConfig.id,
       sourceRunId: originalRun.id,
       mode: "retry",
+      parentMessageId: rootMessage.id,
     });
-
     this.processQueue().catch((error) => {
       this.options.emit({
         type: "run.failed",
@@ -297,29 +234,39 @@ export class AgentSession {
       throw new Error(`Run ${runId} is not resumable`);
     }
 
-    const runtime = this.options.runtime.snapshot();
     const session = this.requireSession();
-    const prompt = resolveRunPrompt(originalRun, runtime, session);
+    const prompt = resolveRunPrompt(originalRun, this.options.runtime.snapshot(), session);
     if (!prompt) {
       throw new Error(`Cannot resume run ${runId} without a prompt`);
     }
 
     const task = originalRun.taskId ? this.options.database.getTask(originalRun.taskId) : null;
     const providerConfig = this.resolveProviderConfig();
-    const originRunId = originalRun.originRunId ?? originalRun.id;
+    const rootMessage = this.createRootUserMessage({
+      session,
+      taskId: task?.id ?? null,
+      prompt,
+      parentMessageId: null,
+      model: providerConfig.model,
+    });
     const resumedRun = this.options.database.createRun({
       sessionId: session.id,
       taskId: task?.id ?? null,
       status: "queued",
-      provider: providerConfig.name,
+      providerConfigId: providerConfig.id,
+      model: providerConfig.model,
       prompt,
       sourceRunId: originalRun.id,
       recoveryMode: "resume",
-      originRunId,
-      resumeFromCheckpoint: null,
+      originRunId: originalRun.originRunId ?? originalRun.id,
       terminalReason: null,
+      provider: providerConfig.name,
+      resumeFromCheckpoint: null,
+    } as Run);
+    this.runContexts.set(resumedRun.id, {
+      rootMessageId: rootMessage.id,
+      taskId: task?.id ?? null,
     });
-
     this.options.runtime.enqueueRun({
       runId: resumedRun.id,
       prompt,
@@ -327,8 +274,8 @@ export class AgentSession {
       providerConfigId: providerConfig.id,
       sourceRunId: originalRun.id,
       mode: "resume",
+      parentMessageId: rootMessage.id,
     });
-
     this.processQueue().catch((error) => {
       this.options.emit({
         type: "run.failed",
@@ -348,14 +295,12 @@ export class AgentSession {
     summary: SessionCompactionSnapshot["summary"];
     compactedAt: string;
   }> {
-    // SDK handles compaction internally. Manual compaction creates a
-    // lightweight snapshot from the current runtime state.
     const session = this.requireSession();
     const compactedAt = nowIso();
     const runtime = this.options.runtime.snapshot();
     const summary: CompactionSummaryDocument = runtime.compaction.lastSummary ?? {
       version: 1,
-      goal: "Session compaction handled by SDK runtime.",
+      goal: "Session compaction handled by runtime.",
       constraints: [],
       progress: { done: [], inProgress: [], blocked: [] },
       keyDecisions: [],
@@ -363,6 +308,15 @@ export class AgentSession {
       criticalContext: [],
     };
     this.options.runtime.completeCompaction({ summary, compactedAt });
+    const messages = this.options.database.listMessages(session.id);
+    this.createSummaryMessage({
+      session,
+      taskId: null,
+      parentMessageId: null,
+      compressedFromMessageId: resolveCompactionStartMessageId(messages),
+      summary: summary.goal,
+      model: session.model,
+    });
     return {
       sessionId: session.id,
       runtime: this.options.runtime.snapshot(),
@@ -381,60 +335,45 @@ export class AgentSession {
     this.activeAbortController?.abort();
     this.options.database.updateRun(runId, { status: "canceled", terminalReason: "canceled" });
     this.options.runtime.cancelRun(runId);
-    this.persistPartialAssistantMessageFromEvents({ sessionId: run.sessionId, runId });
+    this.persistPartialAssistantMessageFromBuffer(runId);
     this.rejectAllPendingApprovals();
-
-    this.emitAndPersist(runId, run.sessionId, {
+    this.emitEvent({
       type: "run.canceled",
       payload: { runId, sessionId: run.sessionId },
     });
-
     return { runId, canceled: true };
   }
 
   approveTool(toolCallId: string): { toolCallId: string; decision: "approved" } {
     const resolver = this.pendingApprovals.get(toolCallId);
     if (resolver) {
-      resolver("approved");
       this.pendingApprovals.delete(toolCallId);
+      resolver("approved");
     } else {
       this.preDecisions.set(toolCallId, "approved");
     }
-    // Also update runtime state
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.options.runtime.approveTool(runtime.activeRunId, toolCallId);
-    }
+    this.options.runtime.resumeFromToolDecision(toolCallId);
     return { toolCallId, decision: "approved" };
   }
 
   rejectTool(toolCallId: string): { toolCallId: string; decision: "rejected" } {
     const resolver = this.pendingApprovals.get(toolCallId);
     if (resolver) {
-      resolver("rejected");
       this.pendingApprovals.delete(toolCallId);
+      resolver("rejected");
     } else {
       this.preDecisions.set(toolCallId, "rejected");
     }
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.options.runtime.rejectTool(runtime.activeRunId, toolCallId);
-      this.cancelRun(runtime.activeRunId);
-    }
+    this.options.runtime.resumeFromToolDecision(toolCallId);
     return { toolCallId, decision: "rejected" };
   }
 
-  // ==========================================================================
-  // Session Control
-  // ==========================================================================
-
   async abort(): Promise<void> {
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.cancelRun(runtime.activeRunId);
+    if (this.options.runtime.snapshot().activeRunId) {
+      this.cancelRun(this.options.runtime.snapshot().activeRunId!);
     }
     while (this.options.runtime.snapshot().activeRunId) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
 
@@ -446,30 +385,10 @@ export class AgentSession {
     this.processingQueue = false;
   }
 
-  // ==========================================================================
-  // Model Management
-  // ==========================================================================
-
   setModel(modelId: string): void {
-    const currentConfig = this.options.database.getProviderConfig();
-    if (!currentConfig) {
-      throw new Error("No provider config available");
-    }
-    this.options.database.upsertProviderConfig({
-      id: currentConfig.id,
-      name: currentConfig.name,
-      protocol: currentConfig.protocol,
-      baseUrl: currentConfig.baseUrl,
-      apiKey: currentConfig.apiKey,
-      model: modelId,
-      url: currentConfig.url,
-    });
-    this.options.runtime.setSelectedProviderConfig(currentConfig.id);
+    const session = this.requireSession();
+    this.options.database.updateSession(session.id, { model: modelId });
   }
-
-  // ==========================================================================
-  // Statistics
-  // ==========================================================================
 
   getSessionStats(): {
     sessionId: string;
@@ -481,8 +400,8 @@ export class AgentSession {
   } {
     const session = this.requireSession();
     const messages = this.options.database.listMessages(session.id);
+    const toolCalls = this.options.database.listToolCallsBySession(session.id);
     const runs = this.options.database.listRuns(session.id);
-    const toolCalls = runs.flatMap((run) => this.options.database.listToolCalls(run.id));
     return {
       sessionId: session.id,
       userMessages: messages.filter((m) => m.role === "user").length,
@@ -493,47 +412,77 @@ export class AgentSession {
     };
   }
 
-  // ==========================================================================
-  // Prompting
-  // ==========================================================================
-
   async prompt(
     text: string,
     options?: {
       taskId?: string | null;
-      historyEntryId?: string | null;
       images?: ImageContent[];
     },
   ): Promise<Run> {
-    const providerConfig = this.options.database.getProviderConfig();
-    if (!providerConfig) {
-      throw new Error("No provider config available for this session");
-    }
-    if (options?.historyEntryId) {
-      return this.continueFromHistoryEntry({
-        prompt: text,
-        providerConfig,
-        taskId: options.taskId,
-        historyEntryId: options.historyEntryId,
-      });
-    }
+    const providerConfig = this.resolveProviderConfig();
     return this.startRun({ prompt: text, providerConfig, taskId: options?.taskId });
   }
 
-  async fork(historyEntryId: string): Promise<{ newSessionId: string; selectedText: string }> {
+  async fork(messageId: string): Promise<{ newSessionId: string; selectedText: string }> {
     const session = this.requireSession();
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(session.id) ?? [];
-    const entry = historyEntries.find((e) => e.id === historyEntryId);
-    if (!entry) {
-      throw new Error(`History entry ${historyEntryId} not found`);
+    const selectedMessage = messageId ? this.options.database.getMessage(messageId) : null;
+    if (messageId && (!selectedMessage || selectedMessage.sessionId !== session.id)) {
+      throw new Error(`Message ${messageId} not found`);
     }
     const newSession = this.options.database.createSession(`Fork of ${session.title}`);
-    return { newSessionId: newSession.id, selectedText: entry.summary ?? "" };
-  }
+    this.options.database.updateSession(newSession.id, {
+      providerConfigId: session.providerConfigId,
+      model: session.model,
+      permissionMode: session.permissionMode,
+      thinkLevel: session.thinkLevel,
+    });
 
-  // ==========================================================================
-  // Private — Queue Processing
-  // ==========================================================================
+    const sourceMessages = listRetainedSessionMessages(this.options.database.listMessages(session.id));
+    const sourceToolCalls = listRetainedToolCalls(
+      this.options.database.listToolCallsBySession(session.id),
+      sourceMessages,
+    );
+    const messageIdMap = new Map<string, string>();
+
+    for (const message of sourceMessages) {
+      const nextMessageId = createId("msg");
+      messageIdMap.set(message.id, nextMessageId);
+      this.options.database.addMessage({
+        id: nextMessageId,
+        sessionId: newSession.id,
+        taskId: null,
+        parentMessageId: message.parentMessageId ? (messageIdMap.get(message.parentMessageId) ?? null) : null,
+        role: message.role,
+        messageType: message.messageType,
+        content: message.content,
+        model: message.model,
+        tokens: message.tokens,
+        totalTokens: message.totalTokens,
+        compressedFromMessageId: message.compressedFromMessageId
+          ? (messageIdMap.get(message.compressedFromMessageId) ?? nextMessageId)
+          : null,
+      });
+    }
+
+    for (const toolCall of sourceToolCalls) {
+      const nextMessageId = messageIdMap.get(toolCall.messageId);
+      if (!nextMessageId) {
+        continue;
+      }
+      this.options.database.createToolCall({
+        id: createId("tool"),
+        messageId: nextMessageId,
+        sessionId: newSession.id,
+        toolName: toolCall.toolName,
+        approvalState: toolCall.approvalState,
+        input: toolCall.input,
+        output: toolCall.output,
+        error: toolCall.error,
+      });
+    }
+
+    return { newSessionId: newSession.id, selectedText: selectedMessage?.content ?? sourceMessages.at(-1)?.content ?? "" };
+  }
 
   private async processQueue(): Promise<void> {
     if (this.processingQueue) return;
@@ -546,17 +495,23 @@ export class AgentSession {
         this.options.runtime.dequeueRun(queuedRun.runId);
 
         const run = this.options.database.getRun(queuedRun.runId);
-        if (!run || run.status === "canceled") continue;
+        if (!run || run.status === "canceled") {
+          continue;
+        }
 
         const session = this.requireSession();
         const task = run.taskId ? this.options.database.getTask(run.taskId) : null;
+        const context = this.runContexts.get(run.id);
+        if (!context?.rootMessageId) {
+          throw new Error(`Run ${run.id} is missing its root message context`);
+        }
 
         let providerConfig: ProviderConfig;
         try {
           providerConfig = this.resolveQueuedProviderConfig(queuedRun.providerConfigId);
         } catch (error) {
           await this.handleFailedRun(
-            { session, task, run, prompt: queuedRun.prompt, historyEntryId: queuedRun.historyEntryId ?? null },
+            { session, task, run, prompt: queuedRun.prompt, rootMessageId: context.rootMessageId },
             error,
           );
           continue;
@@ -569,9 +524,7 @@ export class AgentSession {
           prompt: queuedRun.prompt,
           contextFiles: queuedRun.contextFiles ?? [],
           providerConfig,
-          historyEntryId: queuedRun.historyEntryId ?? null,
-          checkpointSummary: queuedRun.checkpointSummary ?? null,
-          checkpointDetails: queuedRun.checkpointDetails ?? null,
+          rootMessageId: context.rootMessageId,
         });
       }
     } finally {
@@ -579,79 +532,56 @@ export class AgentSession {
     }
   }
 
-  // ==========================================================================
-  // Private — Run Execution (SDK-first: single provider.run() call)
-  // ==========================================================================
-
   private async executeRun(input: ExecuteRunInput): Promise<void> {
-    const { session, task, run, prompt, contextFiles, providerConfig, historyEntryId } = input;
+    const { session, task, run, prompt, contextFiles, providerConfig, rootMessageId } = input;
     const abortController = new AbortController();
     this.activeAbortController = abortController;
+    this.assistantBuffers.set(run.id, "");
 
     try {
-      // 1. Update statuses
-      this.options.database.updateRun(run.id, { status: "running" });
-      this.options.database.updateSession(session.id, {
-        status: nextSessionStatus(session.status, "run_started"),
+      this.options.database.updateRun(run.id, {
+        status: "running",
+        providerConfigId: providerConfig.id,
+        model: providerConfig.model,
       });
       this.options.runtime.beginRun(run.id, prompt);
-
-      // 2. Emit run.started
-      this.emitAndPersist(run.id, session.id, {
+      this.emitEvent({
         type: "run.started",
         payload: { runId: run.id, sessionId: session.id, prompt },
       });
 
-      // 2b. Write branch checkpoint if continuing from a history entry (BEFORE building history)
-      let effectiveHistoryLeafId = historyEntryId;
-      if (input.historyEntryId && input.checkpointSummary) {
-        const branchId = this.getActiveBranchId(session.id);
-        const parentEntry = this.options.database.getHistoryEntry(input.historyEntryId);
-        const checkpointEntry = this.options.database.addSessionHistoryEntry?.({
-          sessionId: session.id,
-          parentId: input.historyEntryId,
-          kind: "branch_summary",
-          messageId: null,
-          summary: input.checkpointSummary,
-          details: input.checkpointDetails ?? null,
-          branchId,
-          lineageDepth: (parentEntry?.lineageDepth ?? -1) + 1,
-          originRunId: run.id,
-        });
-        // Use the checkpoint as the leaf so its summary appears in the lineage
-        if (checkpointEntry) {
-          effectiveHistoryLeafId = checkpointEntry.id;
-        }
-      }
-
-      // 3. Load resources and build system prompt
       await this.options.resources.reload();
       const resolvedSkill = await this.options.resources.resolveSkillForPrompt(prompt);
       const systemPrompt = this.options.resources.buildSystemPrompt(resolvedSkill, this.workspaceRoot);
 
-      // Emit skills resolved
       if (resolvedSkill) {
-        this.emitAndPersist(run.id, session.id, {
-          type: "run.skills_resolved",
+        this.emitEvent({
+          type: "run.skill_selected",
           payload: {
             runId: run.id,
             sessionId: session.id,
             skillName: resolvedSkill.skill.name,
+            score: resolvedSkill.score,
+            source: resolvedSkill.skill.source.client,
             enabledToolNames: resolvedSkill.enabledToolNames,
+            diagnostics: resolvedSkill.diagnostics,
           },
         });
       }
 
-      // 4. Build history messages BEFORE persisting current prompt
-      // (ensures current run's prompt is not included in history)
-      const runtimeMessages = this.buildProviderHistoryMessages(session.id, effectiveHistoryLeafId);
+      const runtimeMessages = this.buildProviderHistoryMessages(session.id);
       const historyMessages = convertRuntimeMessagesToLlm(runtimeMessages);
 
-      // 5. Persist user message and update session latestUserMessage
-      this.ensureUserPromptPersisted({ sessionId: session.id, runId: run.id, prompt, historyEntryId });
-      this.options.database.updateSession(session.id, { latestUserMessage: prompt });
+      setSkillExecutorRuntime(async (skillName: string, args?: string) => {
+        const matches = await searchSkills(this.workspaceRoot, skillName);
+        const match = matches.find((candidate) => candidate.name.toLowerCase() === skillName.toLowerCase()) ?? matches[0];
+        if (!match) {
+          return { content: `No skill found matching '${skillName}'. Use discover_skills to search.` };
+        }
+        const body = args ? `${match.body}\n\nArguments: ${args}` : match.body;
+        return { content: body, details: { skillName: match.name, score: match.score } };
+      });
 
-      // 6. Build tools
       const tools = Object.values(createAllTools(this.workspaceRoot));
       const workspaceRoot = this.workspaceRoot;
       tools.push(
@@ -659,27 +589,22 @@ export class AgentSession {
           workspaceRootFactory: () => workspaceRoot,
           searchSkills: async (root, query) => {
             const matches = await searchSkills(root, query);
-            return matches.map((m) => ({
-              name: m.name,
-              description: m.description,
-              compatibility: m.compatibility ?? null,
-              allowedTools: m.allowedTools,
-              body: m.body,
-              score: m.score,
+            return matches.map((match) => ({
+              name: match.name,
+              description: match.description,
+              compatibility: match.compatibility ?? null,
+              allowedTools: match.allowedTools,
+              body: match.body,
+              score: match.score,
             }));
           },
         }),
       );
-      const enabledTools = [...listBuiltInToolNames(), "discover_skills"];
+      tools.push(createSkillTool());
 
-      // 7. Build effective prompt (with context files)
+      const enabledTools = [...new Set([...listBuiltInToolNames(), "discover_skills", "skill"])];
       const effectivePrompt = buildEffectivePrompt(prompt, contextFiles, resolvedSkill);
-
-      // 8. Determine tool execution mode
       const toolExecutionMode = resolveToolExecutionMode(enabledTools);
-
-      // 9. Call provider — SDK handles the entire agentic loop
-      let assistantText = "";
 
       const doRun = async () =>
         this.provider.run({
@@ -695,16 +620,16 @@ export class AgentSession {
           toolExecutionMode,
           signal: abortController.signal,
           onTextDelta: (delta) => {
-            assistantText += delta;
-            this.emitAndPersist(run.id, session.id, {
+            this.assistantBuffers.set(run.id, (this.assistantBuffers.get(run.id) ?? "") + delta);
+            this.emitEvent({
               type: "run.delta",
               payload: { runId: run.id, sessionId: session.id, delta },
             });
           },
           onToolLifecycle: (event) =>
-            this.handleToolLifecycle(event, run, session, task),
+            this.handleToolLifecycle(event, run, session, task, rootMessageId),
           onSdkMessage: (message) => {
-            this.emitAndPersist(run.id, session.id, {
+            this.emitEvent({
               type: `sdk.${(message as Record<string, unknown>).type ?? "message"}`,
               payload: { runId: run.id, sessionId: session.id, message: message as Record<string, unknown> },
             });
@@ -715,56 +640,59 @@ export class AgentSession {
         ? await runWithToolRuntimeContext(this.options.toolRuntimeContext, doRun)
         : await doRun();
 
-      // 10. Resolve final assistant text (prefer streamed deltas, fall back to result)
-      const finalAssistantText = assistantText.trim() ? assistantText : (result.assistantText ?? "");
+      const finalAssistantText = (this.assistantBuffers.get(run.id) ?? "").trim()
+        ? this.assistantBuffers.get(run.id) ?? ""
+        : (result.assistantText ?? "");
+
+      let assistantMessageId: string | null = null;
       if (finalAssistantText.trim()) {
-        const branchId = this.getActiveBranchId(session.id);
-        this.options.database.addMessage({
+        const outputTokens = Number(result.usage.outputTokens ?? estimateTextTokens(finalAssistantText));
+        const assistantMessage = this.options.database.addMessage({
           sessionId: session.id,
+          taskId: task?.id ?? null,
+          parentMessageId: rootMessageId,
           role: "assistant",
+          messageType: "text",
           content: finalAssistantText,
-          branchId,
-          originRunId: run.id,
+          model: providerConfig.model,
+          tokens: outputTokens,
+          totalTokens: outputTokens,
+          compressedFromMessageId: null,
         });
-        this.options.database.updateSession(session.id, { latestAssistantMessage: finalAssistantText });
+        assistantMessageId = assistantMessage.id;
+        this.options.database.updateSession(session.id, {
+          latestAssistantMessage: finalAssistantText,
+          providerConfigId: providerConfig.id,
+          model: providerConfig.model,
+        });
+        const totalUsage = Number(result.usage.inputTokens ?? 0) + Number(result.usage.outputTokens ?? 0);
+        if (totalUsage > 0) {
+          this.options.database.updateMessage(assistantMessage.id, { totalTokens: totalUsage });
+          this.bumpAncestorTotals(rootMessageId, totalUsage);
+        }
       }
 
-      // 11. Finalize run
       const isError = result.error !== null;
       this.options.database.updateRun(run.id, {
         status: isError ? "failed" : "completed",
         terminalReason: isError ? result.error : "completed",
       });
-      this.options.database.updateSession(session.id, {
-        status: nextSessionStatus(session.status, isError ? "run_failed" : "run_completed"),
-      });
       this.options.runtime.completeRun(run.id, finalAssistantText);
-
-      // Update task status on completion
       if (task && !isError) {
-        this.options.database.updateTask(task.id, {
-          status: nextTaskStatus(task.status, "run_completed"),
-        });
+        this.options.database.updateTask(task.id, { status: nextTaskStatus(task.status, "run_completed") });
       }
 
-      // 12. Emit completion
       if (isError) {
-        this.emitAndPersist(run.id, session.id, {
+        this.emitEvent({
           type: "run.failed",
           payload: { runId: run.id, sessionId: session.id, error: result.error! },
         });
-      } else {
-        this.emitAndPersist(run.id, session.id, {
-          type: "run.completed",
-          payload: { runId: run.id, sessionId: session.id, usage: result.usage, stopReason: result.stopReason },
-        });
-      }
-
-      // 13. Persist runtime snapshot
-      this.persistRuntimeSnapshot(session.id);
-
-      if (isError) {
         await this.handleFailedRun(input, new Error(result.error!));
+      } else {
+        this.emitEvent({
+          type: "run.completed",
+          payload: { runId: run.id, sessionId: session.id, usage: result.usage, stopReason: result.stopReason, messageId: assistantMessageId },
+        });
       }
     } catch (error) {
       await this.handleFailedRun(input, error);
@@ -772,21 +700,19 @@ export class AgentSession {
       this.activeAbortController = null;
       this.pendingApprovals.clear();
       this.preDecisions.clear();
+      this.assistantBuffers.delete(run.id);
     }
   }
-
-  // ==========================================================================
-  // Private — Tool Lifecycle (Permission + Approval + Persistence)
-  // ==========================================================================
 
   private async handleToolLifecycle(
     event: ProviderToolLifecycleEvent,
     run: Run,
     session: Session,
     task: Task | null,
+    rootMessageId: string,
   ): Promise<ProviderToolLifecycleControl> {
     if (event.stage === "requested") {
-      return this.onToolRequested(event, run, session, task);
+      return this.onToolRequested(event, run, session, task, rootMessageId);
     }
 
     if (event.stage === "approval_requested") {
@@ -794,7 +720,7 @@ export class AgentSession {
     }
 
     if (event.stage === "started") {
-      this.emitAndPersist(run.id, session.id, {
+      this.emitEvent({
         type: "run.tool_started",
         payload: { runId: run.id, sessionId: session.id, toolCallId: event.toolCallId, toolName: event.toolName },
       });
@@ -802,7 +728,7 @@ export class AgentSession {
     }
 
     if (event.stage === "progress") {
-      this.emitAndPersist(run.id, session.id, {
+      this.emitEvent({
         type: "run.tool_progress",
         payload: { runId: run.id, sessionId: session.id, toolCallId: event.toolCallId, toolName: event.toolName },
       });
@@ -810,11 +736,22 @@ export class AgentSession {
     }
 
     if (event.stage === "finished") {
+      const toolCall = this.options.database.getToolCall(event.toolCallId);
       this.options.database.updateToolCall(event.toolCallId, {
         output: event.output ?? null,
         error: null,
       });
-      this.emitAndPersist(run.id, session.id, {
+      if (toolCall) {
+        this.createToolResultMessage({
+          sessionId: session.id,
+          taskId: task?.id ?? null,
+          parentMessageId: toolCall.messageId,
+          content: event.output ? JSON.stringify(event.output, null, 2) : "",
+          model: run.model ?? session.model,
+          isError: false,
+        });
+      }
+      this.emitEvent({
         type: "run.tool_finished",
         payload: {
           runId: run.id,
@@ -828,11 +765,22 @@ export class AgentSession {
     }
 
     if (event.stage === "failed") {
+      const toolCall = this.options.database.getToolCall(event.toolCallId);
       this.options.database.updateToolCall(event.toolCallId, {
         output: null,
         error: event.error ?? "Unknown tool error",
       });
-      this.emitAndPersist(run.id, session.id, {
+      if (toolCall) {
+        this.createToolResultMessage({
+          sessionId: session.id,
+          taskId: task?.id ?? null,
+          parentMessageId: toolCall.messageId,
+          content: event.error ?? "Unknown tool error",
+          model: run.model ?? session.model,
+          isError: true,
+        });
+      }
+      this.emitEvent({
         type: "run.tool_failed",
         payload: {
           runId: run.id,
@@ -853,22 +801,24 @@ export class AgentSession {
     run: Run,
     session: Session,
     task: Task | null,
+    rootMessageId: string,
   ): ProviderToolLifecycleControl {
-    // Full-access mode: allow everything
-    if (this.permissionMode === "full-access") {
-      this.persistToolCall(event, run, session, task, "not_required");
-      this.emitAndPersist(run.id, session.id, {
+    if (this.permissionMode === "yolo") {
+      this.persistToolCall(event, run, session, task, rootMessageId, "not_required");
+      this.emitEvent({
         type: "run.tool_requested",
         payload: {
-          runId: run.id, sessionId: session.id,
-          toolCallId: event.toolCallId, toolName: event.toolName,
-          input: event.input, requiresApproval: false,
+          runId: run.id,
+          sessionId: session.id,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: event.input,
+          requiresApproval: false,
         },
       });
       return { allowExecution: true, requiresApproval: false };
     }
 
-    // Evaluate permissions
     const evaluator =
       this.evaluatorOverride ??
       createPermissionEvaluator().withDenialTracker(this.denialTracker).build();
@@ -879,9 +829,16 @@ export class AgentSession {
       sessionId: session.id,
     };
     const result = evaluator.preflightCheck(context);
-
     if (result.decision === "deny") {
-      this.persistToolCall(event, run, session, task, "rejected");
+      this.persistToolCall(event, run, session, task, rootMessageId, "rejected");
+      this.createToolResultMessage({
+        sessionId: session.id,
+        taskId: task?.id ?? null,
+        parentMessageId: this.options.database.getToolCall(event.toolCallId)?.messageId ?? rootMessageId,
+        content: result.reason ?? `Tool '${event.toolName}' denied by permission policy.`,
+        model: run.model ?? session.model,
+        isError: true,
+      });
       return {
         allowExecution: false,
         error: result.reason ?? `Tool '${event.toolName}' denied by permission policy.`,
@@ -889,26 +846,31 @@ export class AgentSession {
     }
 
     if (result.decision === "ask") {
-      this.persistToolCall(event, run, session, task, "pending");
-      this.emitAndPersist(run.id, session.id, {
+      this.persistToolCall(event, run, session, task, rootMessageId, "pending");
+      this.emitEvent({
         type: "run.tool_requested",
         payload: {
-          runId: run.id, sessionId: session.id,
-          toolCallId: event.toolCallId, toolName: event.toolName,
-          input: event.input, requiresApproval: true,
+          runId: run.id,
+          sessionId: session.id,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: event.input,
+          requiresApproval: true,
         },
       });
       return { allowExecution: true, requiresApproval: true };
     }
 
-    // allow
-    this.persistToolCall(event, run, session, task, "not_required");
-    this.emitAndPersist(run.id, session.id, {
+    this.persistToolCall(event, run, session, task, rootMessageId, "not_required");
+    this.emitEvent({
       type: "run.tool_requested",
       payload: {
-        runId: run.id, sessionId: session.id,
-        toolCallId: event.toolCallId, toolName: event.toolName,
-        input: event.input, requiresApproval: false,
+        runId: run.id,
+        sessionId: session.id,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+        requiresApproval: false,
       },
     });
     return { allowExecution: true, requiresApproval: false };
@@ -919,13 +881,8 @@ export class AgentSession {
     run: Run,
     session: Session,
   ): Promise<ProviderToolLifecycleControl> {
-    // Block the run and wait for user decision
     this.options.runtime.blockOnTool(run.id, event.toolCallId);
-    this.options.database.updateSession(session.id, {
-      status: nextSessionStatus(session.status, "tool_blocked"),
-    });
-
-    this.emitAndPersist(run.id, session.id, {
+    this.emitEvent({
       type: "run.blocked",
       payload: {
         runId: run.id,
@@ -936,7 +893,6 @@ export class AgentSession {
       },
     });
 
-    // Check for pre-decisions (approval/rejection that arrived before the promise was created)
     const preDecision = this.preDecisions.get(event.toolCallId);
     const decision = preDecision
       ? (this.preDecisions.delete(event.toolCallId), preDecision)
@@ -944,19 +900,14 @@ export class AgentSession {
           this.pendingApprovals.set(event.toolCallId, resolve);
         });
 
-    // Update DB and runtime
-    this.options.database.updateToolCall(event.toolCallId, {
-      approvalState: decision,
-    });
-
-    // Update runtime state (clears blockedToolCallId and pendingApprovalToolCallIds)
+    this.options.database.updateToolCall(event.toolCallId, { approvalState: decision });
     if (decision === "approved") {
       this.options.runtime.approveTool(run.id, event.toolCallId);
     } else {
       this.options.runtime.rejectTool(run.id, event.toolCallId);
     }
 
-    this.emitAndPersist(run.id, session.id, {
+    this.emitEvent({
       type: "run.tool_decided",
       payload: {
         runId: run.id,
@@ -966,13 +917,6 @@ export class AgentSession {
         decision,
       },
     });
-
-    if (decision === "approved") {
-      this.options.database.updateSession(session.id, {
-        status: nextSessionStatus(session.status, "resume"),
-      });
-    }
-
     return { decision };
   }
 
@@ -981,13 +925,27 @@ export class AgentSession {
     run: Run,
     session: Session,
     task: Task | null,
+    rootMessageId: string,
     approvalState: ToolCall["approvalState"],
   ): void {
-    this.options.database.createToolCall({
+    const toolMessage = this.options.database.addMessage({
       id: event.toolCallId,
-      runId: run.id,
       sessionId: session.id,
       taskId: task?.id ?? null,
+      parentMessageId: rootMessageId,
+      role: "tool",
+      messageType: "tool_call",
+      content: JSON.stringify(event.input, null, 2),
+      model: run.model ?? session.model,
+      tokens: estimateTextTokens(JSON.stringify(event.input)),
+      totalTokens: estimateTextTokens(JSON.stringify(event.input)),
+      compressedFromMessageId: null,
+    });
+    this.bumpAncestorTotals(rootMessageId, toolMessage.tokens);
+    this.options.database.createToolCall({
+      id: event.toolCallId,
+      messageId: toolMessage.id,
+      sessionId: session.id,
       toolName: event.toolName,
       approvalState,
       input: event.input,
@@ -996,212 +954,229 @@ export class AgentSession {
     });
   }
 
-  // ==========================================================================
-  // Private — Failure Handling
-  // ==========================================================================
-
   private async handleFailedRun(input: FailedRunInput, error: unknown): Promise<void> {
     const { run, session } = input;
     const canceled = this.options.database.getRun(run.id)?.status === "canceled";
     const message = error instanceof Error ? error.message : String(error);
-
     this.options.database.updateRun(run.id, {
       status: canceled ? "canceled" : "failed",
       terminalReason: canceled ? "canceled" : message,
     });
-    this.options.database.updateSession(session.id, {
-      status: nextSessionStatus(session.status, canceled ? "run_canceled" : "run_failed"),
-    });
-
-    this.ensureUserPromptPersisted({
-      sessionId: session.id,
-      runId: run.id,
-      prompt: input.prompt,
-      historyEntryId: input.historyEntryId,
-    });
-    this.persistPartialAssistantMessageFromEvents({ sessionId: session.id, runId: run.id });
-
     this.options.runtime.failRun(run.id);
+    this.persistPartialAssistantMessageFromBuffer(run.id);
+    if (!canceled && !this.hasAssistantChild(input.rootMessageId)) {
+      const failureMessage = this.options.database.addMessage({
+        sessionId: session.id,
+        taskId: input.task?.id ?? null,
+        parentMessageId: input.rootMessageId,
+        role: "assistant",
+        messageType: "text",
+        content: message,
+        model: run.model ?? session.model,
+        tokens: estimateTextTokens(message),
+        totalTokens: estimateTextTokens(message),
+        compressedFromMessageId: null,
+      });
+      this.options.database.updateSession(session.id, { latestAssistantMessage: failureMessage.content });
+      this.bumpAncestorTotals(input.rootMessageId, failureMessage.tokens);
+    }
 
     if (canceled) {
-      this.emitAndPersist(run.id, session.id, {
+      this.emitEvent({
         type: "run.canceled",
         payload: { runId: run.id, sessionId: session.id },
       });
     } else {
-      this.emitAndPersist(run.id, session.id, {
+      this.emitEvent({
         type: "run.failed",
         payload: { runId: run.id, sessionId: session.id, error: message },
       });
     }
-
-    if (!canceled) {
-      this.options.database.createReviewRequest({
-        runId: run.id,
-        taskId: input.task?.id ?? null,
-        toolCallId: null,
-        kind: "final_review",
-        status: "pending",
-        title: "Run failed",
-        detail: message,
-      });
-    }
   }
-
-  // ==========================================================================
-  // Private — Helpers
-  // ==========================================================================
 
   private requireSession(): Session {
     const session = this.options.database.getSession(this.options.sessionId);
-    if (!session) throw new Error(`Session ${this.options.sessionId} not found`);
+    if (!session) {
+      throw new Error(`Session ${this.options.sessionId} not found`);
+    }
     return session;
   }
 
   private requireRun(runId: string): Run {
     const run = this.options.database.getRun(runId);
-    if (!run) throw new Error(`Run ${runId} not found`);
+    if (!run) {
+      throw new Error(`Run ${runId} not found`);
+    }
     return run;
   }
 
   private resolveProviderConfig(): ProviderConfig {
-    const config = this.options.database.getProviderConfig();
-    if (!config) throw new Error("No provider config available for this session");
-    return config;
+    const session = this.requireSession();
+    const config = session.providerConfigId
+      ? this.options.database.getProviderConfig(session.providerConfigId)
+      : this.options.database.getProviderConfig();
+    if (!config) {
+      throw new Error("No provider config available for this session");
+    }
+    return {
+      ...config,
+      model: session.model ?? config.model,
+      enabled: config.enabled ?? true,
+    };
   }
 
   private resolveQueuedProviderConfig(providerConfigId: string | null): ProviderConfig {
-    if (providerConfigId) {
-      const selected = this.options.database.getProviderConfig(providerConfigId);
-      if (selected) return selected;
+    const selected = providerConfigId ? this.options.database.getProviderConfig(providerConfigId) : null;
+    if (selected) {
+      const session = this.requireSession();
+      return {
+        ...selected,
+        model: session.model ?? selected.model,
+        enabled: selected.enabled ?? true,
+      };
     }
     return this.resolveProviderConfig();
   }
 
-  private getActiveBranchId(sessionId: string): string | null {
-    return (
-      this.options.database.getActiveBranchId(sessionId) ??
-      this.options.database.listBranches(sessionId).at(-1)?.id ??
-      null
-    );
-  }
-
-  private buildProviderHistoryMessages(
-    sessionId: string,
-    branchLeafEntryId: string | null = null,
-  ): RuntimeMessage[] {
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(sessionId) ?? [];
+  private buildProviderHistoryMessages(sessionId: string) {
     return buildSessionRuntimeMessages({
       messages: this.options.database.listMessages(sessionId),
-      toolCalls: this.listSessionToolCalls(sessionId),
-      compaction: this.buildRuntimeCompactionSnapshot(),
-      historyEntries,
-      branchLeafEntryId,
+      toolCalls: this.options.database.listToolCallsBySession(sessionId),
+      compaction: null,
     });
   }
 
-  private listSessionToolCalls(sessionId: string): ToolCall[] {
-    const runs = this.options.database.listRuns(sessionId);
-    return runs.flatMap((run) => this.options.database.listToolCalls(run.id));
+  private persistSessionSelection(providerConfig: ProviderConfig): void {
+    const session = this.requireSession();
+    this.options.database.updateSession(session.id, {
+      providerConfigId: providerConfig.id,
+      model: providerConfig.model,
+      permissionMode: this.permissionMode,
+    });
   }
 
-  private buildRuntimeCompactionSnapshot(): SessionCompactionSnapshot | null {
-    const compaction = this.options.runtime.snapshot().compaction;
-    const summary = compaction.lastSummary;
-    if (!summary) return null;
-    return {
-      version: 1,
-      summary,
-      compactedAt: compaction.lastCompactedAt ?? nowIso(),
-      firstKeptHistoryEntryId: null,
-      firstKeptTimestamp: null,
-      tokensBefore: 0,
-      tokensKept: 0,
-    };
-  }
-
-  private persistRuntimeSnapshot(sessionId: string): void {
-    const state = this.options.runtime.snapshot();
-    this.options.database.saveSessionRuntimeSnapshot({
-      sessionId,
-      snapshot: JSON.stringify(state),
+  private createRootUserMessage(input: {
+    session: Session;
+    taskId: string | null;
+    prompt: string;
+    parentMessageId: string | null;
+    model: string | null;
+  }) {
+    const message = this.options.database.addMessage({
+      sessionId: input.session.id,
+      taskId: input.taskId,
+      parentMessageId: input.parentMessageId,
+      role: "user",
+      messageType: "text",
+      content: input.prompt,
+      model: input.model,
+      tokens: estimateTextTokens(input.prompt),
+      totalTokens: estimateTextTokens(input.prompt),
+      compressedFromMessageId: null,
+    });
+    this.options.database.updateSession(input.session.id, {
+      latestUserMessage: input.prompt,
       updatedAt: nowIso(),
     });
+    if (input.parentMessageId) {
+      this.bumpAncestorTotals(input.parentMessageId, message.tokens);
+    }
+    return message;
   }
 
-  private ensureUserPromptPersisted(input: {
-    sessionId: string;
-    runId: string;
-    prompt: string;
-    historyEntryId: string | null;
-  }): void {
-    if (this.hasRunMessage(input.sessionId, input.runId, "user", input.prompt)) return;
-    const branchId = this.getActiveBranchId(input.sessionId);
-    this.options.database.addMessage({
-      sessionId: input.sessionId,
-      role: "user",
-      content: input.prompt,
-      parentHistoryEntryId: input.historyEntryId,
-      branchId,
-      originRunId: input.runId,
-    });
-  }
-
-  private persistPartialAssistantMessageFromEvents(input: { sessionId: string; runId: string }): void {
-    if (this.hasRunMessage(input.sessionId, input.runId, "assistant")) return;
-    const partialText = this.collectRunDeltaText(input.runId);
-    if (!partialText.trim()) return;
-    const branchId = this.getActiveBranchId(input.sessionId);
-    this.options.database.addMessage({
-      sessionId: input.sessionId,
+  private createSummaryMessage(input: {
+    session: Session;
+    taskId: string | null;
+    parentMessageId: string | null;
+    compressedFromMessageId: string | null;
+    summary: string;
+    model: string | null;
+  }) {
+    const message = this.options.database.addMessage({
+      sessionId: input.session.id,
+      taskId: input.taskId,
+      parentMessageId: input.parentMessageId,
       role: "assistant",
-      content: partialText,
-      branchId,
-      originRunId: input.runId,
+      messageType: "summary",
+      content: input.summary,
+      model: input.model,
+      tokens: estimateTextTokens(input.summary),
+      totalTokens: estimateTextTokens(input.summary),
+      compressedFromMessageId: input.compressedFromMessageId,
     });
-    this.options.database.updateSession(input.sessionId, { latestAssistantMessage: partialText });
+    if (input.parentMessageId) {
+      this.bumpAncestorTotals(input.parentMessageId, message.tokens);
+    }
+    return message;
   }
 
-  private hasRunMessage(
-    sessionId: string,
-    runId: string,
-    role: "user" | "assistant" | "system" | "tool",
-    expectedContent?: string,
-  ): boolean {
-    const runMessageIds = this.listRunMessageIds(sessionId, runId);
-    if (runMessageIds.size === 0) return false;
-    const messages = this.options.database.listMessages(sessionId);
-    return messages.some((msg) => {
-      if (!runMessageIds.has(msg.id) || msg.role !== role) return false;
-      if (typeof expectedContent === "string") return msg.content === expectedContent;
-      return true;
+  private createToolResultMessage(input: {
+    sessionId: string;
+    taskId: string | null;
+    parentMessageId: string;
+    content: string;
+    model: string | null;
+    isError: boolean;
+  }) {
+    const tokens = estimateTextTokens(input.content);
+    const message = this.options.database.addMessage({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      parentMessageId: input.parentMessageId,
+      role: "tool",
+      messageType: "tool_result",
+      content: input.content,
+      model: input.model,
+      tokens,
+      totalTokens: tokens,
+      compressedFromMessageId: null,
     });
+    this.bumpAncestorTotals(input.parentMessageId, tokens);
+    return message;
   }
 
-  private listRunMessageIds(sessionId: string, runId: string): Set<string> {
-    const historyEntries = this.options.database.listSessionHistoryEntries?.(sessionId) ?? [];
-    return new Set(
-      historyEntries
-        .filter((e) => e.kind === "message" && e.originRunId === runId && Boolean(e.messageId))
-        .map((e) => e.messageId as string),
-    );
+  private bumpAncestorTotals(messageId: string, delta: number): void {
+    if (!delta) return;
+    let current = this.options.database.getMessage(messageId);
+    while (current) {
+      this.options.database.updateMessage(current.id, {
+        totalTokens: current.totalTokens + delta,
+      });
+      current = current.parentMessageId ? this.options.database.getMessage(current.parentMessageId) : null;
+    }
   }
 
-  private collectRunDeltaText(runId: string): string {
-    return [...this.options.database.listEvents(runId)]
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-      .filter((e) => e.type === "run.delta")
-      .map((e) => (typeof e.payload.delta === "string" ? e.payload.delta : ""))
-      .join("");
+  private hasAssistantChild(rootMessageId: string): boolean {
+    return this.options.database
+      .listChildMessages(rootMessageId)
+      .some((message) => message.role === "assistant" && message.messageType === "text");
   }
 
-  private emitAndPersist(runId: string, sessionId: string, envelope: RunnerEventEnvelope): void {
-    this.options.database.addEvent({
-      runId,
+  private persistPartialAssistantMessageFromBuffer(runId: string): void {
+    const buffer = this.assistantBuffers.get(runId)?.trim();
+    if (!buffer) return;
+    const context = this.runContexts.get(runId);
+    if (!context || this.hasAssistantChild(context.rootMessageId)) return;
+    const run = this.options.database.getRun(runId);
+    const sessionId = run?.sessionId ?? this.options.sessionId;
+    const taskId = run?.taskId ?? context.taskId;
+    const message = this.options.database.addMessage({
       sessionId,
-      type: envelope.type,
-      payload: envelope.payload,
+      taskId,
+      parentMessageId: context.rootMessageId,
+      role: "assistant",
+      messageType: "text",
+      content: buffer,
+      model: run?.model ?? this.requireSession().model,
+      tokens: estimateTextTokens(buffer),
+      totalTokens: estimateTextTokens(buffer),
+      compressedFromMessageId: null,
     });
+    this.bumpAncestorTotals(context.rootMessageId, message.tokens);
+    this.options.database.updateSession(sessionId, { latestAssistantMessage: buffer });
+  }
+
+  private emitEvent(envelope: RunnerEventEnvelope): void {
     this.options.emit(envelope);
   }
 
@@ -1213,10 +1188,6 @@ export class AgentSession {
   }
 }
 
-// ============================================================================
-// Standalone Helpers
-// ============================================================================
-
 function resolveRunPrompt(
   run: Run,
   runtime: ReturnType<SessionRuntime["snapshot"]>,
@@ -1226,26 +1197,6 @@ function resolveRunPrompt(
   if (!candidate) return null;
   const trimmed = candidate.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function nextSessionStatus(
-  current: Session["status"],
-  event: "run_started" | "tool_blocked" | "run_completed" | "run_failed" | "run_canceled" | "resume",
-): Session["status"] {
-  switch (event) {
-    case "run_started":
-      return "running";
-    case "tool_blocked":
-      return "blocked";
-    case "run_completed":
-      return "completed";
-    case "run_failed":
-      return "failed";
-    case "run_canceled":
-      return "canceled";
-    case "resume":
-      return current === "blocked" ? "running" : current;
-  }
 }
 
 function nextTaskStatus(current: Task["status"], event: "run_completed"): Task["status"] {
@@ -1261,23 +1212,41 @@ function buildEffectivePrompt(
   resolvedSkill: ResolvedSkill | null,
 ): string {
   const parts: string[] = [];
-
   if (resolvedSkill?.injectedPrompt) {
     parts.push(resolvedSkill.injectedPrompt);
   }
-
   parts.push(prompt);
-
   if (contextFiles.length > 0) {
-    parts.push(
-      "\n\nContext files:\n" + contextFiles.map((f) => `- ${f}`).join("\n"),
-    );
+    parts.push("\n\nContext files:\n" + contextFiles.map((file) => `- ${file}`).join("\n"));
   }
-
   return parts.join("\n\n");
 }
 
 function resolveToolExecutionMode(enabledTools: string[]): "sequential" | "parallel" {
   const allSafe = enabledTools.every((name) => SAFE_TOOL_NAMES.has(name));
   return allSafe ? "parallel" : "sequential";
+}
+
+function normalizeContextFiles(contextFiles?: string[]): string[] {
+  return Array.isArray(contextFiles)
+    ? [...new Set(contextFiles.map((entry) => entry.trim()).filter((entry) => entry.length > 0))]
+    : [];
+}
+
+function estimateTextTokens(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+}
+
+function resolveCompactionStartMessageId(
+  messages: Array<{ id: string; messageType: string; compressedFromMessageId: string | null }>,
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.messageType === "summary") {
+      return message.compressedFromMessageId ?? message.id;
+    }
+  }
+  return messages[0]?.id ?? null;
 }

@@ -99,11 +99,11 @@ describe("RPC Mode", () => {
 
   describe("fork command", () => {
     it("应该成功处理 fork 命令", async () => {
-      mockCommandStream([{ type: "fork", historyEntryId: "entry-123", id: "cmd-6" }]);
+      mockCommandStream([{ type: "fork", messageId: "msg-123", id: "cmd-6" }]);
 
       await runRpcMode(mockSession);
 
-      expect(mockSession.fork).toHaveBeenCalledWith("entry-123");
+      expect(mockSession.fork).toHaveBeenCalledWith("msg-123");
     });
   });
 

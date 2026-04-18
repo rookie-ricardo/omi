@@ -8,7 +8,7 @@
  */
 
 import type { AgentSession } from "../agent-session";
-import type { RunnerEventEnvelope } from "../agent-session";
+import type { RunnerEventEnvelope, RunDeltaPayload, RunStartedPayload, RunCompletedPayload, RunFailedPayload, RunCanceledPayload } from "@omi/core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { createEventBus } from "../event-bus";
 import * as fs from "node:fs";
@@ -117,8 +117,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	// Set up event listeners for streaming output
 	if (stream || mode === "json") {
 		eventBus.on("run.delta", (data: unknown) => {
-			const event = data as RunnerEventEnvelope;
-			const delta = event.payload.delta as string;
+			const { delta } = (data as { payload: RunDeltaPayload }).payload;
 			if (delta) {
 				process.stdout.write(delta);
 				outputBuffer.push(delta);
@@ -127,35 +126,34 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 	}
 
 	eventBus.on("run.started", (data: unknown) => {
-		const event = data as RunnerEventEnvelope;
+		const { runId } = (data as { payload: RunStartedPayload }).payload;
 		if (mode === "json") {
-			console.log(JSON.stringify({ type: "run_started", runId: event.payload.runId }));
+			console.log(JSON.stringify({ type: "run_started", runId }));
 		}
 	});
 
 	eventBus.on("run.completed", (data: unknown) => {
-		const event = data as RunnerEventEnvelope;
+		const { runId } = (data as { payload: RunCompletedPayload }).payload;
 		if (mode === "json") {
-			console.log(JSON.stringify({ type: "run_completed", runId: event.payload.runId }));
+			console.log(JSON.stringify({ type: "run_completed", runId }));
 		}
 		turnCount++;
 	});
 
 	eventBus.on("run.failed", (data: unknown) => {
-		const event = data as RunnerEventEnvelope;
-		const error = event.payload.error as string | undefined;
+		const payload = (data as { payload: RunFailedPayload }).payload;
 		if (mode === "json") {
-			console.log(JSON.stringify({ type: "run_failed", runId: event.payload.runId, error }));
+			console.log(JSON.stringify({ type: "run_failed", runId: payload.runId, error: payload.error }));
 		} else {
-			console.error(`[Run failed${error ? `: ${error}` : ""}]`);
+			console.error(`[Run failed: ${payload.error}]`);
 		}
 		exitCode = 1;
 	});
 
 	eventBus.on("run.canceled", (data: unknown) => {
-		const event = data as RunnerEventEnvelope;
+		const { runId } = (data as { payload: RunCanceledPayload }).payload;
 		if (mode === "json") {
-			console.log(JSON.stringify({ type: "run_canceled", runId: event.payload.runId }));
+			console.log(JSON.stringify({ type: "run_canceled", runId }));
 		}
 		exitCode = 1;
 	});

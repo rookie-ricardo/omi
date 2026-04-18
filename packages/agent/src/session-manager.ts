@@ -1,86 +1,6 @@
-import { randomUUID } from "node:crypto";
-import type { AppStore } from "@omi/store";
-
-import type { Session, SessionBranch, SessionHistoryEntry } from "@omi/core";
-import { createId, nowIso, sessionRuntimeSnapshotSchema } from "@omi/core";
+import { nowIso, sessionRuntimeSnapshotSchema } from "@omi/core";
 
 import type { CompactionSummaryDocument } from "@omi/memory";
-
-// ============================================================================
-// Tree Navigation Types
-// ============================================================================
-
-/**
- * Base interface for all session entries.
- */
-export interface SessionEntryBase {
-  type: string;
-  id: string;
-  sessionId: string;
-  parentId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * Read-only interface for session tree access.
- * Used by tree navigation and branch summarization.
- */
-export interface ReadonlySessionStore {
-  listSessionHistoryEntries(sessionId: string): SessionHistoryEntry[];
-  getSessionHistoryEntry(entryId: string): SessionHistoryEntry | null;
-}
-
-/**
- * Read-only interface for session manager access.
- * Used by tree navigation and branch summarization.
- */
-export interface ReadonlySessionManager {
-  getSessionId(sessionId: string): string;
-  getBranch(sessionId: string, fromId?: string | null): SessionHistoryEntry[];
-  getEntry(sessionId: string, entryId: string): SessionHistoryEntry | undefined;
-}
-
-/**
- * Label entry for user-defined bookmarks/markers on entries.
- */
-export interface LabelEntry extends SessionEntryBase {
-  type: "label";
-  targetId: string;
-  label: string | undefined;
-}
-
-/**
- * Compaction entry type for tracking compaction summaries.
- */
-export interface CompactionEntry<T = unknown> extends SessionEntryBase {
-  type: "compaction";
-  summary: string;
-  firstKeptEntryId: string;
-  tokensBefore: number;
-  details?: T;
-  fromHook?: boolean;
-}
-
-/**
- * Branch summary entry type for branch summarization.
- */
-export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
-  type: "branch_summary";
-  fromId: string;
-  summary: string;
-  details?: T;
-  fromHook?: boolean;
-}
-
-/**
- * Session tree node for getTree().
- */
-export interface SessionTreeNode {
-  entry: SessionHistoryEntry;
-  label?: string;
-  children: SessionTreeNode[];
-}
 
 export type CompactionStatus = "idle" | "requested" | "running" | "completed" | "failed";
 
@@ -102,23 +22,19 @@ export interface SessionRunQueueEntry {
   providerConfigId: string | null;
   sourceRunId: string | null;
   mode: "start" | "retry" | "resume";
-  historyEntryId?: string | null;
-  checkpointSummary?: string | null;
-  checkpointDetails?: unknown | null;
+  parentMessageId?: string | null;
 }
 
 export interface SessionRuntimeState {
   version: number;
   sessionId: string;
   activeRunId: string | null;
-  activeBranchId: string | null;
   pendingRunIds: string[];
   queuedRuns: SessionRunQueueEntry[];
   blockedRunId: string | null;
   blockedToolCallId: string | null;
   pendingApprovalToolCallIds: string[];
   interruptedRunIds: string[];
-  selectedProviderConfigId: string | null;
   lastUserPrompt: string | null;
   lastAssistantResponse: string | null;
   lastActivityAt: string;
@@ -137,14 +53,12 @@ export interface SessionRuntimeStore {
 
 export class SessionRuntime {
   private state: SessionRuntimeState;
-  private readonly onChange?: (state: SessionRuntimeState) => void;
 
   constructor(
     readonly sessionId: string,
     initialState?: Partial<SessionRuntimeState> | null,
-    onChange?: (state: SessionRuntimeState) => void,
+    private readonly onChange?: (state: SessionRuntimeState) => void,
   ) {
-    this.onChange = onChange;
     this.state = hydrateState(sessionId, initialState);
     if (initialState) {
       this.state = normalizeRestoredState(this.state);
@@ -156,8 +70,8 @@ export class SessionRuntime {
       ...this.state,
       pendingRunIds: [...this.state.pendingRunIds],
       queuedRuns: this.state.queuedRuns.map((entry) => ({ ...entry })),
-      interruptedRunIds: [...this.state.interruptedRunIds],
       pendingApprovalToolCallIds: [...this.state.pendingApprovalToolCallIds],
+      interruptedRunIds: [...this.state.interruptedRunIds],
       compaction: cloneCompactionState(this.state.compaction),
     };
   }
@@ -166,11 +80,9 @@ export class SessionRuntime {
     if (!this.state.pendingRunIds.includes(entry.runId)) {
       this.state.pendingRunIds.push(entry.runId);
     }
-
     if (!this.state.queuedRuns.some((candidate) => candidate.runId === entry.runId)) {
       this.state.queuedRuns.push({ ...entry });
     }
-
     this.touch({});
   }
 
@@ -184,7 +96,6 @@ export class SessionRuntime {
       this.state.pendingRunIds = this.state.pendingRunIds.filter((candidate) => candidate !== runId);
       return null;
     }
-
     const [removed] = this.state.queuedRuns.splice(index, 1);
     this.state.pendingRunIds = this.state.pendingRunIds.filter((candidate) => candidate !== runId);
     this.persist();
@@ -195,8 +106,8 @@ export class SessionRuntime {
     this.dequeueRun(runId);
     this.touch({
       activeRunId: runId,
-      blockedToolCallId: null,
       blockedRunId: null,
+      blockedToolCallId: null,
       lastUserPrompt: prompt,
     });
   }
@@ -205,43 +116,34 @@ export class SessionRuntime {
     this.touch({
       blockedRunId: runId,
       blockedToolCallId: toolCallId,
-      pendingApprovalToolCallIds: uniqueIds([
-        ...this.state.pendingApprovalToolCallIds,
-        toolCallId,
-      ]),
-      interruptedRunIds: this.state.interruptedRunIds,
+      pendingApprovalToolCallIds: uniqueIds([...this.state.pendingApprovalToolCallIds, toolCallId]),
     });
   }
 
   approveTool(runId: string, toolCallId: string): void {
     this.touch({
+      activeRunId: runId,
       blockedRunId: this.state.blockedToolCallId === toolCallId ? null : this.state.blockedRunId,
       blockedToolCallId: this.state.blockedToolCallId === toolCallId ? null : this.state.blockedToolCallId,
       pendingApprovalToolCallIds: this.state.pendingApprovalToolCallIds.filter((id) => id !== toolCallId),
-      activeRunId: runId,
       interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
     });
   }
 
   rejectTool(runId: string, toolCallId: string): void {
     this.touch({
+      activeRunId: this.state.activeRunId === runId ? null : this.state.activeRunId,
       blockedRunId: this.state.blockedToolCallId === toolCallId ? null : this.state.blockedRunId,
       blockedToolCallId: this.state.blockedToolCallId === toolCallId ? null : this.state.blockedToolCallId,
       pendingApprovalToolCallIds: this.state.pendingApprovalToolCallIds.filter((id) => id !== toolCallId),
-      activeRunId: this.state.activeRunId === runId ? null : this.state.activeRunId,
-      interruptedRunIds: this.state.interruptedRunIds,
     });
   }
 
   resumeRun(runId: string): void {
-    if (this.state.blockedRunId !== runId) {
-      return;
-    }
-
     this.touch({
+      activeRunId: runId,
       blockedRunId: null,
       blockedToolCallId: null,
-      activeRunId: runId,
       interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
     });
   }
@@ -250,62 +152,43 @@ export class SessionRuntime {
     if (this.state.blockedToolCallId !== toolCallId) {
       return;
     }
-
     this.touch({
-      blockedToolCallId: null,
       blockedRunId: null,
+      blockedToolCallId: null,
       pendingApprovalToolCallIds: this.state.pendingApprovalToolCallIds.filter((id) => id !== toolCallId),
-      interruptedRunIds: this.state.interruptedRunIds,
-    });
-  }
-
-  setSelectedProviderConfig(providerConfigId: string | null): void {
-    this.touch({
-      selectedProviderConfigId: providerConfigId,
-    });
-  }
-
-  setActiveBranchId(branchId: string | null): void {
-    this.touch({
-      activeBranchId: branchId,
     });
   }
 
   completeRun(runId: string, assistantResponse: string): void {
     this.finishRun(runId, {
       lastAssistantResponse: assistantResponse,
-      blockedToolCallId: null,
       blockedRunId: null,
-      interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
+      blockedToolCallId: null,
     });
   }
 
   failRun(runId: string): void {
     this.finishRun(runId, {
-      blockedToolCallId: null,
+      lastAssistantResponse: null,
       blockedRunId: null,
+      blockedToolCallId: null,
     });
   }
 
   cancelRun(runId: string): void {
     if (this.state.activeRunId === runId) {
       this.finishRun(runId, {
-        blockedToolCallId: null,
+        lastAssistantResponse: null,
         blockedRunId: null,
-        interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
+        blockedToolCallId: null,
       });
       return;
     }
-
-    const nextPending = this.state.pendingRunIds.filter((candidate) => candidate !== runId);
-    const nextQueuedRuns = this.state.queuedRuns.filter((candidate) => candidate.runId !== runId);
-    if (nextPending.length !== this.state.pendingRunIds.length || nextQueuedRuns.length !== this.state.queuedRuns.length) {
-      this.touch({
-        pendingRunIds: nextPending,
-        queuedRuns: nextQueuedRuns,
-        interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
-      });
-    }
+    this.touch({
+      pendingRunIds: this.state.pendingRunIds.filter((candidate) => candidate !== runId),
+      queuedRuns: this.state.queuedRuns.filter((candidate) => candidate.runId !== runId),
+      interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
+    });
   }
 
   requestCompaction(reason: string): void {
@@ -339,8 +222,6 @@ export class SessionRuntime {
     this.state.compaction = {
       ...this.state.compaction,
       status: "completed",
-      reason: null,
-      requestedAt: null,
       updatedAt: timestamp,
       lastSummary: result.summary,
       lastCompactedAt: timestamp,
@@ -362,23 +243,39 @@ export class SessionRuntime {
     this.persist();
   }
 
+  resetCompaction(): void {
+    const timestamp = nowIso();
+    this.state.compaction = {
+      status: "idle",
+      reason: null,
+      requestedAt: null,
+      updatedAt: timestamp,
+      lastSummary: null,
+      lastCompactedAt: null,
+      error: null,
+    };
+    this.state.lastActivityAt = timestamp;
+    this.persist();
+  }
+
   private finishRun(
     runId: string,
-    partial: Partial<
-      Pick<
-        SessionRuntimeState,
-        "blockedToolCallId" | "blockedRunId" | "lastAssistantResponse" | "pendingApprovalToolCallIds"
-        | "interruptedRunIds"
-      >
+    partial: Pick<
+      SessionRuntimeState,
+      "blockedRunId" | "blockedToolCallId" | "lastAssistantResponse"
     >,
   ): void {
-    const pendingRunIds = this.state.pendingRunIds.filter((candidate) => candidate !== runId);
-    const queuedRuns = this.state.queuedRuns.filter((candidate) => candidate.runId !== runId);
     this.touch({
-      ...partial,
       activeRunId: this.state.activeRunId === runId ? null : this.state.activeRunId,
-      pendingRunIds,
-      queuedRuns,
+      pendingRunIds: this.state.pendingRunIds.filter((candidate) => candidate !== runId),
+      queuedRuns: this.state.queuedRuns.filter((candidate) => candidate.runId !== runId),
+      blockedRunId: partial.blockedRunId,
+      blockedToolCallId: partial.blockedToolCallId,
+      lastAssistantResponse: partial.lastAssistantResponse ?? this.state.lastAssistantResponse,
+      interruptedRunIds: this.state.interruptedRunIds.filter((candidate) => candidate !== runId),
+      pendingApprovalToolCallIds: partial.blockedToolCallId
+        ? this.state.pendingApprovalToolCallIds
+        : this.state.pendingApprovalToolCallIds.filter((id) => id !== partial.blockedToolCallId),
     });
   }
 
@@ -386,9 +283,6 @@ export class SessionRuntime {
     this.state = {
       ...this.state,
       ...partial,
-      pendingRunIds: partial.pendingRunIds ?? this.state.pendingRunIds,
-      queuedRuns: partial.queuedRuns ?? this.state.queuedRuns,
-      compaction: this.state.compaction,
       lastActivityAt: nowIso(),
     };
     this.persist();
@@ -401,14 +295,8 @@ export class SessionRuntime {
 
 export class SessionManager {
   private readonly runtimes = new Map<string, SessionRuntime>();
-  private readonly leafIds = new Map<string, string | null>();
-  private readonly labels = new Map<string, string>();
-  private readonly activeBranchIds = new Map<string, string | null>();
 
-  constructor(
-    private readonly store?: SessionRuntimeStore,
-    private readonly database?: AppStore,
-  ) {}
+  constructor(private readonly store?: SessionRuntimeStore, _database?: unknown) {}
 
   getOrCreate(sessionId: string): SessionRuntime {
     const current = this.runtimes.get(sessionId);
@@ -417,27 +305,11 @@ export class SessionManager {
     }
 
     const savedState = this.store?.load(sessionId) ?? null;
-    if (savedState && this.database) {
-      const branchId =
-        this.database.getActiveBranchId(sessionId) ??
-        this.database.listBranches(sessionId).at(-1)?.id ??
-        null;
-      this.activeBranchIds.set(sessionId, branchId);
-      if (savedState.activeBranchId === undefined || savedState.activeBranchId === null) {
-        savedState.activeBranchId = branchId;
-        this.store?.save(savedState);
-      }
-    }
-
     const runtime = new SessionRuntime(sessionId, savedState, (state) => {
       this.store?.save(state);
     });
     this.runtimes.set(sessionId, runtime);
     return runtime;
-  }
-
-  restore(sessionId: string): SessionRuntime {
-    return this.getOrCreate(sessionId);
   }
 
   get(sessionId: string): SessionRuntime | null {
@@ -447,330 +319,16 @@ export class SessionManager {
   getState(sessionId: string): SessionRuntimeState | null {
     return this.get(sessionId)?.snapshot() ?? null;
   }
-
-  // ============================================================================
-  // Tree Navigation Methods
-  // ============================================================================
-
-  getSessionId(sessionId: string): string {
-    return sessionId;
-  }
-
-  getSessionDir(sessionId: string): string {
-    // For SQLite-based storage, return empty string as there's no session directory
-    return "";
-  }
-
-  getSessionFile(sessionId: string): string | undefined {
-    // For SQLite-based storage, there's no session file
-    return undefined;
-  }
-
-  getLeafId(sessionId: string): string | null {
-    return this.leafIds.get(sessionId) ?? null;
-  }
-
-  getLeafEntry(sessionId: string): SessionHistoryEntry | null {
-    const leafId = this.getLeafId(sessionId);
-    if (!leafId) return null;
-    return this.getEntry(sessionId, leafId) ?? null;
-  }
-
-  getEntry(sessionId: string, entryId: string): SessionHistoryEntry | null {
-    const store = this.getReadonlyStore();
-    if (!store) return null;
-    return store.getSessionHistoryEntry(entryId);
-  }
-
-  getLabel(sessionId: string, entryId: string): string | undefined {
-    return this.labels.get(`${sessionId}:${entryId}`);
-  }
-
-  setLabel(sessionId: string, targetId: string, label: string | undefined): string {
-    const key = `${sessionId}:${targetId}`;
-    if (label) {
-      this.labels.set(key, label);
-    } else {
-      this.labels.delete(key);
-    }
-    return targetId;
-  }
-
-  getBranch(sessionId: string, fromId?: string | null): SessionHistoryEntry[] {
-    const store = this.getReadonlyStore();
-    if (!store) return [];
-
-    const entries = store.listSessionHistoryEntries(sessionId);
-    const leafId = fromId ?? this.getLeafId(sessionId) ?? undefined;
-
-    if (!leafId) {
-      // Return empty branch if no leaf is set
-      return [];
-    }
-
-    return getBranchPath(entries, leafId);
-  }
-
-  getTree(sessionId: string): SessionTreeNode[] {
-    const store = this.getReadonlyStore();
-    if (!store) return [];
-
-    const entries = store.listSessionHistoryEntries(sessionId);
-    return buildTree(entries, this.labels, sessionId);
-  }
-
-  getActiveBranchId(sessionId: string): string | null {
-    return this.activeBranchIds.get(sessionId) ?? null;
-  }
-
-  createBranch(sessionId: string, title: string, fromEntryId?: string | null): SessionBranch {
-    if (!this.database) {
-      throw new Error("Database not available for branch operations");
-    }
-
-    const branch = this.database.createBranch({
-      id: createId("branch"),
-      sessionId,
-      title,
-    });
-
-    this.activeBranchIds.set(sessionId, branch.id);
-    if (fromEntryId) {
-      this.leafIds.set(sessionId, fromEntryId);
-    }
-    this.runtimes.get(sessionId)?.setActiveBranchId(branch.id);
-    this.database.setActiveBranchId(sessionId, branch.id);
-
-    return branch;
-  }
-
-  switchBranch(sessionId: string, branchId: string): SessionBranch {
-    if (!this.database) {
-      throw new Error("Database not available for branch operations");
-    }
-
-    const branch = this.database.getBranch(branchId);
-    if (!branch) {
-      throw new Error(`Branch ${branchId} not found`);
-    }
-    if (branch.sessionId !== sessionId) {
-      throw new Error(`Branch ${branchId} does not belong to session ${sessionId}`);
-    }
-
-    this.activeBranchIds.set(sessionId, branchId);
-    this.runtimes.get(sessionId)?.setActiveBranchId(branchId);
-    this.database.setActiveBranchId(sessionId, branchId);
-
-    const branchLeafId = this.database.getBranchHistory(sessionId, branchId).at(-1)?.id ?? null;
-    this.leafIds.set(sessionId, branchLeafId);
-
-    return branch;
-  }
-
-  listBranches(sessionId: string): SessionBranch[] {
-    if (!this.database) {
-      return [];
-    }
-    return this.database.listBranches(sessionId);
-  }
-
-  getBranchById(branchId: string): SessionBranch | null {
-    if (!this.database) {
-      return null;
-    }
-    return this.database.getBranch(branchId);
-  }
-
-  fork(sessionId: string, parentSessionId?: string): string {
-    // Create a new session with optional parent reference
-    const newSessionId = randomUUID();
-
-    // Note: The actual fork implementation copies session data from the source session
-    // to the new session. This requires the store to support:
-    // - listSessionHistoryEntries() to read source entries
-    // - addSessionHistoryEntry() to write to new session
-    // For SQLite-based storage, this would copy all entries from source to new session.
-
-    return newSessionId;
-  }
-
-  private getReadonlyStore(): ReadonlySessionStore | null {
-    // This is a placeholder - in real usage, the store would be injected
-    return null;
-  }
-
-  /**
-   * Create a read-only session store from a database.
-   * Used for tree navigation and branch summarization.
-   */
-  createReadonlySessionStore(database: AppStore): ReadonlySessionStore {
-    const entryCache = new Map<string, SessionHistoryEntry>();
-
-    return {
-      listSessionHistoryEntries(sessionId: string): SessionHistoryEntry[] {
-        const entries = database.listSessionHistoryEntries?.(sessionId) ?? [];
-        for (const entry of entries) {
-          entryCache.set(entry.id, entry);
-        }
-        return entries;
-      },
-      getSessionHistoryEntry(entryId: string): SessionHistoryEntry | null {
-        return entryCache.get(entryId) ?? null;
-      },
-    };
-  }
-
-  /**
-   * Create a read-only session manager from a database.
-   * Used for tree navigation and branch summarization.
-   */
-  createReadonlySessionManager(database: AppStore, sessionId: string): ReadonlySessionManager {
-    const store = this.createReadonlySessionStore(database);
-    return {
-      getSessionId(): string {
-        return sessionId;
-      },
-      getBranch(targetId: string): SessionHistoryEntry[] {
-        const entries = store.listSessionHistoryEntries(sessionId);
-        return getBranchPath(entries, targetId);
-      },
-      getEntry(entryId: string): SessionHistoryEntry | undefined {
-        return store.getSessionHistoryEntry(entryId) ?? undefined;
-      },
-    };
-  }
 }
 
-/**
- * Build a tree structure from flat entries.
- */
-function buildTree(
-  entries: SessionHistoryEntry[],
-  labels: Map<string, string>,
-  sessionId: string,
-): SessionTreeNode[] {
-  const rootNodes: SessionTreeNode[] = [];
-  const nodesById = new Map<string, SessionTreeNode>();
-
-  // Create nodes for all entries
-  for (const entry of entries) {
-    const node: SessionTreeNode = {
-      entry,
-      label: labels.get(`${sessionId}:${entry.id}`),
-      children: [],
-    };
-    nodesById.set(entry.id, node);
-  }
-
-  // Build tree structure
-  for (const entry of entries) {
-    const node = nodesById.get(entry.id)!;
-    if (entry.parentId && nodesById.has(entry.parentId)) {
-      nodesById.get(entry.parentId)!.children.push(node);
-    } else if (!entry.parentId) {
-      rootNodes.push(node);
-    }
-  }
-
-  return rootNodes;
-}
-
-/**
- * Get the branch path from root to target entry.
- * @param entries - All session history entries
- * @param targetId - Target entry ID
- * @returns Entries from root to target (inclusive)
- */
-export function getBranchPath(
-  entries: SessionHistoryEntry[],
-  targetId: string,
-): SessionHistoryEntry[] {
-  const entryMap = new Map<string, SessionHistoryEntry>();
-  for (const entry of entries) {
-    entryMap.set(entry.id, entry);
-  }
-
-  const path: SessionHistoryEntry[] = [];
-  let current = entryMap.get(targetId);
-
-  while (current) {
-    path.unshift(current);
-    current = current.parentId ? entryMap.get(current.parentId) : undefined;
-  }
-
-  return path;
-}
-
-/**
- * Find the common ancestor between two branches.
- * @param entries - All session history entries
- * @param fromId - Starting entry ID
- * @param toId - Target entry ID
- * @returns Common ancestor entry ID, or null if no common ancestor
- */
-export function findCommonAncestor(
-  entries: SessionHistoryEntry[],
-  fromId: string,
-  toId: string,
-): string | null {
-  const fromPath = getBranchPath(entries, fromId);
-  const toPath = getBranchPath(entries, toId);
-
-  const fromIds = new Set(fromPath.map((e) => e.id));
-
-  // Find deepest common ancestor (iterate toPath from end to start)
-  for (let i = toPath.length - 1; i >= 0; i--) {
-    if (fromIds.has(toPath[i].id)) {
-      return toPath[i].id;
-    }
-  }
-
-  return null;
-}
-
-export function createDatabaseSessionRuntimeStore(database: AppStore): SessionRuntimeStore {
+export function createDatabaseSessionRuntimeStore(..._args: unknown[]): SessionRuntimeStore {
   return {
-    load(sessionId: string): SessionRuntimeState | null {
-      const snapshot = database.loadSessionRuntimeSnapshot(sessionId);
-      if (snapshot) {
-        try {
-          const parsed = JSON.parse(snapshot.snapshot) as SessionRuntimeState;
-          if (!parsed.version) {
-            parsed.version = 1;
-          }
-          if (parsed.activeBranchId === undefined) {
-            parsed.activeBranchId = database.getActiveBranchId(sessionId);
-          }
-          return parsed;
-        } catch {
-          // Fall through to legacy recovery paths.
-        }
-      }
-
-      const legacyState = loadLegacyRuntimeSnapshot(database, sessionId);
-      if (legacyState) {
-        const normalized = normalizeRestoredState(legacyState);
-        normalized.activeBranchId = database.getActiveBranchId(sessionId);
-        persistSessionRuntimeSnapshot(database, normalized);
-        return normalized;
-      }
-
-      const restoredState = restoreFromDatabaseRecords(database, sessionId);
-      if (!restoredState) {
-        return null;
-      }
-
-      restoredState.activeBranchId = database.getActiveBranchId(sessionId);
-      persistSessionRuntimeSnapshot(database, restoredState);
-      return restoredState;
+    load() {
+      return null;
     },
-    save(state: SessionRuntimeState): void {
-      persistSessionRuntimeSnapshot(database, state);
-    },
+    save() {},
   };
 }
-
-const SESSION_RUNTIME_MEMORY_TITLE = "Runtime Snapshot";
 
 function hydrateState(
   sessionId: string,
@@ -781,7 +339,6 @@ function hydrateState(
     version: 1,
     sessionId,
     activeRunId: partial?.activeRunId ?? null,
-    activeBranchId: partial?.activeBranchId ?? null,
     pendingRunIds: partial?.pendingRunIds ? [...partial.pendingRunIds] : [],
     queuedRuns: partial?.queuedRuns ? partial.queuedRuns.map((entry) => ({ ...entry })) : [],
     blockedRunId: partial?.blockedRunId ?? null,
@@ -790,7 +347,6 @@ function hydrateState(
       ? [...partial.pendingApprovalToolCallIds]
       : [],
     interruptedRunIds: partial?.interruptedRunIds ? [...partial.interruptedRunIds] : [],
-    selectedProviderConfigId: partial?.selectedProviderConfigId ?? null,
     lastUserPrompt: partial?.lastUserPrompt ?? null,
     lastAssistantResponse: partial?.lastAssistantResponse ?? null,
     lastActivityAt: partial?.lastActivityAt ?? timestamp,
@@ -809,26 +365,16 @@ function hydrateState(
 }
 
 function normalizeRestoredState(state: SessionRuntimeState): SessionRuntimeState {
-  const queuedRuns = uniqueQueueEntries(state.queuedRuns);
-  const pendingRunIds = uniqueIds([
-    ...state.pendingRunIds,
-    ...queuedRuns.map((entry) => entry.runId),
-  ]);
-
-  if (state.activeRunId && !state.blockedRunId && !state.blockedToolCallId) {
-    return {
-      ...state,
-      interruptedRunIds: uniqueIds([...state.interruptedRunIds, state.activeRunId]),
-      activeRunId: null,
-      queuedRuns,
-      pendingRunIds,
-    };
-  }
-
+  const parsed = sessionRuntimeSnapshotSchema.parse({
+    ...state,
+    queuedRuns: state.queuedRuns,
+    compaction: state.compaction,
+  });
   return {
     ...state,
-    queuedRuns,
-    pendingRunIds,
+    version: parsed.version,
+    queuedRuns: uniqueQueueEntries(state.queuedRuns),
+    pendingRunIds: uniqueIds([...state.pendingRunIds, ...state.queuedRuns.map((entry) => entry.runId)]),
   };
 }
 
@@ -854,162 +400,4 @@ function cloneCompactionState(state: CompactionRuntimeState): CompactionRuntimeS
       ? JSON.parse(JSON.stringify(state.lastSummary)) as CompactionSummaryDocument
       : null,
   };
-}
-
-interface RunRow {
-  id: string;
-  sessionId: string;
-  taskId: string | null;
-  status: string;
-  prompt: string | null;
-  sourceRunId: string | null;
-  recoveryMode: string | null;
-  updatedAt: string;
-}
-
-interface ToolCallRow {
-  id: string;
-  runId: string;
-  sessionId: string;
-  approvalState: string;
-  updatedAt: string;
-}
-
-function persistSessionRuntimeSnapshot(database: AppStore, state: SessionRuntimeState): void {
-  const updatedAt = nowIso();
-  const snapshot = sessionRuntimeSnapshotSchema.parse({
-    version: state.version ?? 1,
-    sessionId: state.sessionId,
-    activeRunId: state.activeRunId,
-    activeBranchId: state.activeBranchId,
-    pendingRunIds: state.pendingRunIds,
-    queuedRuns: state.queuedRuns,
-    blockedRunId: state.blockedRunId,
-    blockedToolCallId: state.blockedToolCallId,
-    pendingApprovalToolCallIds: state.pendingApprovalToolCallIds,
-    interruptedRunIds: state.interruptedRunIds,
-    selectedProviderConfigId: state.selectedProviderConfigId,
-    lastUserPrompt: state.lastUserPrompt,
-    lastAssistantResponse: state.lastAssistantResponse,
-    lastActivityAt: state.lastActivityAt,
-    compaction: state.compaction,
-  });
-  database.saveSessionRuntimeSnapshot({
-    sessionId: state.sessionId,
-    snapshot: JSON.stringify(snapshot),
-    updatedAt,
-  });
-}
-
-function loadLegacyRuntimeSnapshot(database: AppStore, sessionId: string): SessionRuntimeState | null {
-  const candidates = database
-    .listMemories("session", sessionId)
-    .filter((memory) => memory.title === SESSION_RUNTIME_MEMORY_TITLE)
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-  const latest = candidates[candidates.length - 1];
-  if (!latest) {
-    return null;
-  }
-
-  try {
-    return normalizeRestoredState(JSON.parse(latest.content) as SessionRuntimeState);
-  } catch {
-    return null;
-  }
-}
-
-function restoreFromDatabaseRecords(database: AppStore, sessionId: string): SessionRuntimeState | null {
-  const session = database.getSession(sessionId);
-  if (!session) {
-    return null;
-  }
-
-  const runs = database
-    .listRuns(sessionId)
-    .map((run) => ({
-      id: run.id,
-      sessionId: run.sessionId,
-      taskId: run.taskId,
-      status: run.status,
-      prompt: run.prompt ?? null,
-      sourceRunId: run.sourceRunId ?? null,
-      recoveryMode: run.recoveryMode ?? null,
-      updatedAt: run.updatedAt,
-    }))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  const toolCalls = database
-    .listToolCallsBySession(sessionId)
-    .map((toolCall) => ({
-      id: toolCall.id,
-      runId: toolCall.runId,
-      sessionId: toolCall.sessionId,
-      approvalState: toolCall.approvalState,
-      updatedAt: toolCall.updatedAt,
-    }))
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-
-  const pendingApprovals = toolCalls.filter((toolCall) => toolCall.approvalState === "pending");
-  const latestPending = pendingApprovals[0] ?? null;
-  const blockedRunId =
-    session.status === "blocked" && latestPending ? latestPending.runId : null;
-  const blockedToolCallId =
-    session.status === "blocked" && latestPending ? latestPending.id : null;
-
-  const interruptedRunIds =
-    session.status === "running"
-      ? uniqueIds(runs.filter((run) => run.status === "running").map((run) => run.id))
-      : [];
-  const pendingRunRows = runs.filter((run) => run.status === "queued");
-  const pendingRunIds = uniqueIds(pendingRunRows.map((run) => run.id));
-  const selectedProviderConfigId = database.getProviderConfig()?.id ?? null;
-  const runsById = new Map(runs.map((run) => [run.id, run] as const));
-  const latestPrompt = resolveRecoveredPrompt(runs, runsById, session);
-
-  // Restore active branch from the latest branch record for this session
-  const branches = database.listBranches(sessionId);
-  const activeBranchId = branches.length > 0 ? branches[branches.length - 1].id : null;
-
-  return hydrateState(sessionId, {
-    activeRunId: null,
-    activeBranchId,
-    pendingRunIds,
-    queuedRuns: pendingRunRows.map((run) => ({
-      runId: run.id,
-      prompt: resolveRecoveredPrompt([run], runsById, session),
-      taskId: run.taskId,
-      providerConfigId: selectedProviderConfigId,
-      sourceRunId: run.sourceRunId ?? null,
-      mode: (run.recoveryMode as SessionRunQueueEntry["mode"] | null) ?? "start",
-    })),
-    blockedRunId,
-    blockedToolCallId,
-    pendingApprovalToolCallIds: pendingApprovals.map((toolCall) => toolCall.id),
-    interruptedRunIds,
-    selectedProviderConfigId,
-    lastUserPrompt: latestPrompt,
-    lastAssistantResponse: session.latestAssistantMessage,
-  });
-}
-
-function resolveRecoveredPrompt(runs: RunRow[], runsById: Map<string, RunRow>, session: Session): string {
-  for (const run of runs) {
-    const explicitPrompt = normalizePrompt(run.prompt);
-    if (explicitPrompt) {
-      return explicitPrompt;
-    }
-
-    if (run.sourceRunId) {
-      const sourcePrompt = normalizePrompt(runsById.get(run.sourceRunId)?.prompt);
-      if (sourcePrompt) {
-        return sourcePrompt;
-      }
-    }
-  }
-
-  return normalizePrompt(session.latestUserMessage) ?? "";
-}
-
-function normalizePrompt(prompt: string | null | undefined): string | null {
-  const normalized = prompt?.trim();
-  return normalized ? normalized : null;
 }

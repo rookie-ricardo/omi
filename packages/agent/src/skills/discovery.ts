@@ -62,6 +62,11 @@ export interface DiscoveryOptions {
   includeWorkspaceSkills?: boolean;
 }
 
+export interface SkillDiscoveryResult {
+  discovered: DiscoveredSkill[];
+  resolved: ResolvedSkill | null;
+}
+
 export interface DiscoveredSkill {
   descriptor: SkillDescriptor;
   frontmatter: SkillFrontmatter | null;

@@ -32,8 +32,7 @@ export type RpcCommand =
   // Session
   | { id?: string; type: "get_session_stats" }
   | { id?: string; type: "switch_session"; sessionPath: string }
-  | { id?: string; type: "fork"; historyEntryId: string }
-  | { id?: string; type: "get_fork_messages" };
+  | { id?: string; type: "fork"; messageId: string };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -89,7 +88,6 @@ export type RpcResponse =
   | { id?: string; type: "response"; command: "get_session_stats"; success: true; data: { sessionId: string; runs: number } }
   | { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
   | { id?: string; type: "response"; command: "fork"; success: true; data: { newSessionId: string; selectedText: string } }
-  | { id?: string; type: "response"; command: "get_fork_messages"; success: true; data: { messages: Array<{ entryId: string; text: string }> } }
 
   // Error response
   | { id?: string; type: "response"; command: string; success: false; error: string };

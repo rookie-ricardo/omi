@@ -6,14 +6,13 @@ import type {
   ProviderConfig,
   Run,
   Session,
-  SessionHistoryEntry,
+  SessionMessage,
   SkillDescriptor,
   SkillMatch,
   Task,
   ToolCall,
 } from "@omi/core";
 import type { AppStore } from "@omi/store";
-import type { McpRegistry } from "@omi/provider";
 import {
   type TaskToolRuntime,
   type ToolRuntimeContext,
@@ -22,9 +21,9 @@ import {
 import {
   AgentSession,
   type AgentSessionOptions,
-  type RunnerEventEnvelope,
 } from "./agent-session";
-import { listBuiltInModels, listBuiltInProviders, McpRegistry as McpRegistryImpl } from "@omi/provider";
+import type { RunnerEventEnvelope } from "@omi/core";
+import { listBuiltInModels, listBuiltInProviders } from "@omi/provider";
 import type { SettingsManager } from "@omi/settings";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader";
 import type { SessionCompactionSnapshot } from "@omi/memory";
@@ -41,13 +40,8 @@ const logger = getLogger("orchestrator");
 
 export interface SessionDetail {
   session: Session;
-  messages: Array<{ id: string; role: string; content: string; createdAt: string }>;
+  messages: SessionMessage[];
   tasks: Task[];
-}
-
-export interface SessionHistoryList {
-  sessionId: string;
-  historyEntries: SessionHistoryEntry[];
 }
 
 export interface SessionToolCalls {
@@ -86,7 +80,7 @@ export interface SessionCompactionResult {
   compactedAt: string;
 }
 
-type SessionPermissionMode = "default" | "full-access";
+type SessionPermissionMode = "default" | "yolo";
 type SessionWorkspaceSetResult = {
   sessionId: string;
   workspaceRoot: string;
@@ -97,7 +91,6 @@ export class AppOrchestrator {
   private readonly sessionManager: SessionManager;
   private readonly agentSessions = new Map<string, AgentSession>();
   private readonly settingsManager?: SettingsManager;
-  private readonly mcpRegistry: McpRegistry;
   private readonly taskToolRuntime: TaskToolRuntime;
   private readonly toolRuntimeContext: ToolRuntimeContext;
   private readonly sessionPermissionModes = new Map<string, SessionPermissionMode>();
@@ -116,12 +109,10 @@ export class AppOrchestrator {
   ) {
     this.resources = resourceLoader ?? new DefaultResourceLoader(workspaceRoot);
     this.sessionManager =
-      sessionManager ?? new SessionManager(createDatabaseSessionRuntimeStore(database));
+      sessionManager ?? new SessionManager(createDatabaseSessionRuntimeStore());
     this.settingsManager = settingsManager;
-    this.mcpRegistry = new McpRegistryImpl();
     this.taskToolRuntime = createDatabaseTaskToolRuntime(database);
     this.toolRuntimeContext = {
-      mcpRegistry: this.mcpRegistry,
       taskRuntime: this.taskToolRuntime,
     };
   }
@@ -162,14 +153,6 @@ export class AppOrchestrator {
   getSessionRuntimeState(sessionId: string): SessionRuntimeState {
     this.requireSession(sessionId);
     return this.sessionManager.getOrCreate(sessionId).snapshot();
-  }
-
-  listSessionHistory(sessionId: string): SessionHistoryList {
-    this.requireSession(sessionId);
-    return {
-      sessionId,
-      historyEntries: this.database.listSessionHistoryEntries?.(sessionId) ?? [],
-    };
   }
 
   listToolCalls(sessionId: string): SessionToolCalls {
@@ -239,13 +222,16 @@ export class AppOrchestrator {
   }
 
   switchModel(sessionId: string, providerConfigId: string): { sessionId: string; runtime: SessionRuntimeState } {
-    this.requireSession(sessionId);
+    const session = this.requireSession(sessionId);
     const providerConfig = this.database.getProviderConfig(providerConfigId);
     if (!providerConfig) {
       throw new Error(`Provider config ${providerConfigId} not found`);
     }
+    this.database.updateSession(session.id, {
+      providerConfigId: providerConfig.id,
+      model: providerConfig.model,
+    });
     const runtime = this.sessionManager.getOrCreate(sessionId);
-    runtime.setSelectedProviderConfig(providerConfig.id);
     return { sessionId, runtime: runtime.snapshot() };
   }
 
@@ -307,26 +293,6 @@ export class AppOrchestrator {
     return run;
   }
 
-  continueFromHistoryEntry(input: {
-    sessionId: string;
-    historyEntryId?: string | null;
-    taskId: string | null;
-    prompt: string;
-    checkpointSummary?: string | null;
-    checkpointDetails?: unknown | null;
-  }): Run {
-    this.requireSession(input.sessionId);
-    const providerConfig = this.resolveProviderConfigForSession(input.sessionId);
-    return this.getConfiguredAgentSession(input.sessionId).continueFromHistoryEntry({
-      taskId: input.taskId,
-      prompt: transformPlanPromptForRuntime(input.prompt, providerConfig.protocol),
-      historyEntryId: input.historyEntryId ?? null,
-      checkpointSummary: input.checkpointSummary ?? null,
-      checkpointDetails: input.checkpointDetails ?? null,
-      providerConfig,
-    });
-  }
-
   retryRun(runId: string): Run {
     const run = this.requireRun(runId);
     return this.getConfiguredAgentSession(run.sessionId).retryRun(runId);
@@ -378,7 +344,7 @@ export class AppOrchestrator {
     sessionId: string,
     mode: SessionPermissionMode,
   ): { sessionId: string; mode: SessionPermissionMode } {
-    this.requireSession(sessionId);
+    this.database.updateSession(sessionId, { permissionMode: mode });
     this.sessionPermissionModes.set(sessionId, mode);
     this.getAgentSession(sessionId).setPermissionMode(mode);
     return { sessionId, mode };
@@ -428,14 +394,16 @@ export class AppOrchestrator {
   }
 
   private resolveProviderConfigForSession(sessionId: string): ProviderConfig {
-    const runtime = this.sessionManager.getOrCreate(sessionId).snapshot();
-    if (runtime.selectedProviderConfigId) {
-      const selected = this.database.getProviderConfig(runtime.selectedProviderConfigId);
-      if (selected) {
-        return selected;
-      }
-    }
-    return this.requireProviderConfig();
+    const session = this.requireSession(sessionId);
+    const selected = session.providerConfigId
+      ? this.database.getProviderConfig(session.providerConfigId)
+      : this.database.getProviderConfig();
+    const config = selected ?? this.requireProviderConfig();
+    return {
+      ...config,
+      model: session.model ?? config.model,
+      enabled: config.enabled ?? true,
+    };
   }
 
   private getAgentSession(sessionId: string): AgentSession {
@@ -443,6 +411,7 @@ export class AppOrchestrator {
     if (current) {
       return current;
     }
+    const session = this.requireSession(sessionId);
     const agentSession = this.createAgentSession({
       database: this.database,
       sessionId,
@@ -452,17 +421,18 @@ export class AppOrchestrator {
       settingsManager: this.settingsManager,
       toolRuntimeContext: this.toolRuntimeContext,
       workspaceRoot: this.getSessionWorkspaceRoot(sessionId),
-      permissionMode: this.sessionPermissionModes.get(sessionId) ?? "default",
+      permissionMode: this.sessionPermissionModes.get(sessionId) ?? session.permissionMode ?? "default",
     });
     this.agentSessions.set(sessionId, agentSession);
     return agentSession;
   }
 
   private getConfiguredAgentSession(sessionId: string): AgentSession {
-    const session = this.getAgentSession(sessionId);
-    session.setWorkspaceRoot(this.getSessionWorkspaceRoot(sessionId));
-    session.setPermissionMode(this.sessionPermissionModes.get(sessionId) ?? "default");
-    return session;
+    const session = this.requireSession(sessionId);
+    const agentSession = this.getAgentSession(sessionId);
+    agentSession.setWorkspaceRoot(this.getSessionWorkspaceRoot(sessionId));
+    agentSession.setPermissionMode(this.sessionPermissionModes.get(sessionId) ?? session.permissionMode ?? "default");
+    return agentSession;
   }
 
   private getSessionWorkspaceRoot(sessionId: string): string {

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode";
 import type { AgentSession } from "../src/agent-session";
-import type { RunnerEventEnvelope } from "../src/agent-session";
+import type { RunnerEventEnvelope } from "@omi/core";
 
 describe("InteractiveMode", () => {
 	let mockSession: AgentSession;

@@ -79,8 +79,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "session", description: "Show session info and stats" },
 	{ name: "changelog", description: "Show changelog entries" },
 	{ name: "hotkeys", description: "Show all keyboard shortcuts" },
-	{ name: "fork", description: "Create a new fork from a previous message" },
-	{ name: "tree", description: "Navigate session tree (switch branches)" },
+	{ name: "fork", description: "Create a new session from the current retained message window" },
 	{ name: "login", description: "Login with OAuth provider" },
 	{ name: "logout", description: "Logout from OAuth provider" },
 	{ name: "new", description: "Start a new session" },
@@ -367,13 +366,13 @@ export class SlashCommandRegistry {
 		// /fork - Fork the current session
 		this.registerCommand({
 			name: "fork",
-			description: "Create a new fork from a previous message",
-			usage: "/fork [history-entry-id]",
+			description: "Create a new session from the current retained message window",
+			usage: "/fork [message-id]",
 			execute: async (args, context) => {
-				const historyEntryId = args.trim() || null;
+				const messageId = args.trim() || null;
 
 				try {
-					const result = await context.session.fork(historyEntryId || "");
+					const result = await context.session.fork(messageId || "");
 					return {
 						success: true,
 						output: `Created fork: ${result.newSessionId}\nSelected: ${result.selectedText}`,

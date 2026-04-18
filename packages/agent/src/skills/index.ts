@@ -1,12 +1,10 @@
 /**
  * Skills Module
  *
- * Skill system with the following capabilities:
- * - Skill discovery and matching
- * - Frontmatter schema validation
- * - Budget-controlled loading
- * - Dual execution modes (inline/fork)
- * - Tool permission rules
+ * OMI keeps this as a thin adapter layer over Claude Agent SDK concepts.
+ *
+ * The SDK owns runtime execution semantics; this package only exposes
+ * discovery, matching, and frontmatter parsing for OMI-specific adaptation.
  */
 
 // Frontmatter types and parsing
@@ -33,31 +31,3 @@ export {
   type DiscoveryOptions,
   type DiscoveredSkill,
 } from "./discovery";
-
-// Loading with budget control
-export {
-  loadSkillsWithBudget,
-  loadSingleSkill,
-  getModelConstraints,
-  requiresSpecificModel,
-  getExecutionMode,
-  shouldFork,
-  getToolRules,
-  isCommandAllowed,
-  type SkillBudgetConfig,
-  type LoadedSkill,
-  type LoadResult,
-  type LoaderOptions,
-} from "./loader";
-
-// Execution
-export {
-  SkillExecutor,
-  shouldDeferExecution,
-  getExecutionPriority,
-  canExecuteSkill,
-  mergeSkillOutputs,
-  type ExecutionContext,
-  type ExecutionResult,
-  type ExecutionPlan,
-} from "./executor";

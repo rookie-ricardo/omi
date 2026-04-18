@@ -70,14 +70,9 @@ describe("rpc-types", () => {
     });
 
     it("validates fork command structure", () => {
-      const cmd = { type: "fork", historyEntryId: "entry123", id: "fork1" };
+      const cmd = { type: "fork", messageId: "msg123", id: "fork1" };
       expect(cmd).toHaveProperty("type", "fork");
-      expect(cmd).toHaveProperty("historyEntryId", "entry123");
-    });
-
-    it("validates get_fork_messages command structure", () => {
-      const cmd = { type: "get_fork_messages", id: "fork_msgs1" };
-      expect(cmd).toHaveProperty("type", "get_fork_messages");
+      expect(cmd).toHaveProperty("messageId", "msg123");
     });
   });
 

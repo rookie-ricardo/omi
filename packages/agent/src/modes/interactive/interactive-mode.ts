@@ -8,7 +8,17 @@
 import * as readline from "node:readline";
 import type { AgentSession } from "../../agent-session";
 import type { RpcSessionState } from "../rpc/rpc-types";
-import type { RunnerEventEnvelope } from "../../agent-session";
+import type {
+	RunnerEventEnvelope,
+	RunDeltaPayload,
+	RunStartedPayload,
+	RunBlockedPayload,
+	RunFailedPayload,
+	RunToolRequestedPayload,
+	RunToolStartedPayload,
+	RunToolFinishedPayload,
+	RunToolDecidedPayload,
+} from "@omi/core";
 import { BUILTIN_SLASH_COMMANDS } from "../../slash-commands";
 import { createEventBus, type EventBus } from "../../event-bus";
 
@@ -175,8 +185,7 @@ export class InteractiveMode {
 	private setupEventListeners(): void {
 		// Listen for run delta events (streaming output)
 		this.eventBus.on("run.delta", (data: unknown) => {
-			const event = data as RunnerEventEnvelope;
-			const delta = event.payload.delta as string;
+			const { delta } = (data as { payload: RunDeltaPayload }).payload;
 			if (delta) {
 				process.stdout.write(delta);
 				this.outputBuffer += delta;
@@ -185,25 +194,23 @@ export class InteractiveMode {
 
 		// Listen for run started
 		this.eventBus.on("run.started", (data: unknown) => {
-			const event = data as RunnerEventEnvelope;
-			this.currentRunId = event.payload.runId as string;
+			const { runId } = (data as { payload: RunStartedPayload }).payload;
+			this.currentRunId = runId;
 			this.isStreaming = true;
 		});
 
 		// Listen for run blocked (tool approval)
 		this.eventBus.on("run.blocked", (data: unknown) => {
-			const event = data as RunnerEventEnvelope;
-			const toolCallId = event.payload.toolCallId as string;
-			const reason = event.payload.reason as string;
+			const payload = (data as { payload: RunBlockedPayload }).payload;
 			this.pendingToolApproval = {
-				toolCallId,
-				toolName: reason || "unknown",
-				runId: event.payload.runId as string,
+				toolCallId: payload.toolCallId,
+				toolName: payload.toolName || "unknown",
+				runId: payload.runId,
 			};
 		});
 
 		// Listen for run completion
-		this.eventBus.on("run.completed", (data: unknown) => {
+		this.eventBus.on("run.completed", () => {
 			this.currentRunId = null;
 			this.isStreaming = false;
 			this.clearPendingToolApproval();
@@ -222,19 +229,17 @@ export class InteractiveMode {
 
 		// Listen for run failure
 		this.eventBus.on("run.failed", (data: unknown) => {
-			const event = data as RunnerEventEnvelope;
+			const { error } = (data as { payload: RunFailedPayload }).payload;
 			this.currentRunId = null;
 			this.isStreaming = false;
 			this.clearPendingToolApproval();
-			const error = event.payload.error as string | undefined;
-			console.error(`\n[Run failed${error ? `: ${error}` : ""}]`);
+			console.error(`\n[Run failed: ${error}]`);
 		});
 
 		// Listen for tool requested
 		this.eventBus.on("run.tool_requested", (data: unknown) => {
 			if (this.options.verbose) {
-				const event = data as RunnerEventEnvelope;
-				const toolName = event.payload.toolName as string;
+				const { toolName } = (data as { payload: RunToolRequestedPayload }).payload;
 				console.log(`\n[Tool requested: ${toolName}]`);
 			}
 		});
@@ -242,8 +247,7 @@ export class InteractiveMode {
 		// Listen for tool started
 		this.eventBus.on("run.tool_started", (data: unknown) => {
 			if (this.options.verbose) {
-				const event = data as RunnerEventEnvelope;
-				const toolName = event.payload.toolName as string;
+				const { toolName } = (data as { payload: RunToolStartedPayload }).payload;
 				console.log(`\n[Tool started: ${toolName}]`);
 			}
 		});
@@ -251,8 +255,7 @@ export class InteractiveMode {
 		// Listen for tool finished
 		this.eventBus.on("run.tool_finished", (data: unknown) => {
 			if (this.options.verbose) {
-				const event = data as RunnerEventEnvelope;
-				const toolName = event.payload.toolName as string;
+				const { toolName } = (data as { payload: RunToolFinishedPayload }).payload;
 				console.log(`\n[Tool finished: ${toolName}]`);
 			}
 		});
@@ -260,8 +263,7 @@ export class InteractiveMode {
 		// Listen for tool decision
 		this.eventBus.on("run.tool_decided", (data: unknown) => {
 			if (this.options.verbose) {
-				const event = data as RunnerEventEnvelope;
-				const decision = event.payload.decision as string;
+				const { decision } = (data as { payload: RunToolDecidedPayload }).payload;
 				console.log(`\n[Tool decision: ${decision}]`);
 			}
 		});
@@ -450,7 +452,7 @@ export class InteractiveMode {
 				const name = args.trim();
 				if (name) {
 					console.log(`[Session name set to: ${name}]`);
-					console.log("  (Note: Session name storage is handled via session history)");
+					console.log("  (Note: Session names are stored directly on the session record)");
 				} else {
 					console.log("[Usage: /name <session-name>]");
 				}
@@ -476,17 +478,10 @@ export class InteractiveMode {
 				try {
 					const forkResult = await this.session.fork("");
 					console.log(`[Created fork: ${forkResult.newSessionId}]`);
-					console.log("  Use the desktop app to switch between branches.");
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					console.error(`[Failed to create fork: ${message}]`);
 				}
-				break;
-
-			case "tree":
-				console.log("[Session Tree]");
-				console.log("  Session tree navigation is not available in terminal mode.");
-				console.log("  Use the desktop app for full tree navigation.");
 				break;
 
 			case "login":

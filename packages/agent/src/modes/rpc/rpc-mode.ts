@@ -126,13 +126,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
         }
 
         case "fork": {
-          const result = await session.fork(cmd.historyEntryId);
-          logger.info("RPC fork handled", { historyEntryId: cmd.historyEntryId, id });
+          const result = await session.fork(cmd.messageId);
+          logger.info("RPC fork handled", { messageId: cmd.messageId, id });
           return success(id, "fork", result);
-        }
-
-        case "get_fork_messages": {
-          return success(id, "get_fork_messages", { messages: [] });
         }
 
         case "steer": {
