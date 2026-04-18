@@ -1,18 +1,11 @@
 import { z } from "zod";
 
-export const sessionStatusSchema = z.enum([
-  "idle",
-  "running",
-  "blocked",
-  "completed",
-  "failed",
-  "canceled",
-]);
-
 export const taskStatusSchema = z.enum(["inbox", "active", "review", "done", "dismissed"]);
+export const sessionPermissionModeSchema = z.enum(["default", "yolo"]);
+export const thinkLevelSchema = z.enum(["minimal", "low", "medium", "high"]);
+export const messageTypeSchema = z.enum(["text", "tool_call", "tool_result", "summary"]);
 
 export const memoryScopeSchema = z.enum(["session", "task", "workspace"]);
-export const reviewStatusSchema = z.enum(["pending", "approved", "rejected"]);
 export const runStatusSchema = z.enum([
   "queued",
   "running",
@@ -29,7 +22,10 @@ export const approvalDecisionSchema = z.enum(["approved", "rejected", "deferred"
 export const sessionSchema = z.object({
   id: z.string(),
   title: z.string(),
-  status: sessionStatusSchema,
+  providerConfigId: z.string().nullable().default(null),
+  model: z.string().nullable().default(null),
+  permissionMode: sessionPermissionModeSchema.default("default"),
+  thinkLevel: thinkLevelSchema.default("medium"),
   createdAt: z.string(),
   updatedAt: z.string(),
   latestUserMessage: z.string().nullable().default(null),
@@ -52,26 +48,15 @@ export const runSchema = z.object({
   sessionId: z.string(),
   taskId: z.string().nullable(),
   status: runStatusSchema,
-  provider: z.string(),
+  provider: z.string().nullable().optional(),
+  providerConfigId: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
   prompt: z.string().nullable().optional(),
   sourceRunId: z.string().nullable().optional(),
   recoveryMode: runRecoveryModeSchema.nullable().optional(),
   originRunId: z.string().nullable().optional(),
   resumeFromCheckpoint: z.string().nullable().optional(),
   terminalReason: z.string().nullable().optional(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const reviewRequestSchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  taskId: z.string().nullable(),
-  toolCallId: z.string().nullable(),
-  kind: z.enum(["tool_approval", "final_review"]),
-  status: reviewStatusSchema,
-  title: z.string(),
-  detail: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -89,9 +74,8 @@ export const memoryRecordSchema = z.object({
 
 export const toolCallSchema = z.object({
   id: z.string(),
-  runId: z.string(),
+  messageId: z.string(),
   sessionId: z.string(),
-  taskId: z.string().nullable(),
   toolName: z.string(),
   approvalState: z.enum(["pending", "approved", "rejected", "not_required"]),
   input: z.record(z.string(), z.any()),
@@ -115,6 +99,7 @@ export const providerConfigSchema = z.object({
   apiKey: z.string().min(1),
   model: z.string().min(1),
   url: z.string().default(""),
+  enabled: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -122,35 +107,17 @@ export const providerConfigSchema = z.object({
 export const sessionMessageSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
+  taskId: z.string().nullable().optional().default(null),
+  parentMessageId: z.string().nullable().optional().default(null),
   role: z.enum(["system", "user", "assistant", "tool"]),
+  messageType: messageTypeSchema.optional().default("text"),
   content: z.string(),
+  model: z.string().nullable().optional().default(null),
+  tokens: z.number().int().nonnegative().optional().default(0),
+  totalTokens: z.number().int().nonnegative().optional().default(0),
+  compressedFromMessageId: z.string().nullable().optional().default(null),
   createdAt: z.string(),
-});
-
-export const sessionHistoryEntryKindSchema = z.enum(["message", "branch_summary"]);
-
-export const sessionHistoryEntrySchema = z.object({
-  id: z.string(),
-  sessionId: z.string(),
-  parentId: z.string().nullable(),
-  kind: sessionHistoryEntryKindSchema,
-  messageId: z.string().nullable().default(null),
-  summary: z.string().nullable().default(null),
-  details: z.record(z.string(), z.any()).nullable().default(null),
-  branchId: z.string().nullable().default(null),
-  lineageDepth: z.number().default(0),
-  originRunId: z.string().nullable().default(null),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const eventRecordSchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  sessionId: z.string(),
-  type: z.string(),
-  payload: z.record(z.string(), z.any()),
-  createdAt: z.string(),
+  updatedAt: z.string().optional().default(""),
 });
 
 export const skillSourceSchema = z.object({
@@ -221,34 +188,6 @@ export const gitDiffPreviewSchema = z.object({
   rows: z.array(gitDiffRowSchema),
 });
 
-// ============================================================================
-// Session Branch & Run Checkpoint
-// ============================================================================
-
-export const sessionBranchSchema = z.object({
-  id: z.string(),
-  sessionId: z.string(),
-  title: z.string().default("main"),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const runCheckpointPhaseSchema = z.enum([
-  "before_model_call",
-  "after_model_stream",
-  "after_tool_batch",
-  "before_terminal_commit",
-]);
-
-export const runCheckpointSchema = z.object({
-  id: z.string(),
-  runId: z.string(),
-  sessionId: z.string(),
-  phase: runCheckpointPhaseSchema,
-  payload: z.record(z.string(), z.any()).default({}),
-  createdAt: z.string(),
-});
-
 export const sessionRuntimeSnapshotSchema = z.object({
   version: z.number().default(1),
   sessionId: z.string(),
@@ -259,20 +198,20 @@ export const sessionRuntimeSnapshotSchema = z.object({
   blockedToolCallId: z.string().nullable(),
   pendingApprovalToolCallIds: z.array(z.string()).default([]),
   interruptedRunIds: z.array(z.string()).default([]),
-  selectedProviderConfigId: z.string().nullable(),
   lastUserPrompt: z.string().nullable(),
   lastAssistantResponse: z.string().nullable(),
   lastActivityAt: z.string(),
   compaction: z.any(),
-  activeBranchId: z.string().nullable().default(null),
 });
 
 // ============================================================================
 // Type Exports
 // ============================================================================
 
-export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type SessionPermissionMode = z.infer<typeof sessionPermissionModeSchema>;
+export type ThinkLevel = z.infer<typeof thinkLevelSchema>;
+export type MessageType = z.infer<typeof messageTypeSchema>;
 export type RunStatus = z.infer<typeof runStatusSchema>;
 export type RunRecoveryMode = z.infer<typeof runRecoveryModeSchema>;
 export type MemoryScope = z.infer<typeof memoryScopeSchema>;
@@ -280,14 +219,10 @@ export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type Run = z.infer<typeof runSchema>;
-export type ReviewRequest = z.infer<typeof reviewRequestSchema>;
 export type MemoryRecord = z.infer<typeof memoryRecordSchema>;
 export type ToolCall = z.infer<typeof toolCallSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 export type SessionMessage = z.infer<typeof sessionMessageSchema>;
-export type SessionHistoryEntryKind = z.infer<typeof sessionHistoryEntryKindSchema>;
-export type SessionHistoryEntry = z.infer<typeof sessionHistoryEntrySchema>;
-export type EventRecord = z.infer<typeof eventRecordSchema>;
 export type SkillSource = z.infer<typeof skillSourceSchema>;
 export type SkillDescriptor = z.infer<typeof skillDescriptorSchema>;
 export type SkillMatch = z.infer<typeof skillMatchSchema>;
@@ -296,7 +231,4 @@ export type GitChangedFile = z.infer<typeof gitChangedFileSchema>;
 export type GitRepoState = z.infer<typeof gitRepoStateSchema>;
 export type GitDiffRow = z.infer<typeof gitDiffRowSchema>;
 export type GitDiffPreview = z.infer<typeof gitDiffPreviewSchema>;
-export type SessionBranch = z.infer<typeof sessionBranchSchema>;
-export type RunCheckpointPhase = z.infer<typeof runCheckpointPhaseSchema>;
-export type RunCheckpoint = z.infer<typeof runCheckpointSchema>;
 export type SessionRuntimeSnapshotV1 = z.infer<typeof sessionRuntimeSnapshotSchema>;

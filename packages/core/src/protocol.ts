@@ -6,9 +6,9 @@ import {
   gitRepoStateSchema,
   providerConfigSchema,
   providerProtocolSchema,
-  runCheckpointSchema,
   runSchema,
-  sessionHistoryEntrySchema,
+  sessionPermissionModeSchema,
+  sessionMessageSchema,
   sessionSchema,
   sessionRuntimeSnapshotSchema,
   taskSchema,
@@ -89,21 +89,6 @@ export const providerConfigDeleteParamsSchema = z.object({
   id: z.string(),
 });
 
-export const sessionHistoryListParamsSchema = z.object({
-  sessionId: z.string(),
-});
-
-export const sessionHistoryContinueParamsSchema = z.object({
-  sessionId: z.string(),
-  historyEntryId: z.string().nullable().default(null),
-  prompt: z.string().min(1),
-  taskId: z.string().nullable().default(null),
-  checkpointSummary: z.string().nullable().default(null),
-  checkpointDetails: z.record(z.string(), z.unknown()).nullable().default(null),
-});
-
-export const sessionPermissionModeSchema = z.enum(["default", "full-access"]);
-
 export const sessionPermissionSetResultSchema = z.object({
   sessionId: z.string(),
   mode: sessionPermissionModeSchema,
@@ -133,11 +118,6 @@ export const sessionModelSwitchResultSchema = z.object({
 
 export const sessionTitleUpdateResultSchema = z.object({
   session: sessionSchema,
-});
-
-export const sessionHistoryListResultSchema = z.object({
-  sessionId: z.string(),
-  historyEntries: z.array(sessionHistoryEntrySchema),
 });
 
 export const toolPendingListResultSchema = z.object({
@@ -173,11 +153,6 @@ export const modelListResultSchema = z.object({
   ),
 });
 
-export const runStateGetResultSchema = z.object({
-  run: runSchema,
-  checkpoints: z.array(runCheckpointSchema),
-});
-
 export const runEventsSubscribeResultSchema = z.object({
   runId: z.string(),
   subscriptionId: z.string(),
@@ -195,8 +170,6 @@ export const commandMap = {
   "session.get": z.object({ sessionId: z.string() }),
   "session.title.update": sessionTitleUpdateParamsSchema,
   "session.runtime.get": z.object({ sessionId: z.string() }),
-  "session.history.list": sessionHistoryListParamsSchema,
-  "session.history.continue": sessionHistoryContinueParamsSchema,
   "session.workspace.set": sessionWorkspaceSetParamsSchema,
   "session.permission.set": z.object({
     sessionId: z.string(),
@@ -206,7 +179,6 @@ export const commandMap = {
 
   "run.start": runStartParamsSchema,
   "run.cancel": z.object({ runId: z.string() }),
-  "run.state.get": z.object({ runId: z.string() }),
   "run.events.subscribe": z.object({
     runId: z.string(),
     events: z.array(z.string()),
@@ -229,8 +201,6 @@ export const commandMap = {
 export const resultSchemas = {
   "session.title.update": sessionTitleUpdateResultSchema,
   "session.runtime.get": sessionRuntimeGetResultSchema,
-  "session.history.list": sessionHistoryListResultSchema,
-  "session.history.continue": runSchema,
   "session.workspace.set": sessionWorkspaceSetResultSchema,
   "session.permission.set": sessionPermissionSetResultSchema,
   "session.model.switch": sessionModelSwitchResultSchema,
@@ -244,8 +214,6 @@ export const resultSchemas = {
   "model.list": modelListResultSchema,
   "git.status": gitRepoStateSchema,
   "git.diff": gitDiffPreviewSchema,
-
-  "run.state.get": runStateGetResultSchema,
   "run.events.subscribe": runEventsSubscribeResultSchema,
   "run.events.unsubscribe": runEventsUnsubscribeResultSchema,
 } as const;
@@ -261,12 +229,10 @@ export type RunnerResultByName = {
   [K in RunnerResultName]: z.infer<(typeof resultSchemas)[K]>;
 };
 
-export type SessionHistoryListResult = z.infer<typeof sessionHistoryListResultSchema>;
 export type SessionRuntimeGetResult = z.infer<typeof sessionRuntimeGetResultSchema>;
 export type ToolPendingListResult = z.infer<typeof toolPendingListResultSchema>;
 export type ToolListResult = z.infer<typeof toolListResultSchema>;
 export type ModelListResult = z.infer<typeof modelListResultSchema>;
-export type RunState = z.infer<typeof runStateGetResultSchema>;
 
 export function parseCommand<TName extends RunnerCommandName>(
   method: TName,
@@ -299,15 +265,7 @@ export const runnerEnvelopeSchema = z.object({
 
 export const sessionDetailSchema = z.object({
   session: sessionSchema,
-  messages: z.array(
-    z.object({
-      id: z.string(),
-      sessionId: z.string(),
-      role: z.enum(["system", "user", "assistant", "tool"]),
-      content: z.string(),
-      createdAt: z.string(),
-    }),
-  ),
+  messages: z.array(sessionMessageSchema),
   tasks: z.array(taskSchema),
 });
 
