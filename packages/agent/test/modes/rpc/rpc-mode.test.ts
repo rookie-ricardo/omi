@@ -21,15 +21,11 @@ describe("RPC Mode", () => {
       prompt: vi.fn().mockResolvedValue(undefined),
       abort: vi.fn().mockResolvedValue(undefined),
       setModel: vi.fn(),
-      cycleModel: vi.fn().mockReturnValue({ modelId: "test-model" }),
       getSessionStats: vi.fn().mockReturnValue({
         sessionId: "test-session",
         totalMessages: 10,
       }),
-      abortBash: vi.fn(),
       fork: vi.fn().mockResolvedValue({ sessionId: "forked-session" }),
-      steer: vi.fn().mockResolvedValue(undefined),
-      followUp: vi.fn().mockResolvedValue(undefined),
     } as unknown as AgentSession;
 
     stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -92,12 +88,12 @@ describe("RPC Mode", () => {
   });
 
   describe("cycle_model command", () => {
-    it("应该循环模型", async () => {
+    it("应该返回 null", async () => {
       mockCommandStream([{ type: "cycle_model", id: "cmd-5" }]);
 
       await runRpcMode(mockSession);
 
-      expect(mockSession.cycleModel).toHaveBeenCalled();
+      expect(stdoutWrite).toHaveBeenCalled();
     });
   });
 
@@ -112,22 +108,22 @@ describe("RPC Mode", () => {
   });
 
   describe("steer command", () => {
-    it("应该成功处理 steer 命令", async () => {
+    it("应该通过 prompt 处理 steer 命令", async () => {
       mockCommandStream([{ type: "steer", message: "Change direction", id: "cmd-7" }]);
 
       await runRpcMode(mockSession);
 
-      expect(mockSession.steer).toHaveBeenCalledWith("Change direction");
+      expect(mockSession.prompt).toHaveBeenCalledWith("Change direction");
     });
   });
 
   describe("follow_up command", () => {
-    it("应该成功处理 follow_up 命令", async () => {
+    it("应该通过 prompt 处理 follow_up 命令", async () => {
       mockCommandStream([{ type: "follow_up", message: "Continue", id: "cmd-8" }]);
 
       await runRpcMode(mockSession);
 
-      expect(mockSession.followUp).toHaveBeenCalledWith("Continue");
+      expect(mockSession.prompt).toHaveBeenCalledWith("Continue");
     });
   });
 

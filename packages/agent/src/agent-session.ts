@@ -468,10 +468,6 @@ export class AgentSession {
     this.options.runtime.setSelectedProviderConfig(currentConfig.id);
   }
 
-  cycleModel(): { modelId: string; provider: string } | undefined {
-    return undefined;
-  }
-
   // ==========================================================================
   // Statistics
   // ==========================================================================
@@ -499,17 +495,6 @@ export class AgentSession {
   }
 
   // ==========================================================================
-  // Bash Control
-  // ==========================================================================
-
-  abortBash(): void {
-    const runtime = this.options.runtime.snapshot();
-    if (runtime.activeRunId) {
-      this.cancelRun(runtime.activeRunId);
-    }
-  }
-
-  // ==========================================================================
   // Prompting
   // ==========================================================================
 
@@ -534,28 +519,6 @@ export class AgentSession {
       });
     }
     return this.startRun({ prompt: text, providerConfig, taskId: options?.taskId });
-  }
-
-  async sendUserMessage(content: string, options?: { taskId?: string | null }): Promise<Run> {
-    return this.prompt(content, options);
-  }
-
-  async sendCustomMessage(
-    message: { customType: string; content: unknown; display?: string; details?: Record<string, unknown> },
-    options?: { triggerRun?: boolean },
-  ): Promise<void> {
-    if (options?.triggerRun) {
-      const contentStr = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-      await this.prompt(contentStr);
-    }
-  }
-
-  async steer(text: string): Promise<void> {
-    this.startRun({ prompt: text, providerConfig: this.resolveProviderConfig() });
-  }
-
-  async followUp(text: string): Promise<void> {
-    this.startRun({ prompt: text, providerConfig: this.resolveProviderConfig() });
   }
 
   async fork(historyEntryId: string): Promise<{ newSessionId: string; selectedText: string }> {

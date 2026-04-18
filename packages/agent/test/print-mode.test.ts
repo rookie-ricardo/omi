@@ -39,10 +39,6 @@ function createMockSession(): AgentSession {
 		resumeRun: vi.fn(),
 		retryRun: vi.fn(),
 		dispose: vi.fn(),
-		sendUserMessage: vi.fn(),
-		sendCustomMessage: vi.fn(),
-		steer: vi.fn(),
-		followUp: vi.fn(),
 		fork: vi.fn(),
 	} as unknown as AgentSession;
 }

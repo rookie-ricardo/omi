@@ -98,9 +98,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
         }
 
         case "cycle_model": {
-          const result = session.cycleModel();
-          logger.debug("RPC cycle_model handled", { id, hasResult: !!result });
-          return success(id, "cycle_model", result ? { modelId: result.modelId } : null);
+          return success(id, "cycle_model", null);
         }
 
         case "get_available_models": {
@@ -113,7 +111,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
         }
 
         case "abort_bash": {
-          session.abortBash();
+          await session.abort();
           logger.info("RPC abort_bash handled", { id });
           return success(id, "abort_bash");
         }
@@ -138,13 +136,13 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
         }
 
         case "steer": {
-          await session.steer(cmd.message);
+          await session.prompt(cmd.message);
           logger.debug("RPC steer handled", { id });
           return success(id, "steer");
         }
 
         case "follow_up": {
-          await session.followUp(cmd.message);
+          await session.prompt(cmd.message);
           logger.debug("RPC follow_up handled", { id });
           return success(id, "follow_up");
         }
