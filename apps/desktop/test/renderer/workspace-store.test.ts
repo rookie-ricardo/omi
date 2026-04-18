@@ -277,7 +277,7 @@ function createGatewayMock(): {
           return {} as never;
       }
     }) as RunnerGateway["invoke"],
-    subscribe: ((listener: (event: { type: string; payload: Record<string, unknown> }) => void) => {
+    subscribe: ((listener: (event: unknown) => void) => {
       void listener;
       return () => undefined;
     }) as RunnerGateway["subscribe"],
@@ -389,7 +389,7 @@ describe("workspace store", () => {
 
     await useWorkspaceStore.getState().handleRunnerEvent({
       type: "run.started",
-      payload: { runId: "run_1", sessionId, taskId: null },
+      payload: { runId: "run_1", sessionId, prompt: "" },
     });
     await useWorkspaceStore.getState().handleRunnerEvent({
       type: "run.delta",
@@ -406,7 +406,7 @@ describe("workspace store", () => {
 
     await useWorkspaceStore.getState().handleRunnerEvent({
       type: "run.completed",
-      payload: { runId: "run_1", sessionId, summary: "done" },
+      payload: { runId: "run_1", sessionId },
     });
 
     expect(useWorkspaceStore.getState().streamingBySession[sessionId]).toBeUndefined();
@@ -602,5 +602,139 @@ describe("workspace store", () => {
     expect(state.folders).toHaveLength(2);
     expect(state.activeFolderId).toBe(created.id);
     expect(state.openFolderIds[created.id]).toBe(true);
+  });
+
+  it("handles run.skills_resolved by tracking resolved skill in store", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) throw new Error("missing session id");
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.skills_resolved",
+      payload: {
+        runId: "run_1",
+        sessionId,
+        skillName: "commit",
+        enabledToolNames: ["bash", "git"],
+      },
+    });
+
+    const skill = useWorkspaceStore.getState().resolvedSkillBySession[sessionId];
+    expect(skill).toEqual({ skillName: "commit", enabledToolNames: ["bash", "git"] });
+  });
+
+  it("handles run.tool_requested with requiresApproval optimistically", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) throw new Error("missing session id");
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.tool_requested",
+      payload: {
+        runId: "run_1",
+        sessionId,
+        toolCallId: "tc_1",
+        toolName: "bash",
+        input: { command: "ls" },
+        requiresApproval: true,
+      },
+    });
+
+    const pending = useWorkspaceStore.getState().pendingToolCallsBySession[sessionId];
+    expect(pending).toHaveLength(1);
+    expect(pending?.[0]?.toolName).toBe("bash");
+  });
+
+  it("handles run.tool_progress by tracking progress state", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) throw new Error("missing session id");
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.tool_progress",
+      payload: { runId: "run_1", sessionId, toolCallId: "tc_1", toolName: "bash" },
+    });
+
+    const progress = useWorkspaceStore.getState().toolProgressBySession[sessionId];
+    expect(progress?.["tc_1"]?.toolName).toBe("bash");
+  });
+
+  it("handles run.blocked by tracking blocked tool state", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) throw new Error("missing session id");
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.blocked",
+      payload: { runId: "run_1", sessionId, toolCallId: "tc_1", toolName: "bash", input: { command: "rm -rf /" } },
+    });
+
+    const blocked = useWorkspaceStore.getState().blockedToolBySession[sessionId];
+    expect(blocked?.toolCallId).toBe("tc_1");
+    expect(blocked?.toolName).toBe("bash");
+  });
+
+  it("stores usage data from run.completed event", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) throw new Error("missing session id");
+
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.started",
+      payload: { runId: "run_1", sessionId, prompt: "hi" },
+    });
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.completed",
+      payload: {
+        runId: "run_1",
+        sessionId,
+        usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10 },
+        stopReason: "end_turn",
+      },
+    });
+
+    const usage = useWorkspaceStore.getState().usageBySession[sessionId];
+    expect(usage?.inputTokens).toBe(100);
+    expect(usage?.outputTokens).toBe(50);
+  });
+
+  it("clears blocked state and pending tools on run.tool_decided", async () => {
+    const { gateway } = createGatewayMock();
+    setRunnerGatewayForTests(gateway);
+    await useWorkspaceStore.getState().initialize();
+    const sessionId = useWorkspaceStore.getState().sessions[0]?.id;
+    if (!sessionId) throw new Error("missing session id");
+
+    // Set up blocked state
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.blocked",
+      payload: { runId: "run_1", sessionId, toolCallId: "tc_1", toolName: "bash", input: {} },
+    });
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.tool_requested",
+      payload: { runId: "run_1", sessionId, toolCallId: "tc_1", toolName: "bash", input: {}, requiresApproval: true },
+    });
+
+    expect(useWorkspaceStore.getState().blockedToolBySession[sessionId]?.toolCallId).toBe("tc_1");
+    expect(useWorkspaceStore.getState().pendingToolCallsBySession[sessionId]).toHaveLength(1);
+
+    // Decide
+    await useWorkspaceStore.getState().handleRunnerEvent({
+      type: "run.tool_decided",
+      payload: { runId: "run_1", sessionId, toolCallId: "tc_1", toolName: "bash", decision: "approved" },
+    });
+
+    expect(useWorkspaceStore.getState().blockedToolBySession[sessionId]).toBeNull();
+    expect(useWorkspaceStore.getState().pendingToolCallsBySession[sessionId]).toHaveLength(0);
   });
 });

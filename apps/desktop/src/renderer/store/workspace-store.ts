@@ -57,6 +57,24 @@ interface StreamingState {
   content: string;
 }
 
+interface RunUsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}
+
+interface ResolvedSkillInfo {
+  skillName: string;
+  enabledToolNames: string[];
+}
+
+interface ToolProgressInfo {
+  toolCallId: string;
+  toolName: string;
+  lastUpdated: string;
+}
+
 interface WorkspaceStoreData {
   initialized: boolean;
   initializing: boolean;
@@ -70,6 +88,10 @@ interface WorkspaceStoreData {
   pendingToolCallsBySession: Record<string, ToolCall[]>;
   toolCallsBySession: Record<string, ToolCall[]>;
   activeToolsBySession: Record<string, Array<{ toolCallId: string; toolName: string }>>;
+  toolProgressBySession: Record<string, Record<string, ToolProgressInfo>>;
+  usageBySession: Record<string, RunUsageInfo>;
+  resolvedSkillBySession: Record<string, ResolvedSkillInfo>;
+  blockedToolBySession: Record<string, { toolCallId: string; toolName: string; input: Record<string, unknown> } | null>;
   firstUserMessageBySession: Record<string, string | null>;
   renamedSessionIds: Record<string, boolean>;
   streamingBySession: Record<string, StreamingState>;
@@ -169,6 +191,10 @@ function createInitialData(): WorkspaceStoreData {
     pendingToolCallsBySession: {},
     toolCallsBySession: {},
     activeToolsBySession: {},
+    toolProgressBySession: {},
+    usageBySession: {},
+    resolvedSkillBySession: {},
+    blockedToolBySession: {},
     firstUserMessageBySession: {},
     renamedSessionIds: {},
     streamingBySession: {},
@@ -1324,17 +1350,73 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       set((state) => {
         const nextErrors = { ...state.errorBySession };
         delete nextErrors[sessionId];
+        const nextBlocked = { ...state.blockedToolBySession };
+        delete nextBlocked[sessionId];
+        const nextSkills = { ...state.resolvedSkillBySession };
+        delete nextSkills[sessionId];
+        const nextUsage = { ...state.usageBySession };
+        delete nextUsage[sessionId];
         return {
           streamingBySession: {
             ...state.streamingBySession,
-            [sessionId]: {
-              runId,
-              content: "",
-            },
+            [sessionId]: { runId, content: "" },
           },
           errorBySession: nextErrors,
+          blockedToolBySession: nextBlocked,
+          resolvedSkillBySession: nextSkills,
+          usageBySession: nextUsage,
+          toolProgressBySession: {
+            ...state.toolProgressBySession,
+            [sessionId]: {},
+          },
         };
       });
+    }
+
+    if (event.type === "run.skills_resolved" && sessionId) {
+      const skillName = typeof event.payload.skillName === "string" ? event.payload.skillName : "";
+      const enabledToolNames = Array.isArray(event.payload.enabledToolNames)
+        ? (event.payload.enabledToolNames as string[])
+        : [];
+      if (skillName) {
+        set((state) => ({
+          resolvedSkillBySession: {
+            ...state.resolvedSkillBySession,
+            [sessionId]: { skillName, enabledToolNames },
+          },
+        }));
+      }
+      return;
+    }
+
+    if (event.type === "run.tool_requested" && targetSessionId) {
+      const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+      const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
+      const requiresApproval = event.payload.requiresApproval === true;
+      if (toolCallId && requiresApproval) {
+        set((state) => ({
+          pendingToolCallsBySession: {
+            ...state.pendingToolCallsBySession,
+            [targetSessionId]: [
+              ...(state.pendingToolCallsBySession[targetSessionId] ?? []),
+              {
+                id: toolCallId,
+                runId,
+                sessionId: targetSessionId,
+                taskId: null,
+                toolName,
+                approvalState: "pending" as const,
+                input: (event.payload.input as Record<string, unknown>) ?? {},
+                output: null,
+                error: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              },
+            ],
+          },
+        }));
+      }
+      return;
     }
 
     if (event.type === "run.tool_started" && targetSessionId) {
@@ -1356,15 +1438,71 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if ((event.type === "run.tool_finished" || event.type === "run.tool_failed") && targetSessionId) {
       const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
       if (toolCallId) {
+        set((state) => {
+          const nextProgress = { ...(state.toolProgressBySession[targetSessionId] ?? {}) };
+          delete nextProgress[toolCallId];
+          return {
+            activeToolsBySession: {
+              ...state.activeToolsBySession,
+              [targetSessionId]: (state.activeToolsBySession[targetSessionId] ?? []).filter(
+                (t) => t.toolCallId !== toolCallId,
+              ),
+            },
+            toolProgressBySession: {
+              ...state.toolProgressBySession,
+              [targetSessionId]: nextProgress,
+            },
+          };
+        });
+      }
+    }
+
+    if (event.type === "run.tool_progress" && targetSessionId) {
+      const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+      const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
+      if (toolCallId) {
         set((state) => ({
-          activeToolsBySession: {
-            ...state.activeToolsBySession,
-            [targetSessionId]: (state.activeToolsBySession[targetSessionId] ?? []).filter(
-              (t) => t.toolCallId !== toolCallId,
-            ),
+          toolProgressBySession: {
+            ...state.toolProgressBySession,
+            [targetSessionId]: {
+              ...(state.toolProgressBySession[targetSessionId] ?? {}),
+              [toolCallId]: { toolCallId, toolName, lastUpdated: new Date().toISOString() },
+            },
           },
         }));
       }
+      return;
+    }
+
+    if (event.type === "run.blocked" && sessionId) {
+      const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+      const toolName = typeof event.payload.toolName === "string" ? event.payload.toolName : "";
+      const input = (event.payload.input as Record<string, unknown>) ?? {};
+      set((state) => ({
+        blockedToolBySession: {
+          ...state.blockedToolBySession,
+          [sessionId]: { toolCallId, toolName, input },
+        },
+      }));
+    }
+
+    if (event.type === "run.tool_decided" && sessionId) {
+      set((state) => {
+        const blocked = state.blockedToolBySession[sessionId];
+        const toolCallId = typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : "";
+        const nextBlocked = blocked?.toolCallId === toolCallId
+          ? { ...state.blockedToolBySession, [sessionId]: null }
+          : state.blockedToolBySession;
+        return {
+          blockedToolBySession: nextBlocked,
+          pendingToolCallsBySession: {
+            ...state.pendingToolCallsBySession,
+            [sessionId]: (state.pendingToolCallsBySession[sessionId] ?? []).filter(
+              (tc) => tc.id !== toolCallId,
+            ),
+          },
+        };
+      });
     }
 
     if (
@@ -1382,8 +1520,30 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
               : "运行失败";
           nextErrors[sessionId] = errorMsg;
         }
+
+        // Store usage from run.completed
+        let nextUsage = state.usageBySession;
+        if (event.type === "run.completed" && event.payload.usage) {
+          const usage = event.payload.usage as Record<string, unknown>;
+          nextUsage = {
+            ...state.usageBySession,
+            [sessionId]: {
+              inputTokens: Number(usage.inputTokens ?? 0),
+              outputTokens: Number(usage.outputTokens ?? 0),
+              cacheReadTokens: Number(usage.cacheReadTokens ?? 0) || undefined,
+              cacheCreationTokens: Number(usage.cacheCreationTokens ?? 0) || undefined,
+            },
+          };
+        }
+
+        // Clear blocked state on terminal events
+        const nextBlocked = { ...state.blockedToolBySession };
+        delete nextBlocked[sessionId];
+
         return {
           errorBySession: nextErrors,
+          usageBySession: nextUsage,
+          blockedToolBySession: nextBlocked,
         };
       });
     }
