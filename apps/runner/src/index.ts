@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 
 import { AppOrchestrator, type LogEntry, type LogLevel, getLogger, setGlobalLoggerConfig } from "@omi/agent";
 import { createAppDatabase } from "@omi/store";
-import { createId } from "@omi/core";
+import { createId, type RunnerEventEnvelope } from "@omi/core";
 import { type RpcRequest, rpcRequestSchema } from "@omi/core";
 
 import { normalizeResult } from "./protocol";
@@ -15,7 +15,7 @@ import { assertWorkspaceDistFreshness } from "./dist-guard";
 // through the existing emitEvent IPC pipeline. Must run before any getLogger().
 // ---------------------------------------------------------------------------
 
-let runnerEmitEvent: ((event: { type: string; payload: Record<string, unknown> }) => void) | null = null;
+let runnerEmitEvent: ((event: RunnerEventEnvelope) => void) | null = null;
 let forwardDebugLogs = false;
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -108,10 +108,10 @@ async function handleRequest(request: RpcRequest): Promise<unknown> {
   return handleRunnerRequest(orchestrator, request);
 }
 
-function emitEvent(event: { type: string; payload: Record<string, unknown> }) {
+function emitEvent(event: RunnerEventEnvelope) {
   logger.debug("Runner emitting event", { eventType: event.type });
 
-  const deliveries = collectRunEventDeliveries(event.type, event.payload);
+  const deliveries = collectRunEventDeliveries(event.type, event.payload as Record<string, unknown>);
   for (const delivery of deliveries) {
     process.send?.({
       type: "run.event",
