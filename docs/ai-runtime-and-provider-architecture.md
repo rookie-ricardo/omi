@@ -1,5 +1,12 @@
 # AI 运行时与模型提供商架构全景
 
+> **DEPRECATED — 本文档描述的是 CodePilot 项目的架构，不适用于 OMI。**
+>
+> OMI 已完成从 Vercel AI SDK 到 `pi-agent-core` 的迁移（2026-04），
+> 当前架构请参考 [`architecture-diagnosis.md`](./architecture-diagnosis.md) 中的"新架构设计"章节。
+>
+> 本文档保留仅供历史参考。
+
 > 本文档涵盖：双运行时架构、Provider 系统三层设计、Claude Agent SDK 第三方模型集成、
 > In-Process MCP Bridge 跨界调用机制、Native Agent Loop 实现、统一 SSE 事件合约。
 >
