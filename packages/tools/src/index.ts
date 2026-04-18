@@ -19,7 +19,6 @@ export {
 } from "./registry";
 export * from "./frontmatter";
 export * from "./truncate";
-export * from "./subagent";
 export * from "./skill";
 export * from "./skill-tools";
 export {
@@ -27,8 +26,6 @@ export {
   getCurrentToolRuntimeContext,
   getMcpRegistryRuntime,
   setMcpRegistryRuntime,
-  getSubAgentClientRuntime,
-  setSubAgentClientRuntime,
   getTaskToolRuntime,
   setTaskToolRuntime,
   resetTaskToolRuntime,

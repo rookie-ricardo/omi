@@ -5,7 +5,6 @@ export * from "./session-manager";
 export * from "./resource-loader";
 export * from "./skills/index.js";
 export * from "./event-bus";
-export * from "./subagent-manager";
 export * from "./task-mailbox";
 
 // Telemetry and Audit Log

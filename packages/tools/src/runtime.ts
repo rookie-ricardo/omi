@@ -2,12 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createId, nowIso, type Task } from "@omi/core";
 import type { McpRegistry } from "@omi/provider";
 
-import type { SubAgentManagerClient } from "./subagent";
 import type { SearchSkillsFn } from "./skill-tools";
 
 export interface ToolRuntimeContext {
   mcpRegistry?: McpRegistry | null;
-  subAgentClient?: SubAgentManagerClient | null;
   taskRuntime?: TaskToolRuntime | null;
   searchSkills?: SearchSkillsFn | null;
 }
@@ -37,20 +35,6 @@ export function getMcpRegistryRuntime(): McpRegistry | null {
 
 export function setMcpRegistryRuntime(registry: McpRegistry | null): void {
   globalMcpRegistry = registry;
-}
-
-// ============================================================================
-// SubAgent Runtime
-// ============================================================================
-
-let globalSubAgentClient: SubAgentManagerClient | null = null;
-
-export function getSubAgentClientRuntime(): SubAgentManagerClient | null {
-  return getCurrentToolRuntimeContext()?.subAgentClient ?? globalSubAgentClient;
-}
-
-export function setSubAgentClientRuntime(client: SubAgentManagerClient | null): void {
-  globalSubAgentClient = client;
 }
 
 // ============================================================================
