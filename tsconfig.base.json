@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2023", "DOM"],
     "strict": true,
+    "jsx": "react-jsx",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
