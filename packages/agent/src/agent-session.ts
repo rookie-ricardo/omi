@@ -1,4 +1,5 @@
 import type {
+  OmiTool,
   ProviderConfig,
   ResolvedSkill,
   Run,
@@ -9,8 +10,18 @@ import type {
 } from "@omi/core";
 import type { AppStore } from "@omi/store";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { Dirent } from "node:fs";
 
-import { createId, nowIso } from "@omi/core";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  DEFAULT_SKILL_SETTING_SOURCES,
+  createId,
+  normalizeSkillSettingSources,
+  nowIso,
+  type SkillSettingSource,
+} from "@omi/core";
 import {
   buildSessionRuntimeMessages,
   convertRuntimeMessagesToLlm,
@@ -24,19 +35,25 @@ import {
   type ProviderAdapter,
   type ProviderToolLifecycleControl,
   type ProviderToolLifecycleEvent,
+  resolveProviderRuntime,
 } from "@omi/provider";
 import {
   createAllTools,
   createDiscoverSkillsTool,
-  createSkillTool,
   listBuiltInToolNames,
   SAFE_TOOL_NAMES,
+  parseFrontmatter,
   runWithToolRuntimeContext,
+  setSubagentExecutorRuntime,
   setSkillExecutorRuntime,
+  type SubagentToolInput,
+  type SubagentScope,
+  type SubagentTaskItem,
+  type SubagentChainItem,
   type ToolRuntimeContext,
 } from "@omi/tools";
 
-import { searchSkills } from "./skills/discovery";
+import { resolveSkillForPrompt, searchSkills } from "./skills/discovery";
 
 import type { ResourceLoader } from "./resource-loader";
 import type { SessionRuntime } from "./session-manager";
@@ -550,8 +567,19 @@ export class AgentSession {
         payload: { runId: run.id, sessionId: session.id, prompt },
       });
 
+      const providerRuntime = resolveProviderRuntime(providerConfig);
+      const rawClaudeSdkOptions = this.options.settingsManager?.getClaudeAgentSdkOptions();
+      const sharedSkillSettingSources = normalizeSkillSettingSources(
+        readRecordField(rawClaudeSdkOptions, "settingSources"),
+        DEFAULT_SKILL_SETTING_SOURCES,
+      );
+
       await this.options.resources.reload();
-      const resolvedSkill = await this.options.resources.resolveSkillForPrompt(prompt);
+      const resolvedSkill = providerRuntime === "pi-agent-core"
+        ? await resolveSkillForPrompt(this.workspaceRoot, prompt, {
+            settingSources: sharedSkillSettingSources,
+          })
+        : null;
       const systemPrompt = this.options.resources.buildSystemPrompt(resolvedSkill, this.workspaceRoot);
 
       if (resolvedSkill) {
@@ -572,39 +600,71 @@ export class AgentSession {
       const runtimeMessages = this.buildProviderHistoryMessages(session.id);
       const historyMessages = convertRuntimeMessagesToLlm(runtimeMessages);
 
-      setSkillExecutorRuntime(async (skillName: string, args?: string) => {
-        const matches = await searchSkills(this.workspaceRoot, skillName);
-        const match = matches.find((candidate) => candidate.name.toLowerCase() === skillName.toLowerCase()) ?? matches[0];
-        if (!match) {
-          return { content: `No skill found matching '${skillName}'. Use discover_skills to search.` };
-        }
-        const body = args ? `${match.body}\n\nArguments: ${args}` : match.body;
-        return { content: body, details: { skillName: match.name, score: match.score } };
-      });
-
-      const tools = Object.values(createAllTools(this.workspaceRoot));
-      const workspaceRoot = this.workspaceRoot;
-      tools.push(
-        createDiscoverSkillsTool({
-          workspaceRootFactory: () => workspaceRoot,
-          searchSkills: async (root, query) => {
-            const matches = await searchSkills(root, query);
-            return matches.map((match) => ({
-              name: match.name,
-              description: match.description,
-              compatibility: match.compatibility ?? null,
-              allowedTools: match.allowedTools,
-              body: match.body,
-              score: match.score,
-            }));
-          },
-        }),
+      setSkillExecutorRuntime(providerRuntime === "pi-agent-core"
+        ? async (skillName: string, args?: string) => {
+            const matches = await searchSkills(this.workspaceRoot, skillName, {
+              settingSources: sharedSkillSettingSources,
+            });
+            const match = matches.find((candidate) => candidate.name.toLowerCase() === skillName.toLowerCase()) ?? matches[0];
+            if (!match) {
+              return { content: `No skill found matching '${skillName}'. Use discover_skills to search.` };
+            }
+            const body = args ? `${match.body}\n\nArguments: ${args}` : match.body;
+            return { content: body, details: { skillName: match.name, score: match.score } };
+          }
+        : null);
+      setSubagentExecutorRuntime(
+        providerRuntime === "pi-agent-core"
+          ? (async (rawInput, signal, onUpdate) =>
+              this.executeSubagentTool({
+                rawInput,
+                signal,
+                onUpdate,
+                parentSessionId: session.id,
+                providerConfig,
+                settingSources: sharedSkillSettingSources,
+              }))
+          : null,
       );
-      tools.push(createSkillTool());
 
-      const enabledTools = [...new Set([...listBuiltInToolNames(), "discover_skills", "skill"])];
+      let tools: OmiTool[] = [];
+      let enabledTools: string[] = [];
+      if (providerRuntime === "pi-agent-core") {
+        const allTools = createAllTools(this.workspaceRoot);
+        const builtInToolNames = listBuiltInToolNames();
+        tools = builtInToolNames
+          .map((toolName) => allTools[toolName])
+          .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
+        const workspaceRoot = this.workspaceRoot;
+        tools.push(
+          createDiscoverSkillsTool({
+            workspaceRootFactory: () => workspaceRoot,
+            searchSkills: async (root, query) => {
+              const matches = await searchSkills(root, query, {
+                settingSources: sharedSkillSettingSources,
+              });
+              return matches.map((match) => ({
+                name: match.name,
+                description: match.description,
+                compatibility: match.compatibility ?? null,
+                allowedTools: match.allowedTools,
+                body: match.body,
+                score: match.score,
+              }));
+            },
+          }),
+        );
+        enabledTools = [...new Set([...builtInToolNames, "discover_skills"])];
+      }
+
       const effectivePrompt = buildEffectivePrompt(prompt, contextFiles, resolvedSkill);
       const toolExecutionMode = resolveToolExecutionMode(enabledTools);
+      const claudeOptions = providerRuntime === "claude-agent-sdk"
+        ? {
+            ...(rawClaudeSdkOptions ?? {}),
+            settingSources: sharedSkillSettingSources,
+          }
+        : undefined;
 
       const doRun = async () =>
         this.provider.run({
@@ -618,6 +678,7 @@ export class AgentSession {
           tools,
           enabledTools,
           toolExecutionMode,
+          claudeOptions,
           signal: abortController.signal,
           onTextDelta: (delta) => {
             this.assistantBuffers.set(run.id, (this.assistantBuffers.get(run.id) ?? "") + delta);
@@ -920,6 +981,221 @@ export class AgentSession {
     return { decision };
   }
 
+  private async executeSubagentTool(input: {
+    rawInput: Record<string, unknown>;
+    signal?: AbortSignal;
+    onUpdate?: (update: unknown) => void;
+    parentSessionId: string;
+    providerConfig: ProviderConfig;
+    settingSources: SkillSettingSource[];
+  }): Promise<{ content: string; details?: unknown }> {
+    const params = input.rawInput as SubagentToolInput;
+    const agentScope: SubagentScope = params.agentScope ?? "user";
+    const discovery = await discoverSubagents(this.workspaceRoot, agentScope);
+    const availableAgents = discovery.agents.map((agent) => `${agent.name} (${agent.source})`);
+
+    const hasSingle = Boolean(params.agent?.trim() && params.task?.trim());
+    const hasParallel = Array.isArray(params.tasks) && params.tasks.length > 0;
+    const hasChain = Array.isArray(params.chain) && params.chain.length > 0;
+    const modeCount = Number(hasSingle) + Number(hasParallel) + Number(hasChain);
+    if (modeCount !== 1) {
+      throw new Error(
+        `Invalid subagent arguments: provide exactly one mode. Available agents: ${availableAgents.join(", ") || "none"}.`,
+      );
+    }
+
+    const workspaceRoot = this.workspaceRoot;
+    const subagentTools = Object.values(createAllTools(workspaceRoot))
+      .filter((tool) => tool.name !== "subagent");
+    subagentTools.push(
+      createDiscoverSkillsTool({
+        workspaceRootFactory: () => workspaceRoot,
+        searchSkills: async (root, query) => {
+          const matches = await searchSkills(root, query, {
+            settingSources: input.settingSources,
+          });
+          return matches.map((match) => ({
+            name: match.name,
+            description: match.description,
+            compatibility: match.compatibility ?? null,
+            allowedTools: match.allowedTools,
+            body: match.body,
+            score: match.score,
+          }));
+        },
+      }),
+    );
+    const availableToolNames = [...new Set(subagentTools.map((tool) => tool.name))];
+
+    const runSingle = async (taskInput: SubagentTaskInput): Promise<SubagentExecutionResult> => {
+      const selected = discovery.agents.find((agent) => agent.name === taskInput.agent);
+      if (!selected) {
+        return {
+          agent: taskInput.agent,
+          source: "unknown",
+          task: taskInput.task,
+          output: "",
+          error: `Unknown subagent '${taskInput.agent}'. Available agents: ${availableAgents.join(", ") || "none"}.`,
+        };
+      }
+
+      const modelConfig = selected.model
+        ? { ...input.providerConfig, model: selected.model }
+        : input.providerConfig;
+      if (resolveProviderRuntime(modelConfig) !== "pi-agent-core") {
+        return {
+          agent: selected.name,
+          source: selected.source,
+          task: taskInput.task,
+          output: "",
+          error: "Subagent only supports pi-agent-core runtime.",
+        };
+      }
+      const enabledTools = selected.tools?.length
+        ? selected.tools.filter((toolName) => availableToolNames.includes(toolName) && toolName !== "subagent")
+        : availableToolNames;
+
+      if (enabledTools.length === 0) {
+        return {
+          agent: selected.name,
+          source: selected.source,
+          task: taskInput.task,
+          output: "",
+          error: `Subagent '${selected.name}' has no enabled tools after filtering.`,
+        };
+      }
+
+      let streamedText = "";
+      const lifecycleAllowList = new Set(enabledTools);
+      const result = await this.provider.run({
+        runId: createId("subrun"),
+        sessionId: `${input.parentSessionId}:subagent`,
+        workspaceRoot: taskInput.cwd ?? this.workspaceRoot,
+        prompt: taskInput.task,
+        historyMessages: [],
+        systemPrompt: selected.prompt,
+        providerConfig: modelConfig,
+        tools: subagentTools,
+        enabledTools,
+        toolExecutionMode: resolveToolExecutionMode(enabledTools),
+        signal: input.signal,
+        onTextDelta: (delta) => {
+          streamedText += delta;
+          input.onUpdate?.({
+            mode: taskInput.mode,
+            step: taskInput.step,
+            agent: selected.name,
+            delta,
+            output: streamedText,
+          });
+        },
+        onToolLifecycle: async (event) => {
+          if (event.stage === "requested") {
+            if (!lifecycleAllowList.has(event.toolName)) {
+              return {
+                allowExecution: false,
+                error: `Tool '${event.toolName}' is not enabled for subagent '${selected.name}'.`,
+              };
+            }
+            return { allowExecution: true, requiresApproval: false };
+          }
+          if (event.stage === "approval_requested") {
+            return { decision: "rejected", error: "Subagent tool approval is not supported." };
+          }
+          return {};
+        },
+      });
+
+      return {
+        agent: selected.name,
+        source: selected.source,
+        task: taskInput.task,
+        output: (result.assistantText || streamedText).trim(),
+        error: result.error ?? undefined,
+      };
+    };
+
+    if (hasChain) {
+      const steps = params.chain as SubagentChainItem[];
+      const results: SubagentExecutionResult[] = [];
+      let previous = "";
+      for (let index = 0; index < steps.length; index += 1) {
+        const step = steps[index];
+        const renderedTask = step.task.replace(/\{previous\}/g, previous);
+        const result = await runSingle({
+          agent: step.agent,
+          task: renderedTask,
+          cwd: normalizeSubagentCwd(step.cwd, this.workspaceRoot),
+          mode: "chain",
+          step: index + 1,
+        });
+        results.push(result);
+        if (result.error) {
+          return {
+            content: `Chain stopped at step ${index + 1} (${result.agent}): ${result.error}`,
+            details: { mode: "chain", agentScope, projectAgentsDir: discovery.projectAgentsDir, results },
+          };
+        }
+        previous = result.output;
+      }
+      return {
+        content: results.at(-1)?.output || "(no output)",
+        details: { mode: "chain", agentScope, projectAgentsDir: discovery.projectAgentsDir, results },
+      };
+    }
+
+    if (hasParallel) {
+      const tasks = params.tasks as SubagentTaskItem[];
+      if (tasks.length > MAX_SUBAGENT_PARALLEL_TASKS) {
+        throw new Error(
+          `Too many parallel tasks (${tasks.length}). Max is ${MAX_SUBAGENT_PARALLEL_TASKS}.`,
+        );
+      }
+      const results = await mapWithConcurrencyLimit(
+        tasks,
+        MAX_SUBAGENT_CONCURRENCY,
+        async (task, index) =>
+          runSingle({
+            agent: task.agent,
+            task: task.task,
+            cwd: normalizeSubagentCwd(task.cwd, this.workspaceRoot),
+            mode: "parallel",
+            step: index + 1,
+          }),
+      );
+      const successCount = results.filter((result) => !result.error).length;
+      const summaries = results.map((result) => {
+        if (result.error) {
+          return `[${result.agent}] failed: ${result.error}`;
+        }
+        const preview = result.output.length > 160 ? `${result.output.slice(0, 160)}...` : result.output;
+        return `[${result.agent}] completed: ${preview || "(no output)"}`;
+      });
+      return {
+        content: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+        details: { mode: "parallel", agentScope, projectAgentsDir: discovery.projectAgentsDir, results },
+      };
+    }
+
+    const single = await runSingle({
+      agent: params.agent!.trim(),
+      task: params.task!.trim(),
+      cwd: normalizeSubagentCwd(params.cwd, this.workspaceRoot),
+      mode: "single",
+      step: 1,
+    });
+    if (single.error) {
+      return {
+        content: `Agent failed: ${single.error}`,
+        details: { mode: "single", agentScope, projectAgentsDir: discovery.projectAgentsDir, results: [single] },
+      };
+    }
+    return {
+      content: single.output || "(no output)",
+      details: { mode: "single", agentScope, projectAgentsDir: discovery.projectAgentsDir, results: [single] },
+    };
+  }
+
   private persistToolCall(
     event: ProviderToolLifecycleEvent,
     run: Run,
@@ -1186,6 +1462,231 @@ export class AgentSession {
     }
     this.pendingApprovals.clear();
   }
+}
+
+const MAX_SUBAGENT_PARALLEL_TASKS = 8;
+const MAX_SUBAGENT_CONCURRENCY = 4;
+
+type SubagentMode = "single" | "parallel" | "chain";
+
+interface SubagentDescriptor {
+  name: string;
+  description: string;
+  prompt: string;
+  tools?: string[];
+  model?: string;
+  source: "user" | "project";
+  filePath: string;
+}
+
+interface SubagentDiscoveryResult {
+  agents: SubagentDescriptor[];
+  projectAgentsDir: string | null;
+}
+
+interface SubagentTaskInput {
+  agent: string;
+  task: string;
+  cwd?: string;
+  mode: SubagentMode;
+  step: number;
+}
+
+interface SubagentExecutionResult {
+  agent: string;
+  source: "user" | "project" | "unknown";
+  task: string;
+  output: string;
+  error?: string;
+}
+
+async function mapWithConcurrencyLimit<TInput, TOutput>(
+  items: TInput[],
+  concurrency: number,
+  fn: (item: TInput, index: number) => Promise<TOutput>,
+): Promise<TOutput[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<TOutput>(items.length);
+  let nextIndex = 0;
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= items.length) {
+        return;
+      }
+      results[currentIndex] = await fn(items[currentIndex], currentIndex);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function normalizeSubagentCwd(cwd: string | undefined, fallback: string): string {
+  const trimmed = cwd?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+async function discoverSubagents(
+  workspaceRoot: string,
+  scope: SubagentScope,
+): Promise<SubagentDiscoveryResult> {
+  const userDir = join(homedir(), ".pi", "agent", "agents");
+  const projectAgentsDir = await findNearestProjectAgentsDir(workspaceRoot);
+
+  const userAgents = scope === "project" ? [] : await loadSubagentsFromDir(userDir, "user");
+  const projectAgents = scope === "user" || !projectAgentsDir
+    ? []
+    : await loadSubagentsFromDir(projectAgentsDir, "project");
+
+  const byName = new Map<string, SubagentDescriptor>();
+  if (scope === "both") {
+    for (const agent of userAgents) {
+      byName.set(agent.name, agent);
+    }
+    for (const agent of projectAgents) {
+      byName.set(agent.name, agent);
+    }
+  } else if (scope === "user") {
+    for (const agent of userAgents) {
+      byName.set(agent.name, agent);
+    }
+  } else {
+    for (const agent of projectAgents) {
+      byName.set(agent.name, agent);
+    }
+  }
+
+  return {
+    agents: [...byName.values()],
+    projectAgentsDir,
+  };
+}
+
+async function findNearestProjectAgentsDir(cwd: string): Promise<string | null> {
+  let currentDir = cwd;
+  while (true) {
+    const candidate = join(currentDir, ".pi", "agents");
+    if (await isDirectory(candidate)) {
+      return candidate;
+    }
+    const parent = dirname(currentDir);
+    if (parent === currentDir) {
+      return null;
+    }
+    currentDir = parent;
+  }
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function loadSubagentsFromDir(
+  dir: string,
+  source: "user" | "project",
+): Promise<SubagentDescriptor[]> {
+  if (!(await isDirectory(dir))) {
+    return [];
+  }
+
+  const agents: SubagentDescriptor[] = [];
+  let entries: Dirent<string>[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true, encoding: "utf8" });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".md")) {
+      continue;
+    }
+    if (!entry.isFile() && !entry.isSymbolicLink()) {
+      continue;
+    }
+
+    const filePath = join(dir, entry.name);
+    let content = "";
+    try {
+      content = await readFile(filePath, "utf8");
+    } catch {
+      continue;
+    }
+
+    const { frontmatter, body } = parseAgentFrontmatter(content);
+    if (!frontmatter.name || !frontmatter.description) {
+      continue;
+    }
+
+    agents.push({
+      name: frontmatter.name,
+      description: frontmatter.description,
+      prompt: body.trim(),
+      tools: frontmatter.tools,
+      model: frontmatter.model,
+      source,
+      filePath,
+    });
+  }
+
+  return agents;
+}
+
+function parseAgentFrontmatter(content: string): {
+  frontmatter: {
+    name?: string;
+    description?: string;
+    tools?: string[];
+    model?: string;
+  };
+  body: string;
+} {
+  const parsed = parseFrontmatter<Record<string, unknown>>(content);
+  const fields = parsed.frontmatter;
+
+  return {
+    frontmatter: {
+      name: normalizeFrontmatterField(fields.name),
+      description: normalizeFrontmatterField(fields.description),
+      tools: normalizeToolList(fields.tools),
+      model: normalizeFrontmatterField(fields.model),
+    },
+    body: parsed.body.trim(),
+  };
+}
+
+function normalizeFrontmatterField(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/^['"]|['"]$/g, "");
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeToolList(value: unknown): string[] | undefined {
+  const source =
+    Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === "string")
+      : typeof value === "string"
+        ? value.split(",").map((entry) => entry.trim())
+        : [];
+  const items = source
+    .map((entry) => entry.replace(/^['"]|['"]$/g, "").trim())
+    .filter((entry) => entry.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+function readRecordField(record: unknown, key: string): unknown {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return undefined;
+  }
+  return (record as Record<string, unknown>)[key];
 }
 
 function resolveRunPrompt(

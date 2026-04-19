@@ -19,8 +19,9 @@ export {
 } from "./registry";
 export * from "./frontmatter";
 export * from "./truncate";
-export * from "./skill";
-export * from "./skill-tools";
+export * from "./pi-skill";
+export * from "./pi-subagent";
+export * from "./pi-skill-tools";
 export {
   runWithToolRuntimeContext,
   getCurrentToolRuntimeContext,
@@ -30,6 +31,8 @@ export {
   createInMemoryTaskToolRuntime,
   getSkillExecutorRuntime,
   setSkillExecutorRuntime,
+  getSubagentExecutorRuntime,
+  setSubagentExecutorRuntime,
   getCronRuntime,
   setCronRuntime,
   getRemoteTriggerRuntime,
@@ -41,6 +44,7 @@ export {
   type TaskToolListInput,
   type ToolRuntimeContext,
   type SkillExecutor,
+  type SubagentExecutor,
   type CronJob,
   type CronRuntime,
   type RemoteTriggerAction,

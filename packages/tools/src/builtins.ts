@@ -13,7 +13,8 @@ import {
   setGlobalRegistry,
   type ToolRegistry,
 } from "./registry";
-import { createSkillTool, skillSchema } from "./skill";
+import { createSkillTool, skillSchema } from "./pi-skill";
+import { createSubagentTool, subagentSchema } from "./pi-subagent";
 
 export type BuiltInToolFactory = (cwd: string) => OmiTool<any>;
 
@@ -69,6 +70,21 @@ const ENTRIES: BuiltInEntry[] = [
       },
     ),
     factory: () => createSkillTool(),
+  },
+  {
+    definition: defineTool(
+      "subagent",
+      "Delegate tasks to specialized subagents with isolated context.",
+      subagentSchema,
+      {
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        riskLevel: "low",
+        idempotencyPolicy: "safe",
+        errorCodes: [TOOL_ERROR_CODES.INVALID_INPUT],
+      },
+    ),
+    factory: () => createSubagentTool(),
   },
 ];
 
