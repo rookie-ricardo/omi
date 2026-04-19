@@ -6,8 +6,9 @@ import type { ThinkingLevel } from "@omi/core";
 import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@mariozechner/pi-ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
+import { DEFAULT_PROVIDER_THINKING_LEVEL } from "./provider-defaults";
 
-const DEFAULT_THINKING_LEVEL: ThinkingLevel = "medium";
+const DEFAULT_THINKING_LEVEL: ThinkingLevel = DEFAULT_PROVIDER_THINKING_LEVEL;
 
 function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return ["low", "medium", "high"].includes(level);
