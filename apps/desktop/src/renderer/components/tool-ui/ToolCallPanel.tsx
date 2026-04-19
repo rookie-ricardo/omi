@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Wrench, Loader2 } from "lucide-react";
 
 import { cn } from "../../lib/cn";
+import MarkdownRenderer from "../MarkdownRenderer";
 import CodeDiff from "./CodeDiff";
 import Receipt from "./Receipt";
 import Terminal from "./Terminal";
@@ -53,6 +54,10 @@ function renderBody(viewModel: NormalizedToolCallViewModel) {
     );
   }
 
+  const outputText = (viewModel.errorText ?? viewModel.outputPreview) || "无输出";
+  const renderOutputAsMarkdown =
+    !viewModel.errorText && looksLikeMarkdown(outputText);
+
   return (
     <div
       data-tool-ui-id={`generic-${viewModel.id}`}
@@ -68,16 +73,35 @@ function renderBody(viewModel: NormalizedToolCallViewModel) {
       <div className="px-3 py-2 border-t border-gray-200 dark:border-white/10 text-xs text-gray-500 dark:text-gray-400">
         输出
       </div>
-      <pre className="m-0 p-3 text-[12px] leading-5 text-gray-700 dark:text-gray-200 max-h-[220px] overflow-auto custom-scrollbar whitespace-pre-wrap select-text">
-        {(viewModel.errorText ?? viewModel.outputPreview) || "无输出"}
-      </pre>
+      {renderOutputAsMarkdown ? (
+        <div className="p-3 text-[12px] leading-5 text-gray-700 dark:text-gray-200 max-h-[220px] overflow-auto custom-scrollbar">
+          <MarkdownRenderer
+            content={outputText}
+            className="prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+          />
+        </div>
+      ) : (
+        <pre className="m-0 p-3 text-[12px] leading-5 text-gray-700 dark:text-gray-200 max-h-[220px] overflow-auto custom-scrollbar whitespace-pre-wrap select-text">
+          {outputText}
+        </pre>
+      )}
     </div>
   );
 }
 
 export default function ToolCallPanel({ viewModel }: ToolCallPanelProps) {
-  const [expanded, setExpanded] = useState(viewModel.status !== "completed");
+  const [expanded, setExpanded] = useState(
+    viewModel.status === "running" || viewModel.status === "requires_action",
+  );
   const statusText = viewModel.metadata.find((item) => item.label === "状态")?.value ?? "";
+
+  useEffect(() => {
+    if (viewModel.status === "running" || viewModel.status === "requires_action") {
+      setExpanded(true);
+      return;
+    }
+    setExpanded(false);
+  }, [viewModel.id, viewModel.status]);
 
   return (
     <div className="space-y-2">
@@ -127,5 +151,21 @@ export default function ToolCallPanel({ viewModel }: ToolCallPanelProps) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+function looksLikeMarkdown(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
+
+  return (
+    /```/.test(text) ||
+    /^#{1,6}\s+/m.test(text) ||
+    /^\s*[-*+]\s+/m.test(text) ||
+    /^\s*\d+\.\s+/m.test(text) ||
+    /\[[^\]]+\]\([^)]+\)/.test(text) ||
+    /^\|.+\|\s*$/m.test(text)
   );
 }

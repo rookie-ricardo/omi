@@ -156,6 +156,9 @@ importers:
       '@omi/memory':
         specifier: workspace:*
         version: link:../../packages/memory
+      '@omi/provider':
+        specifier: workspace:*
+        version: link:../../packages/provider
       '@omi/store':
         specifier: workspace:*
         version: link:../../packages/store
