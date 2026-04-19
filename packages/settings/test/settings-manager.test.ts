@@ -1,23 +1,64 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { rmSync } from "node:fs";
+import { beforeEach, describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import {
-  SettingsManager,
-  getAgentDir,
-  getBinDir,
-  type Settings,
-  type CompactionSettings,
-  type RetrySettings,
-  type ImageSettings,
-} from "../src/index";
+import { DEFAULT_SETTINGS, SettingsManager, getAgentDir, getBinDir, type Settings } from "../src/index";
 
 describe("SettingsManager", () => {
   let testAgentDir: string;
 
   beforeEach(() => {
     testAgentDir = join(tmpdir(), `omi-test-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+    rmSync(testAgentDir, { recursive: true, force: true });
+  });
+
+  describe("file storage", () => {
+    it("creates the global settings file with defaults on first startup", () => {
+      const manager = SettingsManager.create(testAgentDir);
+      const settingsPath = join(testAgentDir, "settings.json");
+
+      expect(existsSync(settingsPath)).toBe(true);
+
+      const diskSettings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+      expect(diskSettings).toEqual(DEFAULT_SETTINGS);
+      expect(manager.getGlobalSettings()).toEqual(DEFAULT_SETTINGS);
+    });
+
+    it("reads an existing global settings file without overwriting it", () => {
+      mkdirSync(testAgentDir, { recursive: true });
+      const settingsPath = join(testAgentDir, "settings.json");
+      writeFileSync(
+        settingsPath,
+        `${JSON.stringify({ theme: "dark" }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const manager = SettingsManager.create(testAgentDir);
+
+      expect(manager.getTheme()).toBe("dark");
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual({
+        theme: "dark",
+      });
+    });
+
+    it("persists updates into the global settings file", async () => {
+      const manager = SettingsManager.create(testAgentDir);
+      const settingsPath = join(testAgentDir, "settings.json");
+
+      manager.setTheme("dark");
+      manager.setRetryEnabled(false);
+      await manager.flush();
+
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toMatchObject({
+        ...DEFAULT_SETTINGS,
+        theme: "dark",
+        retry: {
+          ...DEFAULT_SETTINGS.retry,
+          enabled: false,
+        },
+      });
+    });
   });
 
   describe("deepMergeSettings", () => {
@@ -35,129 +76,61 @@ describe("SettingsManager", () => {
         },
       };
 
-      const result = {
+      const manager = SettingsManager.inMemory(base);
+      manager.applyOverrides(overrides);
+
+      expect(manager["settings"]).toMatchObject({
+        ...DEFAULT_SETTINGS,
         compaction: {
           enabled: false,
           reserveTokens: 10000,
+          keepRecentTokens: 20000,
         },
-      };
-
-      // Since deepMergeSettings is private, we test through SettingsManager
-      const manager = SettingsManager.inMemory(base);
-      manager.applyOverrides(overrides);
-
-      expect(manager["settings"]).toMatchObject(result);
+      });
     });
 
     it("preserves primitives when override is undefined", () => {
-      const base: Settings = {
-        theme: "dark",
-      };
-
-      const overrides: Settings = {};
-
-      const manager = SettingsManager.inMemory(base);
-      manager.applyOverrides(overrides);
+      const manager = SettingsManager.inMemory({ theme: "dark" });
+      manager.applyOverrides({});
 
       expect(manager["settings"].theme).toBe("dark");
     });
 
     it("overrides primitives with new values", () => {
-      const base: Settings = {
-        theme: "dark",
-      };
-
-      const overrides: Settings = {
-        theme: "light",
-      };
-
-      const manager = SettingsManager.inMemory(base);
-      manager.applyOverrides(overrides);
+      const manager = SettingsManager.inMemory({ theme: "dark" });
+      manager.applyOverrides({ theme: "light" });
 
       expect(manager["settings"].theme).toBe("light");
     });
 
     it("replaces arrays entirely", () => {
-      const base: Settings = {
+      const manager = SettingsManager.inMemory({
         packages: [{ source: "package-a" }],
-      };
+      });
 
-      const overrides: Settings = {
+      manager.applyOverrides({
         packages: [{ source: "package-b" }],
-      };
-
-      const manager = SettingsManager.inMemory(base);
-      manager.applyOverrides(overrides);
+      });
 
       expect(manager["settings"].packages).toEqual([{ source: "package-b" }]);
     });
   });
 
   describe("migrateSettings", () => {
-    it("migrates queueMode to steeringMode", () => {
+    it("keeps payload unchanged", () => {
       const oldSettings: Record<string, unknown> = {
         queueMode: "all",
-      };
-
-      // migrateSettings is a private static method, call it directly
-      const result = (SettingsManager as any).migrateSettings(oldSettings);
-
-      expect(result.steeringMode).toBe("all");
-      expect(result.queueMode).toBeUndefined();
-    });
-
-    it("migrates websockets boolean to transport enum", () => {
-      const oldSettings: Record<string, unknown> = {
-        websockets: true,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4.1-mini",
       };
 
       const result = (SettingsManager as any).migrateSettings(oldSettings);
 
-      expect(result.transport).toBe("websocket");
-      expect(result.websockets).toBeUndefined();
-    });
-
-    it("does not migrate when transport already set", () => {
-      const oldSettings: Record<string, unknown> = {
-        transport: "sse",
-        websockets: true,
-      };
-
-      const result = (SettingsManager as any).migrateSettings(oldSettings);
-
-      // transport stays as-is; websockets is NOT migrated (not deleted) since transport is already set
-      expect(result.transport).toBe("sse");
-      expect(result.websockets).toBe(true);
+      expect(result).toEqual(oldSettings);
     });
   });
 
   describe("get/set methods", () => {
-    it("gets and sets default provider", () => {
-      const manager = SettingsManager.inMemory();
-
-      expect(manager.getDefaultProvider()).toBeUndefined();
-
-      manager.setDefaultProvider("openai");
-      expect(manager.getDefaultProvider()).toBe("openai");
-    });
-
-    it("gets and sets default model", () => {
-      const manager = SettingsManager.inMemory();
-
-      expect(manager.getDefaultModel()).toBeUndefined();
-
-      manager.setDefaultModel("gpt-4");
-      expect(manager.getDefaultModel()).toBe("gpt-4");
-    });
-
-    it("sets both provider and model together", () => {
-      const manager = SettingsManager.inMemory();
-
-      manager.setDefaultModelAndProvider("anthropic", "claude-3");
-      expect(manager.getDefaultProvider()).toBe("anthropic");
-      expect(manager.getDefaultModel()).toBe("claude-3");
-    });
-
     it("gets and sets theme", () => {
       const manager = SettingsManager.inMemory();
 
@@ -224,14 +197,6 @@ describe("SettingsManager", () => {
       expect(manager.getBlockImages()).toBe(true);
     });
 
-    it("gets and sets enabled models", () => {
-      const manager = SettingsManager.inMemory();
-
-      expect(manager.getEnabledModels()).toBeUndefined();
-
-      manager.setEnabledModels(["claude-*", "gpt-*"]);
-      expect(manager.getEnabledModels()).toEqual(["claude-*", "gpt-*"]);
-    });
   });
 
   describe("resolveConfigValue", () => {

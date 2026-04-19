@@ -1,10 +1,7 @@
-import type { Transport } from "@mariozechner/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
-
-const CONFIG_DIR_NAME = ".omi";
-const APP_NAME = "omi";
 
 export interface CompactionSettings {
   enabled?: boolean; // default: true
@@ -40,8 +37,6 @@ export interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 
-export type TransportSetting = Transport;
-
 /**
  * Package source for npm/git packages.
  * - String form: load all resources from the package
@@ -59,10 +54,6 @@ export type PackageSource =
 
 export interface Settings {
   lastChangelogVersion?: string;
-  defaultProvider?: string;
-  defaultModel?: string;
-  defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  transport?: TransportSetting; // default: "sse"
   steeringMode?: "all" | "one-at-a-time";
   followUpMode?: "all" | "one-at-a-time";
   theme?: string;
@@ -82,7 +73,6 @@ export interface Settings {
   enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
   terminal?: TerminalSettings;
   images?: ImageSettings;
-  enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
   doubleEscapeAction?: "fork" | "none"; // Action for double-escape with empty editor (default: "fork")
   thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
   editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
@@ -96,7 +86,46 @@ export interface Settings {
   claudeAgentSdk?: Record<string, unknown>;
 }
 
-/** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
+export const DEFAULT_SETTINGS: Settings = {
+  steeringMode: "one-at-a-time",
+  followUpMode: "one-at-a-time",
+  compaction: {
+    enabled: true,
+    reserveTokens: 16384,
+    keepRecentTokens: 20000,
+  },
+  retry: {
+    enabled: true,
+    maxRetries: 3,
+    baseDelayMs: 2000,
+    maxDelayMs: 60000,
+  },
+  hideThinkingBlock: false,
+  quietStartup: false,
+  collapseChangelog: false,
+  enableSkillCommands: true,
+  terminal: {
+    showImages: true,
+    clearOnShrink: false,
+  },
+  images: {
+    autoResize: true,
+    blockImages: false,
+  },
+  doubleEscapeAction: "fork",
+  editorPaddingX: 0,
+  autocompleteMaxVisible: 5,
+  showHardwareCursor: false,
+  markdown: {
+    codeBlockIndent: "  ",
+  },
+};
+
+function serializeSettings(settings: Settings): string {
+  return `${JSON.stringify(settings, null, 2)}\n`;
+}
+
+/** Deep merge settings: overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
   const result: Settings = { ...base };
 
@@ -108,7 +137,6 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
       continue;
     }
 
-    // For nested objects, merge recursively
     if (
       typeof overrideValue === "object" &&
       overrideValue !== null &&
@@ -119,7 +147,6 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
     ) {
       (result as Record<string, unknown>)[key] = { ...baseValue, ...overrideValue };
     } else {
-      // For primitives and arrays, override value wins
       (result as Record<string, unknown>)[key] = overrideValue;
     }
   }
@@ -127,7 +154,7 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
   return result;
 }
 
-export type SettingsScope = "global" | "project";
+export type SettingsScope = "global";
 
 export interface SettingsStorage {
   withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
@@ -140,11 +167,31 @@ export interface SettingsError {
 
 export class FileSettingsStorage implements SettingsStorage {
   private globalSettingsPath: string;
-  private projectSettingsPath: string;
 
-  constructor(cwd: string = process.cwd(), agentDir: string = getAgentDir()) {
+  constructor(agentDir: string = getAgentDir()) {
     this.globalSettingsPath = join(agentDir, "settings.json");
-    this.projectSettingsPath = join(cwd, CONFIG_DIR_NAME, "settings.json");
+  }
+
+  initialize(defaultSettings: Settings = DEFAULT_SETTINGS): void {
+    if (existsSync(this.globalSettingsPath)) {
+      return;
+    }
+
+    mkdirSync(dirname(this.globalSettingsPath), { recursive: true });
+    try {
+      writeFileSync(this.globalSettingsPath, serializeSettings(defaultSettings), {
+        encoding: "utf-8",
+        flag: "wx",
+      });
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : undefined;
+      if (code !== "EEXIST") {
+        throw error;
+      }
+    }
   }
 
   private acquireLockSyncWithRetry(path: string): () => void {
@@ -174,13 +221,12 @@ export class FileSettingsStorage implements SettingsStorage {
     throw (lastError as Error) ?? new Error("Failed to acquire settings lock");
   }
 
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
+  withLock(_scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+    const path = this.globalSettingsPath;
     const dir = dirname(path);
 
     let release: (() => void) | undefined;
     try {
-      // Only create directory and lock if file exists or we need to write
       const fileExists = existsSync(path);
       if (fileExists) {
         release = this.acquireLockSyncWithRetry(path);
@@ -188,11 +234,24 @@ export class FileSettingsStorage implements SettingsStorage {
       const current = fileExists ? readFileSync(path, "utf-8") : undefined;
       const next = fn(current);
       if (next !== undefined) {
-        // Only create directory when we actually need to write
         if (!existsSync(dir)) {
           mkdirSync(dir, { recursive: true });
         }
         if (!release) {
+          try {
+            writeFileSync(path, serializeSettings(DEFAULT_SETTINGS), {
+              encoding: "utf-8",
+              flag: "wx",
+            });
+          } catch (error) {
+            const code =
+              typeof error === "object" && error !== null && "code" in error
+                ? String((error as { code?: unknown }).code)
+                : undefined;
+            if (code !== "EEXIST") {
+              throw error;
+            }
+          }
           release = this.acquireLockSyncWithRetry(path);
         }
         writeFileSync(path, next, "utf-8");
@@ -207,17 +266,11 @@ export class FileSettingsStorage implements SettingsStorage {
 
 export class InMemorySettingsStorage implements SettingsStorage {
   private global: string | undefined;
-  private project: string | undefined;
 
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const current = scope === "global" ? this.global : this.project;
-    const next = fn(current);
+  withLock(_scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
+    const next = fn(this.global);
     if (next !== undefined) {
-      if (scope === "global") {
-        this.global = next;
-      } else {
-        this.project = next;
-      }
+      this.global = next;
     }
   }
 }
@@ -225,66 +278,48 @@ export class InMemorySettingsStorage implements SettingsStorage {
 export class SettingsManager {
   private storage: SettingsStorage;
   private globalSettings: Settings;
-  private projectSettings: Settings;
   private settings: Settings;
-  private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
-  private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
-  private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
-  private modifiedProjectNestedFields = new Map<keyof Settings, Set<string>>(); // Track project nested field modifications
-  private globalSettingsLoadError: Error | null = null; // Track if global settings file had parse errors
-  private projectSettingsLoadError: Error | null = null; // Track if project settings file had parse errors
+  private modifiedFields = new Set<keyof Settings>();
+  private modifiedNestedFields = new Map<keyof Settings, Set<string>>();
+  private globalSettingsLoadError: Error | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
   private errors: SettingsError[];
 
   private constructor(
     storage: SettingsStorage,
     initialGlobal: Settings,
-    initialProject: Settings,
     globalLoadError: Error | null = null,
-    projectLoadError: Error | null = null,
     initialErrors: SettingsError[] = [],
   ) {
     this.storage = storage;
-    this.globalSettings = initialGlobal;
-    this.projectSettings = initialProject;
+    this.globalSettings = deepMergeSettings(DEFAULT_SETTINGS, initialGlobal);
     this.globalSettingsLoadError = globalLoadError;
-    this.projectSettingsLoadError = projectLoadError;
     this.errors = [...initialErrors];
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.settings = structuredClone(this.globalSettings);
   }
 
   /** Create a SettingsManager that loads from files */
-  static create(cwd: string = process.cwd(), agentDir: string = getAgentDir()): SettingsManager {
-    const storage = new FileSettingsStorage(cwd, agentDir);
+  static create(agentDir: string = getAgentDir()): SettingsManager {
+    const storage = new FileSettingsStorage(agentDir);
+    storage.initialize(DEFAULT_SETTINGS);
     return SettingsManager.fromStorage(storage);
   }
 
   /** Create a SettingsManager from an arbitrary storage backend */
   static fromStorage(storage: SettingsStorage): SettingsManager {
     const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
-    const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project");
     const initialErrors: SettingsError[] = [];
     if (globalLoad.error) {
       initialErrors.push({ scope: "global", error: globalLoad.error });
     }
-    if (projectLoad.error) {
-      initialErrors.push({ scope: "project", error: projectLoad.error });
-    }
 
-    return new SettingsManager(
-      storage,
-      globalLoad.settings,
-      projectLoad.settings,
-      globalLoad.error,
-      projectLoad.error,
-      initialErrors,
-    );
+    return new SettingsManager(storage, globalLoad.settings, globalLoad.error, initialErrors);
   }
 
   /** Create an in-memory SettingsManager (no file I/O) */
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
     const storage = new InMemorySettingsStorage();
-    return new SettingsManager(storage, settings, {});
+    return new SettingsManager(storage, settings, null);
   }
 
   private static loadFromStorage(storage: SettingsStorage, scope: SettingsScope): Settings {
@@ -312,41 +347,8 @@ export class SettingsManager {
     }
   }
 
-  /** Migrate old settings format to new format */
+  /** Settings migration hook (currently no legacy field transforms). */
   private static migrateSettings(settings: Record<string, unknown>): Settings {
-    // Migrate queueMode -> steeringMode
-    if ("queueMode" in settings && !("steeringMode" in settings)) {
-      settings.steeringMode = settings.queueMode;
-      delete settings.queueMode;
-    }
-
-    // Migrate legacy websockets boolean -> transport enum
-    if (!("transport" in settings) && typeof settings.websockets === "boolean") {
-      settings.transport = settings.websockets ? "websocket" : "sse";
-      delete settings.websockets;
-    }
-
-    // Migrate old skills object format to new array format
-    if (
-      "skills" in settings &&
-      typeof settings.skills === "object" &&
-      settings.skills !== null &&
-      !Array.isArray(settings.skills)
-    ) {
-      const skillsSettings = settings.skills as {
-        enableSkillCommands?: boolean;
-        customDirectories?: unknown;
-      };
-      if (skillsSettings.enableSkillCommands !== undefined && settings.enableSkillCommands === undefined) {
-        settings.enableSkillCommands = skillsSettings.enableSkillCommands;
-      }
-      if (Array.isArray(skillsSettings.customDirectories) && skillsSettings.customDirectories.length > 0) {
-        settings.skills = skillsSettings.customDirectories;
-      } else {
-        delete settings.skills;
-      }
-    }
-
     return settings as Settings;
   }
 
@@ -354,14 +356,10 @@ export class SettingsManager {
     return structuredClone(this.globalSettings);
   }
 
-  getProjectSettings(): Settings {
-    return structuredClone(this.projectSettings);
-  }
-
   reload(): void {
     const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
     if (!globalLoad.error) {
-      this.globalSettings = globalLoad.settings;
+      this.globalSettings = deepMergeSettings(DEFAULT_SETTINGS, globalLoad.settings);
       this.globalSettingsLoadError = null;
     } else {
       this.globalSettingsLoadError = globalLoad.error;
@@ -370,19 +368,7 @@ export class SettingsManager {
 
     this.modifiedFields.clear();
     this.modifiedNestedFields.clear();
-    this.modifiedProjectFields.clear();
-    this.modifiedProjectNestedFields.clear();
-
-    const projectLoad = SettingsManager.tryLoadFromStorage(this.storage, "project");
-    if (!projectLoad.error) {
-      this.projectSettings = projectLoad.settings;
-      this.projectSettingsLoadError = null;
-    } else {
-      this.projectSettingsLoadError = projectLoad.error;
-      this.recordError("project", projectLoad.error);
-    }
-
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.settings = structuredClone(this.globalSettings);
   }
 
   /** Apply additional overrides on top of current settings */
@@ -390,7 +376,6 @@ export class SettingsManager {
     this.settings = deepMergeSettings(this.settings, overrides);
   }
 
-  /** Mark a global field as modified during this session */
   private markModified(field: keyof Settings, nestedKey?: string): void {
     this.modifiedFields.add(field);
     if (nestedKey) {
@@ -401,41 +386,24 @@ export class SettingsManager {
     }
   }
 
-  /** Mark a project field as modified during this session */
-  private markProjectModified(field: keyof Settings, nestedKey?: string): void {
-    this.modifiedProjectFields.add(field);
-    if (nestedKey) {
-      if (!this.modifiedProjectNestedFields.has(field)) {
-        this.modifiedProjectNestedFields.set(field, new Set());
-      }
-      this.modifiedProjectNestedFields.get(field)!.add(nestedKey);
-    }
-  }
-
   private recordError(scope: SettingsScope, error: unknown): void {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
     this.errors.push({ scope, error: normalizedError });
   }
 
-  private clearModifiedScope(scope: SettingsScope): void {
-    if (scope === "global") {
-      this.modifiedFields.clear();
-      this.modifiedNestedFields.clear();
-      return;
-    }
-
-    this.modifiedProjectFields.clear();
-    this.modifiedProjectNestedFields.clear();
+  private clearModifiedFields(): void {
+    this.modifiedFields.clear();
+    this.modifiedNestedFields.clear();
   }
 
-  private enqueueWrite(scope: SettingsScope, task: () => void): void {
+  private enqueueWrite(task: () => void): void {
     this.writeQueue = this.writeQueue
       .then(() => {
         task();
-        this.clearModifiedScope(scope);
+        this.clearModifiedFields();
       })
       .catch((error) => {
-        this.recordError(scope, error);
+        this.recordError("global", error);
       });
   }
 
@@ -447,17 +415,20 @@ export class SettingsManager {
     return snapshot;
   }
 
-  private persistScopedSettings(
-    scope: SettingsScope,
+  private persistSettings(
     snapshotSettings: Settings,
     modifiedFields: Set<keyof Settings>,
     modifiedNestedFields: Map<keyof Settings, Set<string>>,
   ): void {
-    this.storage.withLock(scope, (current) => {
+    this.storage.withLock("global", (current) => {
       const currentFileSettings = current
-        ? SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>)
-        : {};
+        ? deepMergeSettings(
+            DEFAULT_SETTINGS,
+            SettingsManager.migrateSettings(JSON.parse(current) as Record<string, unknown>),
+          )
+        : structuredClone(DEFAULT_SETTINGS);
       const mergedSettings: Settings = { ...currentFileSettings };
+
       for (const field of modifiedFields) {
         const value = snapshotSettings[field];
         if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
@@ -474,12 +445,12 @@ export class SettingsManager {
         }
       }
 
-      return JSON.stringify(mergedSettings, null, 2);
+      return serializeSettings(mergedSettings);
     });
   }
 
   private save(): void {
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.settings = structuredClone(this.globalSettings);
 
     if (this.globalSettingsLoadError) {
       return;
@@ -489,24 +460,8 @@ export class SettingsManager {
     const modifiedFields = new Set(this.modifiedFields);
     const modifiedNestedFields = this.cloneModifiedNestedFields(this.modifiedNestedFields);
 
-    this.enqueueWrite("global", () => {
-      this.persistScopedSettings("global", snapshotGlobalSettings, modifiedFields, modifiedNestedFields);
-    });
-  }
-
-  private saveProjectSettings(settings: Settings): void {
-    this.projectSettings = structuredClone(settings);
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
-
-    if (this.projectSettingsLoadError) {
-      return;
-    }
-
-    const snapshotProjectSettings = structuredClone(this.projectSettings);
-    const modifiedFields = new Set(this.modifiedProjectFields);
-    const modifiedNestedFields = this.cloneModifiedNestedFields(this.modifiedProjectNestedFields);
-    this.enqueueWrite("project", () => {
-      this.persistScopedSettings("project", snapshotProjectSettings, modifiedFields, modifiedNestedFields);
+    this.enqueueWrite(() => {
+      this.persistSettings(snapshotGlobalSettings, modifiedFields, modifiedNestedFields);
     });
   }
 
@@ -530,36 +485,8 @@ export class SettingsManager {
     this.save();
   }
 
-  getDefaultProvider(): string | undefined {
-    return this.settings.defaultProvider;
-  }
-
-  getDefaultModel(): string | undefined {
-    return this.settings.defaultModel;
-  }
-
-  setDefaultProvider(provider: string): void {
-    this.globalSettings.defaultProvider = provider;
-    this.markModified("defaultProvider");
-    this.save();
-  }
-
-  setDefaultModel(modelId: string): void {
-    this.globalSettings.defaultModel = modelId;
-    this.markModified("defaultModel");
-    this.save();
-  }
-
-  setDefaultModelAndProvider(provider: string, modelId: string): void {
-    this.globalSettings.defaultProvider = provider;
-    this.globalSettings.defaultModel = modelId;
-    this.markModified("defaultProvider");
-    this.markModified("defaultModel");
-    this.save();
-  }
-
   getSteeringMode(): "all" | "one-at-a-time" {
-    return this.settings.steeringMode || "one-at-a-time";
+    return this.settings.steeringMode ?? DEFAULT_SETTINGS.steeringMode!;
   }
 
   setSteeringMode(mode: "all" | "one-at-a-time"): void {
@@ -569,7 +496,7 @@ export class SettingsManager {
   }
 
   getFollowUpMode(): "all" | "one-at-a-time" {
-    return this.settings.followUpMode || "one-at-a-time";
+    return this.settings.followUpMode ?? DEFAULT_SETTINGS.followUpMode!;
   }
 
   setFollowUpMode(mode: "all" | "one-at-a-time"): void {
@@ -588,10 +515,6 @@ export class SettingsManager {
     this.save();
   }
 
-  getDefaultThinkingLevel(): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
-    return this.settings.defaultThinkingLevel;
-  }
-
   getClaudeAgentSdkOptions(): Record<string, unknown> | undefined {
     const value = this.settings.claudeAgentSdk;
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -600,24 +523,8 @@ export class SettingsManager {
     return structuredClone(value);
   }
 
-  setDefaultThinkingLevel(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): void {
-    this.globalSettings.defaultThinkingLevel = level;
-    this.markModified("defaultThinkingLevel");
-    this.save();
-  }
-
-  getTransport(): TransportSetting {
-    return this.settings.transport ?? "sse";
-  }
-
-  setTransport(transport: TransportSetting): void {
-    this.globalSettings.transport = transport;
-    this.markModified("transport");
-    this.save();
-  }
-
   getCompactionEnabled(): boolean {
-    return this.settings.compaction?.enabled ?? true;
+    return this.settings.compaction?.enabled ?? DEFAULT_SETTINGS.compaction!.enabled!;
   }
 
   setCompactionEnabled(enabled: boolean): void {
@@ -630,11 +537,11 @@ export class SettingsManager {
   }
 
   getCompactionReserveTokens(): number {
-    return this.settings.compaction?.reserveTokens ?? 16384;
+    return this.settings.compaction?.reserveTokens ?? DEFAULT_SETTINGS.compaction!.reserveTokens!;
   }
 
   getCompactionKeepRecentTokens(): number {
-    return this.settings.compaction?.keepRecentTokens ?? 20000;
+    return this.settings.compaction?.keepRecentTokens ?? DEFAULT_SETTINGS.compaction!.keepRecentTokens!;
   }
 
   getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
@@ -646,7 +553,7 @@ export class SettingsManager {
   }
 
   getRetryEnabled(): boolean {
-    return this.settings.retry?.enabled ?? true;
+    return this.settings.retry?.enabled ?? DEFAULT_SETTINGS.retry!.enabled!;
   }
 
   setRetryEnabled(enabled: boolean): void {
@@ -661,14 +568,14 @@ export class SettingsManager {
   getRetrySettings(): { enabled: boolean; maxRetries: number; baseDelayMs: number; maxDelayMs: number } {
     return {
       enabled: this.getRetryEnabled(),
-      maxRetries: this.settings.retry?.maxRetries ?? 3,
-      baseDelayMs: this.settings.retry?.baseDelayMs ?? 2000,
-      maxDelayMs: this.settings.retry?.maxDelayMs ?? 60000,
+      maxRetries: this.settings.retry?.maxRetries ?? DEFAULT_SETTINGS.retry!.maxRetries!,
+      baseDelayMs: this.settings.retry?.baseDelayMs ?? DEFAULT_SETTINGS.retry!.baseDelayMs!,
+      maxDelayMs: this.settings.retry?.maxDelayMs ?? DEFAULT_SETTINGS.retry!.maxDelayMs!,
     };
   }
 
   getHideThinkingBlock(): boolean {
-    return this.settings.hideThinkingBlock ?? false;
+    return this.settings.hideThinkingBlock ?? DEFAULT_SETTINGS.hideThinkingBlock!;
   }
 
   setHideThinkingBlock(hide: boolean): void {
@@ -688,7 +595,7 @@ export class SettingsManager {
   }
 
   getQuietStartup(): boolean {
-    return this.settings.quietStartup ?? false;
+    return this.settings.quietStartup ?? DEFAULT_SETTINGS.quietStartup!;
   }
 
   setQuietStartup(quiet: boolean): void {
@@ -718,7 +625,7 @@ export class SettingsManager {
   }
 
   getCollapseChangelog(): boolean {
-    return this.settings.collapseChangelog ?? false;
+    return this.settings.collapseChangelog ?? DEFAULT_SETTINGS.collapseChangelog!;
   }
 
   setCollapseChangelog(collapse: boolean): void {
@@ -737,13 +644,6 @@ export class SettingsManager {
     this.save();
   }
 
-  setProjectPackages(packages: PackageSource[]): void {
-    const projectSettings = structuredClone(this.projectSettings);
-    projectSettings.packages = packages;
-    this.markProjectModified("packages");
-    this.saveProjectSettings(projectSettings);
-  }
-
   getExtensionPaths(): string[] {
     return [...(this.settings.extensions ?? [])];
   }
@@ -752,13 +652,6 @@ export class SettingsManager {
     this.globalSettings.extensions = paths;
     this.markModified("extensions");
     this.save();
-  }
-
-  setProjectExtensionPaths(paths: string[]): void {
-    const projectSettings = structuredClone(this.projectSettings);
-    projectSettings.extensions = paths;
-    this.markProjectModified("extensions");
-    this.saveProjectSettings(projectSettings);
   }
 
   getSkillPaths(): string[] {
@@ -771,13 +664,6 @@ export class SettingsManager {
     this.save();
   }
 
-  setProjectSkillPaths(paths: string[]): void {
-    const projectSettings = structuredClone(this.projectSettings);
-    projectSettings.skills = paths;
-    this.markProjectModified("skills");
-    this.saveProjectSettings(projectSettings);
-  }
-
   getPromptTemplatePaths(): string[] {
     return [...(this.settings.prompts ?? [])];
   }
@@ -786,13 +672,6 @@ export class SettingsManager {
     this.globalSettings.prompts = paths;
     this.markModified("prompts");
     this.save();
-  }
-
-  setProjectPromptTemplatePaths(paths: string[]): void {
-    const projectSettings = structuredClone(this.projectSettings);
-    projectSettings.prompts = paths;
-    this.markProjectModified("prompts");
-    this.saveProjectSettings(projectSettings);
   }
 
   getThemePaths(): string[] {
@@ -805,15 +684,8 @@ export class SettingsManager {
     this.save();
   }
 
-  setProjectThemePaths(paths: string[]): void {
-    const projectSettings = structuredClone(this.projectSettings);
-    projectSettings.themes = paths;
-    this.markProjectModified("themes");
-    this.saveProjectSettings(projectSettings);
-  }
-
   getEnableSkillCommands(): boolean {
-    return this.settings.enableSkillCommands ?? true;
+    return this.settings.enableSkillCommands ?? DEFAULT_SETTINGS.enableSkillCommands!;
   }
 
   setEnableSkillCommands(enabled: boolean): void {
@@ -827,7 +699,7 @@ export class SettingsManager {
   }
 
   getShowImages(): boolean {
-    return this.settings.terminal?.showImages ?? true;
+    return this.settings.terminal?.showImages ?? DEFAULT_SETTINGS.terminal!.showImages!;
   }
 
   setShowImages(show: boolean): void {
@@ -840,11 +712,7 @@ export class SettingsManager {
   }
 
   getClearOnShrink(): boolean {
-    // Settings takes precedence, then env var, then default false
-    if (this.settings.terminal?.clearOnShrink !== undefined) {
-      return this.settings.terminal.clearOnShrink;
-    }
-    return process.env.OMI_CLEAR_ON_SHRINK === "1";
+    return this.settings.terminal?.clearOnShrink ?? DEFAULT_SETTINGS.terminal!.clearOnShrink!;
   }
 
   setClearOnShrink(enabled: boolean): void {
@@ -857,7 +725,7 @@ export class SettingsManager {
   }
 
   getImageAutoResize(): boolean {
-    return this.settings.images?.autoResize ?? true;
+    return this.settings.images?.autoResize ?? DEFAULT_SETTINGS.images!.autoResize!;
   }
 
   setImageAutoResize(enabled: boolean): void {
@@ -870,7 +738,7 @@ export class SettingsManager {
   }
 
   getBlockImages(): boolean {
-    return this.settings.images?.blockImages ?? false;
+    return this.settings.images?.blockImages ?? DEFAULT_SETTINGS.images!.blockImages!;
   }
 
   setBlockImages(blocked: boolean): void {
@@ -882,18 +750,8 @@ export class SettingsManager {
     this.save();
   }
 
-  getEnabledModels(): string[] | undefined {
-    return this.settings.enabledModels;
-  }
-
-  setEnabledModels(patterns: string[] | undefined): void {
-    this.globalSettings.enabledModels = patterns;
-    this.markModified("enabledModels");
-    this.save();
-  }
-
   getDoubleEscapeAction(): "fork" | "none" {
-    return this.settings.doubleEscapeAction ?? "fork";
+    return this.settings.doubleEscapeAction ?? DEFAULT_SETTINGS.doubleEscapeAction!;
   }
 
   setDoubleEscapeAction(action: "fork" | "none"): void {
@@ -903,7 +761,7 @@ export class SettingsManager {
   }
 
   getShowHardwareCursor(): boolean {
-    return this.settings.showHardwareCursor ?? process.env.OMI_HARDWARE_CURSOR === "1";
+    return this.settings.showHardwareCursor ?? DEFAULT_SETTINGS.showHardwareCursor!;
   }
 
   setShowHardwareCursor(enabled: boolean): void {
@@ -913,7 +771,7 @@ export class SettingsManager {
   }
 
   getEditorPaddingX(): number {
-    return this.settings.editorPaddingX ?? 0;
+    return this.settings.editorPaddingX ?? DEFAULT_SETTINGS.editorPaddingX!;
   }
 
   setEditorPaddingX(padding: number): void {
@@ -923,7 +781,7 @@ export class SettingsManager {
   }
 
   getAutocompleteMaxVisible(): number {
-    return this.settings.autocompleteMaxVisible ?? 5;
+    return this.settings.autocompleteMaxVisible ?? DEFAULT_SETTINGS.autocompleteMaxVisible!;
   }
 
   setAutocompleteMaxVisible(maxVisible: number): void {
@@ -933,7 +791,7 @@ export class SettingsManager {
   }
 
   getCodeBlockIndent(): string {
-    return this.settings.markdown?.codeBlockIndent ?? "  ";
+    return this.settings.markdown?.codeBlockIndent ?? DEFAULT_SETTINGS.markdown!.codeBlockIndent!;
   }
 
   /**
@@ -946,23 +804,16 @@ export class SettingsManager {
   }
 }
 
-/**
- * Get the agent config directory (e.g., ~/.omi/)
- */
 export function getAgentDir(): string {
   const envDir = process.env.OMI_DIR;
   if (envDir) {
-    // Expand tilde to home directory
-    if (envDir === "~") return require("node:os").homedir();
-    if (envDir.startsWith("~/")) return require("node:os").homedir() + envDir.slice(1);
+    if (envDir === "~") return homedir();
+    if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
     return envDir;
   }
-  return join(require("node:os").homedir(), ".omi");
+  return join(homedir(), ".omi");
 }
 
-/**
- * Get path to managed binaries directory (fd, rg)
- */
 export function getBinDir(): string {
   return join(getAgentDir(), "bin");
 }
