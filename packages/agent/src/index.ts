@@ -16,6 +16,5 @@ export {
 	type Logger as ObservabilityLogger,
 } from "./observability";
 
-// Modes & VCS
-export * from "./modes";
+// VCS
 export * from "./vcs";

@@ -67,10 +67,8 @@ export interface Settings {
   collapseChangelog?: boolean; // Show condensed changelog after update (use /changelog for full)
   packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
   extensions?: string[]; // Array of local extension file paths or directories
-  skills?: string[]; // Array of local skill file paths or directories
   prompts?: string[]; // Array of local prompt template paths or directories
   themes?: string[]; // Array of local theme file paths or directories
-  enableSkillCommands?: boolean; // default: true - register skills as /skill:name commands
   terminal?: TerminalSettings;
   images?: ImageSettings;
   doubleEscapeAction?: "fork" | "none"; // Action for double-escape with empty editor (default: "fork")
@@ -103,7 +101,6 @@ export const DEFAULT_SETTINGS: Settings = {
   hideThinkingBlock: false,
   quietStartup: false,
   collapseChangelog: false,
-  enableSkillCommands: true,
   terminal: {
     showImages: true,
     clearOnShrink: false,
@@ -654,16 +651,6 @@ export class SettingsManager {
     this.save();
   }
 
-  getSkillPaths(): string[] {
-    return [...(this.settings.skills ?? [])];
-  }
-
-  setSkillPaths(paths: string[]): void {
-    this.globalSettings.skills = paths;
-    this.markModified("skills");
-    this.save();
-  }
-
   getPromptTemplatePaths(): string[] {
     return [...(this.settings.prompts ?? [])];
   }
@@ -681,16 +668,6 @@ export class SettingsManager {
   setThemePaths(paths: string[]): void {
     this.globalSettings.themes = paths;
     this.markModified("themes");
-    this.save();
-  }
-
-  getEnableSkillCommands(): boolean {
-    return this.settings.enableSkillCommands ?? DEFAULT_SETTINGS.enableSkillCommands!;
-  }
-
-  setEnableSkillCommands(enabled: boolean): void {
-    this.globalSettings.enableSkillCommands = enabled;
-    this.markModified("enableSkillCommands");
     this.save();
   }
 
