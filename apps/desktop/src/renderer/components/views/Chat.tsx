@@ -23,16 +23,13 @@ import MarkdownRenderer from "../MarkdownRenderer";
 import {
   ApprovalCard,
   BlockedToolCard,
-  DecisionEventCard,
   Receipt,
   RunEventPanel,
   SkillEventPanel,
-  TerminalEventCard,
   ToolCallPanel,
   buildRunEventDisplayModel,
   buildSkillEventViewModel,
   formatDuration as formatToolUiDuration,
-  normalizeToolCallViewModel,
 } from "../tool-ui";
 import { deriveThreadTitle, useWorkspaceStore } from "../../store/workspace-store";
 
@@ -175,16 +172,11 @@ export default function Chat() {
       ? orderedMessages
       : orderedMessages.slice(-HISTORY_VISIBLE_LIMIT);
 
-  const assistantRunIds = visibleMessages
-    .filter((message) => message.role === "assistant")
-    .map((message) => getMessageGroupId(message))
-    .filter((runId): runId is string => Boolean(runId));
   const orderedRunIds = useMemo(
     () => getOrderedRunIds(toolCallsByRun),
     [toolCallsByRun],
   );
   const latestToolRunId = orderedRunIds.at(-1) ?? null;
-  const latestVisibleRunId = assistantRunIds.at(-1) ?? latestToolRunId ?? activeRunId ?? null;
 
   const timelineNodes: ReactNode[] = [];
   const insertedRunIds = new Set<string>();
@@ -194,7 +186,13 @@ export default function Chat() {
     if (message.role === "assistant" && runId && !insertedRunIds.has(runId)) {
       const runToolCalls = toolCallsByRun.get(runId) ?? [];
       if (runToolCalls.length > 0) {
-        const expanded = expandedRuns[runId] ?? runId === latestVisibleRunId;
+        const expandedByDefault = shouldExpandRunByDefault({
+          runId,
+          toolCalls: runToolCalls,
+          activeRunId,
+          activeToolIds,
+        });
+        const expanded = expandedRuns[runId] ?? expandedByDefault;
         timelineNodes.push(
           <RunActivitySection
             key={`run-${runId}`}
@@ -209,7 +207,7 @@ export default function Chat() {
             onToggle={() =>
               setExpandedRuns((state) => ({
                 ...state,
-                [runId]: !(state[runId] ?? runId === latestVisibleRunId),
+                [runId]: !(state[runId] ?? expandedByDefault),
               }))
             }
           />,
@@ -235,7 +233,12 @@ export default function Chat() {
     if (runToolCalls.length === 0) {
       continue;
     }
-    const expandedByDefault = runId === latestVisibleRunId || runId === activeRunId;
+    const expandedByDefault = shouldExpandRunByDefault({
+      runId,
+      toolCalls: runToolCalls,
+      activeRunId,
+      activeToolIds,
+    });
     const expanded = expandedRuns[runId] ?? expandedByDefault;
     timelineNodes.push(
       <RunActivitySection
@@ -816,6 +819,22 @@ function getOrderedRunIds(groupedToolCalls: Map<string, ToolCall[]>): string[] {
       return compareCreatedAt(leftFirst, rightFirst);
     })
     .map(([runId]) => runId);
+}
+
+function shouldExpandRunByDefault(input: {
+  runId: string;
+  toolCalls: ToolCall[];
+  activeRunId: string | null;
+  activeToolIds: Set<string>;
+}): boolean {
+  if (input.runId === input.activeRunId) {
+    return true;
+  }
+
+  return input.toolCalls.some(
+    (toolCall) =>
+      input.activeToolIds.has(toolCall.id) || toolCall.approvalState === "pending",
+  );
 }
 
 function compareCreatedAt<T extends { createdAt: string; id: string }>(left: T, right: T): number {

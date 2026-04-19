@@ -15,6 +15,8 @@ import { realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
 
 import {
+  DEFAULT_SKILL_SETTING_SOURCES,
+  SkillSettingSource,
   type ResolvedSkill,
   type SkillDescriptor,
   type SkillMatch,
@@ -60,11 +62,8 @@ export interface DiscoveryOptions {
   includeUserSkills?: boolean;
   /** Include workspace-level skills */
   includeWorkspaceSkills?: boolean;
-}
-
-export interface SkillDiscoveryResult {
-  discovered: DiscoveredSkill[];
-  resolved: ResolvedSkill | null;
+  /** Shared skill setting source selector (project/local/user). */
+  settingSources?: SkillSettingSource[];
 }
 
 export interface DiscoveredSkill {
@@ -94,9 +93,13 @@ const FRONTMATTER_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
  * Discover all available skills with deduplication based on realpath identity.
  */
 export async function discoverSkills(options: DiscoveryOptions): Promise<DiscoveredSkill[]> {
+  const settingSources = options.settingSources ?? DEFAULT_SKILL_SETTING_SOURCES;
+  const includeWorkspaceFromSettings = settingSources.includes(SkillSettingSource.Project)
+    || settingSources.includes(SkillSettingSource.Local);
+  const includeUserFromSettings = settingSources.includes(SkillSettingSource.User);
   const roots = getSkillRoots(options.workspaceRoot, {
-    includeUser: options.includeUserSkills ?? true,
-    includeWorkspace: options.includeWorkspaceSkills ?? true,
+    includeUser: options.includeUserSkills ?? includeUserFromSettings,
+    includeWorkspace: options.includeWorkspaceSkills ?? includeWorkspaceFromSettings,
   });
 
   const discovered = (
@@ -509,24 +512,7 @@ function normalizeAllowedTools(value: unknown): string[] {
   return [];
 }
 
-// ============================================================================
-// Legacy Compatibility
-// ============================================================================
-
-/**
- * List skills (legacy compatibility).
- */
 export async function listSkills(workspaceRoot: string): Promise<SkillDescriptor[]> {
   const discovered = await discoverSkills({ workspaceRoot });
   return discovered.map((s) => s.descriptor).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * Search skills (legacy compatibility).
- */
-export async function legacySearchSkills(
-  workspaceRoot: string,
-  query: string,
-): Promise<SkillMatch[]> {
-  return searchSkills(workspaceRoot, query);
 }

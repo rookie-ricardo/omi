@@ -27,7 +27,6 @@ export {
   searchSkills,
   resolveSkillForPrompt,
   listSkills,
-  legacySearchSkills,
   type DiscoveryOptions,
   type DiscoveredSkill,
 } from "./discovery";

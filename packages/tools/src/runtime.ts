@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createId, nowIso, type Task } from "@omi/core";
 
-import type { SearchSkillsFn } from "./skill-tools";
+import type { SearchSkillsFn } from "./pi-skill-tools";
 
 export interface ToolRuntimeContext {
   taskRuntime?: TaskToolRuntime | null;
@@ -200,8 +200,28 @@ export function getSkillExecutorRuntime(): SkillExecutor | null {
   return skillExecutorRuntime;
 }
 
-export function setSkillExecutorRuntime(executor: SkillExecutor): void {
+export function setSkillExecutorRuntime(executor: SkillExecutor | null): void {
   skillExecutorRuntime = executor;
+}
+
+// ============================================================================
+// Subagent Executor Runtime
+// ============================================================================
+
+export type SubagentExecutor = (
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+  onUpdate?: (update: unknown) => void,
+) => Promise<{ content: string; details?: unknown }>;
+
+let subagentExecutorRuntime: SubagentExecutor | null = null;
+
+export function getSubagentExecutorRuntime(): SubagentExecutor | null {
+  return subagentExecutorRuntime;
+}
+
+export function setSubagentExecutorRuntime(executor: SubagentExecutor | null): void {
+  subagentExecutorRuntime = executor;
 }
 
 // ============================================================================

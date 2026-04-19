@@ -182,4 +182,27 @@ describe("tool-ui models", () => {
     expect(runModel.status).toBe("canceled");
     expect(runModel.toolCalls[0]?.status).toBe("canceled");
   });
+
+  it("treats interrupted tool output as completed when assistant message exists", () => {
+    const runModel = buildRunEventDisplayModel({
+      runId: "run_interrupted_with_assistant",
+      toolCalls: [
+        createToolCall({
+          id: "tool_11",
+          messageId: "run_interrupted_with_assistant",
+          approvalState: "approved",
+          output: null,
+          error: null,
+        }),
+      ],
+      activeToolIds: new Set<string>(),
+      activeRunId: null,
+      assistantCreatedAt: "2026-04-19T08:00:00.000Z",
+      runErrorMessage: null,
+      isLatestRun: true,
+    });
+
+    expect(runModel.status).toBe("completed");
+    expect(runModel.toolCalls[0]?.status).toBe("completed");
+  });
 });

@@ -7,6 +7,10 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  DEFAULT_SKILL_SETTING_SOURCES,
+  normalizeSkillSettingSources,
+} from "@omi/core";
 
 import type {
   ProviderAdapter,
@@ -34,12 +38,6 @@ const DEFAULT_TOOL_PRESET: NonNullable<ClaudeAgentSdkOptions["tools"]> = {
   type: "preset",
   preset: "claude_code",
 };
-
-const DEFAULT_SETTING_SOURCES: NonNullable<ClaudeAgentSdkOptions["settingSources"]> = [
-  "project",
-  "local",
-  "user",
-];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -303,6 +301,10 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
     });
 
     const requestedOptions = (isRecord(input.claudeOptions) ? input.claudeOptions : {}) as ClaudeAgentSdkOptions;
+    const sharedSettingSources = normalizeSkillSettingSources(
+      requestedOptions.settingSources,
+      DEFAULT_SKILL_SETTING_SOURCES,
+    );
     const runtimeManagedToolNames = new Set(runnableTools.map((tool) => tool.name));
     const userCanUseTool = requestedOptions.canUseTool;
     const hasExplicitSessionCursor = Boolean(
@@ -407,7 +409,7 @@ export class ClaudeAgentSdkProvider implements ProviderAdapter {
       systemPrompt: input.systemPrompt ?? requestedOptions.systemPrompt,
       maxTurns: requestedOptions.maxTurns ?? 20,
       tools: requestedOptions.tools ?? DEFAULT_TOOL_PRESET,
-      settingSources: requestedOptions.settingSources ?? DEFAULT_SETTING_SOURCES,
+      settingSources: sharedSettingSources as NonNullable<ClaudeAgentSdkOptions["settingSources"]>,
       includePartialMessages: requestedOptions.includePartialMessages ?? true,
       promptSuggestions: requestedOptions.promptSuggestions ?? true,
       agentProgressSummaries: requestedOptions.agentProgressSummaries ?? true,

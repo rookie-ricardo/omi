@@ -527,6 +527,7 @@ function inferRunStatus(options: {
   toolCalls: ToolCall[];
   activeToolIds: Set<string>;
   activeRunId: string | null;
+  assistantCreatedAt: string | null;
   runErrorMessage: string | null;
   isLatestRun: boolean;
 }): RunLifecycleStatus {
@@ -554,7 +555,7 @@ function inferRunStatus(options: {
       !parseToolError(call.error) &&
       call.approvalState !== "pending",
   );
-  if (options.isLatestRun && hasInterruptedTool) {
+  if (hasInterruptedTool && !options.assistantCreatedAt) {
     return "canceled";
   }
 
@@ -576,6 +577,7 @@ export function buildRunEventDisplayModel(
     toolCalls: options.toolCalls,
     activeToolIds: options.activeToolIds,
     activeRunId: options.activeRunId,
+    assistantCreatedAt: options.assistantCreatedAt,
     runErrorMessage: options.runErrorMessage,
     isLatestRun: options.isLatestRun,
   });

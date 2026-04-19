@@ -4,6 +4,7 @@ import { AppOrchestrator, type LogEntry, type LogLevel, getLogger, setGlobalLogg
 import { createAppDatabase } from "@omi/store";
 import { createId, type RunnerEventEnvelope } from "@omi/core";
 import { type RpcRequest, rpcRequestSchema } from "@omi/core";
+import { removeLegacyProviderSettings } from "@omi/provider";
 
 import { normalizeResult } from "./protocol";
 import { collectRunEventDeliveries, handleRunnerRequest, RunnerCommandError } from "./request-handler";
@@ -57,6 +58,7 @@ const logger = getLogger("runner:main");
 
 const workspaceRoot = resolve(readWorkspaceRootFromArgs() ?? process.cwd());
 assertWorkspaceDistFreshness(workspaceRoot);
+removeLegacyProviderSettings();
 logger.info("Runner starting", { workspaceRoot });
 
 const database = createAppDatabase(resolve(workspaceRoot, "workspace-data", "app.db"));

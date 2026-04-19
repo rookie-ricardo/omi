@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowUp,
@@ -10,16 +10,9 @@ import {
   Cpu,
   GitBranch,
   GitCommit,
-  ListTodo,
-  MessageSquare,
   Monitor,
-  Paperclip,
   Plus,
   Square,
-  UserCircle,
-  Box,
-  Bug,
-  Gauge,
   Shield,
   ShieldAlert,
 } from "lucide-react";
@@ -67,7 +60,6 @@ export default function ThreadLayout({
   const closeAllPanels = useWorkspaceStore((state) => state.closeAllPanels);
   const toggleDiffPanel = useWorkspaceStore((state) => state.toggleDiffPanel);
 
-  const executeSlashCommand = useWorkspaceStore((state) => state.executeSlashCommand);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const commitRef = useRef<HTMLDivElement>(null);
@@ -105,20 +97,6 @@ export default function ThreadLayout({
   const permissionLabel = permissionMode === "yolo" ? "完全访问权限" : "默认权限";
   const isStreaming = Boolean(
     selectedSessionId && streamingBySession[selectedSessionId],
-  );
-
-  const slashCommands = useMemo(
-    () => [
-      { title: "MCP", subtitle: "显示 MCP 服务器状态", icon: <Paperclip size={16} /> },
-      { title: "Model", subtitle: selectedModelLabel, icon: <Box size={16} /> },
-      { title: "Reasoning", subtitle: reasoningLevel, icon: <Brain size={16} /> },
-      { title: "个性", subtitle: "切换系统角色", icon: <UserCircle size={16} /> },
-      { title: "代码审查", subtitle: "审查当前改动", icon: <Bug size={16} /> },
-      { title: "反馈", subtitle: "提交反馈", icon: <MessageSquare size={16} /> },
-      { title: "状态", subtitle: "显示线程 ID 与额度", icon: <Gauge size={16} /> },
-      { title: "计划模式", subtitle: "开启计划模式", icon: <ListTodo size={16} /> },
-    ],
-    [reasoningLevel, selectedModelLabel],
   );
 
   useEffect(() => {
@@ -290,22 +268,6 @@ export default function ThreadLayout({
 
         <div className="absolute bottom-1 left-3 right-3 flex justify-center flex-shrink-0 z-40">
           <div className="w-3/4 relative">
-            {uiPanels.slashMenuOpen ? (
-              <div className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-white/10 shadow-lg overflow-hidden flex flex-col max-h-[400px] z-50">
-                <ul className="overflow-y-auto p-2 flex flex-col gap-0.5 custom-scrollbar">
-                  {slashCommands.map((command) => (
-                    <SlashMenuItem
-                      key={command.title}
-                      title={command.title}
-                      subtitle={command.subtitle}
-                      icon={command.icon}
-                      onClick={() => void executeSlashCommand(command.title)}
-                    />
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-
             <div className="w-full bg-white dark:bg-[#252525] rounded-2xl border border-gray-200 dark:border-white/10 shadow-sm flex flex-col overflow-visible relative">
               {selectedFiles.length > 0 ? (
                 <div className="px-6 pt-3 flex flex-wrap gap-2">
@@ -348,7 +310,7 @@ export default function ThreadLayout({
                       closeAllPanels();
                     }
                   }}
-                  placeholder="Ask Codex anything, @ to add files, / for commands, $ for skills"
+                  placeholder="Ask Codex anything, @ to add files, $ for skills"
                   className="w-full resize-none outline-none text-[15px] leading-relaxed text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 bg-transparent min-h-[24px] max-h-[300px] overflow-y-auto custom-scrollbar"
                   rows={1}
                 />
@@ -616,35 +578,6 @@ export default function ThreadLayout({
 
       {uiPanels.showDiffPanel ? rightPanel : null}
     </div>
-  );
-}
-
-function SlashMenuItem({
-  icon,
-  title,
-  subtitle,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  onClick?: () => void;
-}) {
-  return (
-    <li
-      onClick={onClick}
-      className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors hover:bg-gray-100 dark:hover:bg-white/5"
-    >
-      <div className="text-gray-500 dark:text-gray-400 flex-shrink-0">{icon}</div>
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        <span className="text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">
-          {title}
-        </span>
-        {subtitle ? (
-          <span className="text-xs text-gray-400 dark:text-gray-500 truncate">{subtitle}</span>
-        ) : null}
-      </div>
-    </li>
   );
 }
 

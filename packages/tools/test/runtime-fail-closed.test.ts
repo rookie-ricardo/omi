@@ -13,6 +13,7 @@ describe("tool surface contract", () => {
 
     expect(Object.keys(tools).sort()).toEqual([
       "skill",
+      "subagent",
     ]);
   });
 

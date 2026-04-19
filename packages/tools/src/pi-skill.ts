@@ -26,7 +26,7 @@ export function createSkillTool(): OmiTool<typeof skillSchema, { skill: string; 
 
 When users ask you to perform tasks, check if any of the available skills match. Skills provide specialized capabilities and domain knowledge.
 
-When users reference a "slash command" or "/<something>" (e.g., "/commit", "/review-pr"), they are referring to a skill. Use this tool to invoke it.
+When users reference "/<something>" style workflows (e.g., "/commit", "/review-pr"), treat them as skill requests and use this tool.
 
 How to invoke:
 - Use this tool with the skill name and optional arguments
@@ -40,7 +40,6 @@ Important:
 - When a skill matches the user's request, invoke the Skill tool BEFORE generating any other response about the task
 - NEVER mention a skill without actually calling this tool
 - Do not invoke a skill that is already running
-- Do not use this tool for built-in CLI commands (like /help, /clear, etc.)
 - If you see a <command-name> tag in the current conversation turn, the skill has ALREADY been loaded - follow the instructions directly instead of calling this tool again`,
     parameters: skillSchema,
     execute: async (_toolCallId: string, params: unknown) => {

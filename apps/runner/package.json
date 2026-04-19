@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@omi/agent": "workspace:*",
+    "@omi/provider": "workspace:*",
     "@omi/memory": "workspace:*",
     "@omi/store": "workspace:*",
     "@omi/core": "workspace:*"

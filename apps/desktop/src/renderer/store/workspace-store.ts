@@ -115,7 +115,6 @@ interface WorkspaceStoreData {
     reasoningMenuOpen: boolean;
     editorMenuOpen: boolean;
     commitMenuOpen: boolean;
-    slashMenuOpen: boolean;
   };
 }
 
@@ -167,7 +166,6 @@ interface WorkspaceStoreActions {
   setEditingSessionDraft: (value: string) => void;
   cancelRenameSession: () => void;
   commitRenameSession: () => Promise<void>;
-  executeSlashCommand: (command: string) => Promise<void>;
   handleRunnerEvent: (event: RunnerEventEnvelope) => Promise<void>;
 }
 
@@ -217,7 +215,6 @@ function createInitialData(): WorkspaceStoreData {
       reasoningMenuOpen: false,
       editorMenuOpen: false,
       commitMenuOpen: false,
-      slashMenuOpen: false,
     },
   };
 }
@@ -542,13 +539,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   setComposerInput(value) {
-    set((state) => ({
-      composerInput: value,
-      uiPanels: {
-        ...state.uiPanels,
-        slashMenuOpen: value.trimStart().startsWith("/"),
-      },
-    }));
+    set({ composerInput: value });
   },
 
   async sendPrompt() {
@@ -663,10 +654,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           ? {
               composerInput: "",
               selectedFiles: [],
-              uiPanels: {
-                ...state.uiPanels,
-                slashMenuOpen: false,
-              },
             }
           : {}),
         errorBySession: nextErrors,
@@ -686,13 +673,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
 
   applyStarterPrompt(value) {
-    set((state) => ({
-      composerInput: value,
-      uiPanels: {
-        ...state.uiPanels,
-        slashMenuOpen: value.trimStart().startsWith("/"),
-      },
-    }));
+    set({ composerInput: value });
   },
 
   beginNewThread() {
@@ -1017,7 +998,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         reasoningMenuOpen: false,
         editorMenuOpen: false,
         commitMenuOpen: false,
-        slashMenuOpen: false,
       },
     }));
   },
@@ -1225,74 +1205,6 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       };
     });
     schedulePersistDesktopUiState(get());
-  },
-
-  async executeSlashCommand(command) {
-    const lower = command.toLowerCase();
-    switch (lower) {
-      case "model":
-        set((state) => ({
-          composerInput: "",
-          uiPanels: { ...state.uiPanels, slashMenuOpen: false, modelMenuOpen: true },
-        }));
-        break;
-      case "reasoning":
-        set((state) => ({
-          composerInput: "",
-          uiPanels: { ...state.uiPanels, slashMenuOpen: false, reasoningMenuOpen: true },
-        }));
-        break;
-      case "计划模式":
-      case "plan": {
-        set((state) => ({
-          composerInput: "",
-          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
-        }));
-        await get().sendPromptText("/plan", { clearComposer: true });
-        break;
-      }
-      case "compact": {
-        const sessionId = get().selectedSessionId;
-        set((state) => ({
-          composerInput: "",
-          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
-        }));
-        if (sessionId) {
-          set((state) => ({
-            errorBySession: {
-              ...state.errorBySession,
-              [sessionId]: "命令 /compact 已下线，请使用 /plan 或直接描述需求。",
-            },
-          }));
-        }
-        break;
-      }
-      case "状态":
-      case "status": {
-        const sessionId = get().selectedSessionId;
-        set((state) => ({
-          composerInput: "",
-          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
-        }));
-        if (sessionId) {
-          const runtime = get().sessionRuntimeById[sessionId];
-          const status = runtime?.activeRunId ? "运行中" : "空闲";
-          set((state) => ({
-            errorBySession: {
-              ...state.errorBySession,
-              [sessionId]: `会话 ID: ${sessionId} | 状态: ${status}`,
-            },
-          }));
-        }
-        break;
-      }
-      default:
-        set((state) => ({
-          composerInput: "",
-          uiPanels: { ...state.uiPanels, slashMenuOpen: false },
-        }));
-        break;
-    }
   },
 
   async handleRunnerEvent(event) {
