@@ -7,7 +7,6 @@
  * - /fork - 分叉当前会话
  * - /new - 创建新会话
  * - /resume - 恢复会话
- * - /settings - 查看或修改设置
  * - /quit - 退出
  * - /help - 显示帮助
  * - /session - 显示会话信息
@@ -374,54 +373,6 @@ describe("/resume 命令", () => {
 
 		expect(result.success).toBe(true);
 		expect(mockDatabase.getSession).toHaveBeenCalledWith("session-1");
-	});
-});
-
-describe("/settings 命令", () => {
-	let registry: SlashCommandRegistry;
-	let context: ReturnType<typeof createSlashCommandContext>;
-	let mockSettings: SettingsManager;
-
-	beforeEach(() => {
-		registry = new SlashCommandRegistry();
-		mockSettings = createMockSettingsManager();
-		context = createSlashCommandContext(
-			createMockSession(),
-			createMockDatabase(),
-			createMockSessionManager(),
-			vi.fn(),
-			mockSettings,
-		);
-	});
-
-	it("无参数时应该显示所有设置", async () => {
-		const result = await registry.execute("/settings", context);
-
-		expect(result.success).toBe(true);
-		expect(result.output).toContain("retry");
-		expect(result.output).toContain("model");
-	});
-
-	it("有参数时应该显示设置信息", async () => {
-		const result = await registry.execute("/settings retry.maxRetries", context);
-
-		expect(result.success).toBe(true);
-		expect(result.output).toContain("retry.maxRetries");
-	});
-
-	it("没有 settingsManager 时应该返回错误", async () => {
-		const noSettingsContext = createSlashCommandContext(
-			createMockSession(),
-			createMockDatabase(),
-			createMockSessionManager(),
-			vi.fn(),
-			undefined,
-		);
-
-		const result = await registry.execute("/settings", noSettingsContext);
-
-		expect(result.success).toBe(false);
-		expect(result.error).toContain("Settings manager not available");
 	});
 });
 

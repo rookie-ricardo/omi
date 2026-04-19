@@ -69,7 +69,6 @@ export interface SlashCommand {
  * Built-in slash commands list (for backward compatibility).
  */
 export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
-	{ name: "settings", description: "Open settings menu" },
 	{ name: "model", description: "Select model (opens selector UI)" },
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
 	{ name: "export", description: "Export session to HTML file" },
@@ -440,39 +439,6 @@ export class SlashCommandRegistry {
 				return {
 					success: true,
 					output: `Resumed session: ${session.title} (${session.id})`,
-				};
-			},
-		});
-
-		// /settings - View or modify settings
-		this.registerCommand({
-			name: "settings",
-			description: "View or modify settings",
-			usage: "/settings [key] [value]",
-			execute: async (args, context) => {
-				if (!context.settingsManager) {
-					return {
-						success: false,
-						error: "Settings manager not available",
-					};
-				}
-
-				const parts = args.trim().split(" ");
-				const key = parts[0];
-
-				if (!key) {
-					const settings = context.settingsManager.getGlobalSettings();
-					return {
-						success: true,
-						output: JSON.stringify(settings, null, 2),
-					};
-				}
-
-				// For simplicity, just display the current setting value
-				// Full implementation would allow setting values
-				return {
-					success: true,
-					output: `Setting: ${key}\nUse settings file to modify values`,
 				};
 			},
 		});

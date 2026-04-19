@@ -25,7 +25,6 @@ import {
 describe("BUILTIN_SLASH_COMMANDS - 内置命令完整性", () => {
 	it("应该包含所有预期的命令", () => {
 		const expectedCommands = [
-			"settings",
 			"model",
 			"scoped-models",
 			"export",
@@ -36,7 +35,6 @@ describe("BUILTIN_SLASH_COMMANDS - 内置命令完整性", () => {
 			"changelog",
 			"hotkeys",
 			"fork",
-			"tree",
 			"login",
 			"logout",
 			"new",
@@ -54,8 +52,8 @@ describe("BUILTIN_SLASH_COMMANDS - 内置命令完整性", () => {
 	it("应该是只读数组", () => {
 		// ReadonlyArray 类型在编译时保证，运行时验证类型
 		expect(Array.isArray(BUILTIN_SLASH_COMMANDS)).toBe(true);
-		// 尝试修改应该不会在运行时报错（但 TypeScript 会报错）
-		const arr = BUILTIN_SLASH_COMMANDS as BuiltinSlashCommand[];
+		// 在副本上尝试修改，避免污染后续断言
+		const arr = [...BUILTIN_SLASH_COMMANDS] as BuiltinSlashCommand[];
 		expect(() => arr.push({ name: "test", description: "test" })).not.toThrow();
 	});
 
@@ -175,12 +173,6 @@ describe("SlashCommandLocation 类型", () => {
 });
 
 describe("特定命令验证", () => {
-	it("settings 命令应该存在", () => {
-		const settings = BUILTIN_SLASH_COMMANDS.find((cmd) => cmd.name === "settings");
-		expect(settings).toBeDefined();
-		expect(settings?.description).toContain("settings");
-	});
-
 	it("model 命令应该存在", () => {
 		const model = BUILTIN_SLASH_COMMANDS.find((cmd) => cmd.name === "model");
 		expect(model).toBeDefined();
@@ -206,16 +198,16 @@ describe("特定命令验证", () => {
 describe("命令分类", () => {
 	it("应该有会话管理命令", () => {
 		const sessionCommands = BUILTIN_SLASH_COMMANDS.filter((cmd) =>
-			["new", "session", "resume", "name", "fork", "tree"].includes(cmd.name),
+			["new", "session", "resume", "name", "fork"].includes(cmd.name),
 		);
-		expect(sessionCommands.length).toBeGreaterThanOrEqual(6);
+		expect(sessionCommands.length).toBeGreaterThanOrEqual(5);
 	});
 
 	it("应该有配置命令", () => {
 		const configCommands = BUILTIN_SLASH_COMMANDS.filter((cmd) =>
-			["settings", "model", "scoped-models", "reload", "hotkeys"].includes(cmd.name),
+			["model", "scoped-models", "reload", "hotkeys"].includes(cmd.name),
 		);
-		expect(configCommands.length).toBeGreaterThanOrEqual(5);
+		expect(configCommands.length).toBeGreaterThanOrEqual(4);
 	});
 
 	it("应该有导出相关命令", () => {
@@ -256,13 +248,12 @@ describe("边界情况", () => {
 
 describe("与 Pi-Mono 一致性", () => {
 	it("命令数量应与 Pi-Mono 一致", () => {
-		// Omi 有 20 个内置命令（新增了 hotkeys）
-		expect(BUILTIN_SLASH_COMMANDS).toHaveLength(20);
+		// Omi 有 17 个内置命令（保留 hotkeys，移除 settings）
+		expect(BUILTIN_SLASH_COMMANDS).toHaveLength(17);
 	});
 
 	it("特定命令应与 Pi-Mono 完全一致", () => {
 		const piCommands = [
-			{ name: "settings", description: "Open settings menu" },
 			{ name: "model", description: "Select model (opens selector UI)" },
 			{ name: "quit", description: "Quit pi" },
 		];
